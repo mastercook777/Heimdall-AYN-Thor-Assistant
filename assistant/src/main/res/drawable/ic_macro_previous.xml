@@ -1,0 +1,14 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- Adapted from Lucide skip-back.svg; terminal bar preserves previous-item semantics. -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.8"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M17.971,4.285A2,2 0,0 1,21,6v12a2,2 0,0 1,-3.029,1.715l-9.997,-5.998a2,2 0,0 1,-0.003,-3.432zM3,20V4" />
+</vector>

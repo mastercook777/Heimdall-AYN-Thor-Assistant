@@ -1,0 +1,128 @@
+apply plugin: "com.android.application"
+
+def privateDebugSigningProperties = new Properties()
+def privateDebugSigningFile = file("signing.properties")
+if (privateDebugSigningFile.isFile()) {
+    privateDebugSigningFile.withInputStream { privateDebugSigningProperties.load(it) }
+}
+
+def firstNonBlank = { String environmentName, String propertyName ->
+    def environmentValue = System.getenv(environmentName)
+    if (environmentValue != null && !environmentValue.trim().isEmpty()) {
+        return environmentValue
+    }
+    def propertyValue = privateDebugSigningProperties.getProperty(propertyName)
+    return propertyValue != null && !propertyValue.trim().isEmpty() ? propertyValue : null
+}
+
+def debugSigningValues = [
+        storeFile    : firstNonBlank("HEIMDALL_DEBUG_KEYSTORE", "storeFile"),
+        storePassword: firstNonBlank("HEIMDALL_DEBUG_STORE_PASSWORD", "storePassword"),
+        keyAlias     : firstNonBlank("HEIMDALL_DEBUG_KEY_ALIAS", "keyAlias"),
+        keyPassword  : firstNonBlank("HEIMDALL_DEBUG_KEY_PASSWORD", "keyPassword")
+]
+def hasAnyDebugSigningValue = debugSigningValues.values().any { it != null }
+def hasCompleteDebugSigning = debugSigningValues.values().every { it != null }
+if (hasAnyDebugSigningValue && !hasCompleteDebugSigning) {
+    throw new GradleException("Private debug signing is incomplete. Provide all four HEIMDALL_DEBUG_* values or all four signing.properties values.")
+}
+
+def releaseSigningValues = [
+        storeFile    : System.getenv("HEIMDALL_RELEASE_KEYSTORE"),
+        storePassword: System.getenv("HEIMDALL_RELEASE_STORE_PASSWORD"),
+        keyAlias     : System.getenv("HEIMDALL_RELEASE_KEY_ALIAS"),
+        keyPassword  : System.getenv("HEIMDALL_RELEASE_KEY_PASSWORD")
+]
+def hasAnyReleaseSigningValue = releaseSigningValues.values().any {
+    it != null && !it.trim().isEmpty()
+}
+def hasCompleteReleaseSigning = releaseSigningValues.values().every {
+    it != null && !it.trim().isEmpty()
+}
+if (hasAnyReleaseSigningValue && !hasCompleteReleaseSigning) {
+    throw new GradleException("Release signing is incomplete. Provide all four HEIMDALL_RELEASE_* environment variables.")
+}
+if (project.hasProperty("heimdallRequireReleaseSigning") && !hasCompleteReleaseSigning) {
+    throw new GradleException("A signed Heimdall release was required, but the external release signing environment is incomplete.")
+}
+
+android {
+    namespace "com.mastercook777.heimdall"
+    compileSdk 35
+    ndkVersion "30.0.14904198"
+
+    defaultConfig {
+        applicationId "com.mastercook777.heimdall"
+        minSdk 26
+        targetSdk 35
+        versionCode 2
+        versionName "0.1.0-alpha.1"
+
+        externalNativeBuild {
+            cmake {
+                cppFlags "-std=c++17"
+            }
+        }
+    }
+
+    androidResources {
+        generateLocaleConfig true
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    signingConfigs {
+        if (hasCompleteDebugSigning) {
+            heimdallPrivateDebug {
+                storeFile file(debugSigningValues.storeFile)
+                storePassword debugSigningValues.storePassword
+                keyAlias debugSigningValues.keyAlias
+                keyPassword debugSigningValues.keyPassword
+            }
+        }
+        if (hasCompleteReleaseSigning) {
+            heimdallRelease {
+                storeFile file(releaseSigningValues.storeFile)
+                storePassword releaseSigningValues.storePassword
+                keyAlias releaseSigningValues.keyAlias
+                keyPassword releaseSigningValues.keyPassword
+            }
+        }
+    }
+
+    buildTypes {
+        debug {
+            applicationIdSuffix ".debug"
+            versionNameSuffix "-debug"
+            if (hasCompleteDebugSigning) {
+                signingConfig signingConfigs.heimdallPrivateDebug
+            }
+        }
+        release {
+            minifyEnabled false
+            if (hasCompleteReleaseSigning) {
+                signingConfig signingConfigs.heimdallRelease
+            }
+        }
+    }
+
+    applicationVariants.all { variant ->
+        variant.outputs.all {
+            outputFileName = "heimdall-${variant.name}.apk"
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path "src/main/cpp/CMakeLists.txt"
+        }
+    }
+}
+
+dependencies {
+    def shizuku_version = "13.1.5"
+    implementation "dev.rikka.shizuku:api:$shizuku_version"
+    implementation "dev.rikka.shizuku:provider:$shizuku_version"
+}
