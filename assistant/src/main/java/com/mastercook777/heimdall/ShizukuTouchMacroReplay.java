@@ -36,8 +36,9 @@ final class ShizukuTouchMacroReplay {
         return running.get();
     }
 
-    void replay(Context context, Macro macro, InputBridge.Callback callback) {
-        ReplayPlan plan = buildPlan(context, macro, callback);
+    void replay(Context context, Macro macro, boolean allowControllerSteps,
+            InputBridge.Callback callback) {
+        ReplayPlan plan = buildPlan(context, macro, allowControllerSteps, callback);
         if (plan == null) {
             return;
         }
@@ -62,6 +63,9 @@ final class ShizukuTouchMacroReplay {
         boolean touchDown = false;
         String error = null;
         try {
+            if (plan.hasGamepad) {
+                requireGamepadRoute(context);
+            }
             if (plan.hasTouch && !ShizukuNativeController.warmUp(context, 1500)) {
                 throw new ReplayFailure(context.getString(R.string.native_touch_connection_failed));
             }
@@ -69,6 +73,15 @@ final class ShizukuTouchMacroReplay {
                 ensureNotCancelled();
                 if (step.waitMs >= 0L) {
                     sleepResponsive(step.waitMs);
+                    continue;
+                }
+                if (step.gamepadSequence != null) {
+                    String result = NativeGamepadPath.userFacingError(context,
+                            InputBridge.replayNativeGamepadSequence(
+                                    context, step.gamepadSequence));
+                    if (!NativeGamepadPath.operationSucceeded(result)) {
+                        throw new ReplayFailure(result);
+                    }
                     continue;
                 }
                 touchDown = true;
@@ -107,6 +120,26 @@ final class ShizukuTouchMacroReplay {
         }
     }
 
+    private void requireGamepadRoute(Context context) throws ReplayFailure {
+        NativeGamepadPath.Device device = NativeGamepadPath.resolveDevice();
+        if (device == null) {
+            throw new ReplayFailure(context.getString(
+                    R.string.native_controller_replay_failed));
+        }
+        if (InputBridge.BACKEND_SHIZUKU.equals(
+                InputBridge.selectedBackendId(context))) {
+            if (!ShizukuNativeController.isReady()) {
+                throw new ReplayFailure(context.getString(
+                        R.string.controller_enhancement_unavailable));
+            }
+            return;
+        }
+        if (!device.writable) {
+            throw new ReplayFailure(context.getString(
+                    R.string.native_controller_permission_denied));
+        }
+    }
+
     private void replaySwipe(Context context, PlannedStep step) throws ReplayFailure, ReplayCancelled {
         long durationMs = Math.max(1L, step.durationMs);
         int frames = Math.max(1, (int) Math.ceil(durationMs / (double) SWIPE_FRAME_MS));
@@ -137,7 +170,8 @@ final class ShizukuTouchMacroReplay {
         throw new ReplayFailure(context.getString(R.string.native_touch_injection_failed));
     }
 
-    private ReplayPlan buildPlan(Context context, Macro macro, InputBridge.Callback callback) {
+    private ReplayPlan buildPlan(Context context, Macro macro,
+            boolean allowControllerSteps, InputBridge.Callback callback) {
         if (macro == null || macro.steps.isEmpty()) {
             String label = macro == null ? context.getString(R.string.common_macro_fallback) : macro.label;
             callback.onError(context.getString(R.string.macro_status_no_steps, label));
@@ -145,12 +179,23 @@ final class ShizukuTouchMacroReplay {
         }
         List<PlannedStep> steps = new ArrayList<>();
         boolean hasTouch = false;
+        boolean hasGamepad = false;
         DisplaySpec display = null;
         for (MacroStep step : macro.steps) {
             if (MacroStep.TYPE_GAMEPAD.equals(step.type)) {
-                callback.onError(context.getString(
-                        R.string.macro_enhanced_touch_controller_blocked));
-                return null;
+                if (!allowControllerSteps) {
+                    callback.onError(context.getString(
+                            R.string.macro_enhanced_touch_controller_blocked));
+                    return null;
+                }
+                if (step.value == null || step.value.trim().length() == 0) {
+                    callback.onError(context.getString(
+                            R.string.native_controller_replay_failed));
+                    return null;
+                }
+                steps.add(PlannedStep.gamepadStep(step.value));
+                hasGamepad = true;
+                continue;
             }
             if (MacroStep.TYPE_WAIT.equals(step.type)) {
                 steps.add(PlannedStep.waitStep(parseDuration(step.value, 80L)));
@@ -193,7 +238,7 @@ final class ShizukuTouchMacroReplay {
             hasTouch = true;
             steps.add(PlannedStep.touchStep(display, target));
         }
-        return new ReplayPlan(steps, hasTouch);
+        return new ReplayPlan(steps, hasTouch, hasGamepad);
     }
 
     private static DisplaySpec resolveDisplay(Context context, int displayId) {
@@ -326,15 +371,19 @@ final class ShizukuTouchMacroReplay {
     private static final class ReplayPlan {
         final List<PlannedStep> steps;
         final boolean hasTouch;
+        final boolean hasGamepad;
 
-        ReplayPlan(List<PlannedStep> steps, boolean hasTouch) {
+        ReplayPlan(List<PlannedStep> steps, boolean hasTouch,
+                boolean hasGamepad) {
             this.steps = steps;
             this.hasTouch = hasTouch;
+            this.hasGamepad = hasGamepad;
         }
     }
 
     private static final class PlannedStep {
         final long waitMs;
+        final String gamepadSequence;
         final DisplaySpec display;
         final float startX;
         final float startY;
@@ -342,9 +391,10 @@ final class ShizukuTouchMacroReplay {
         final float endY;
         final long durationMs;
 
-        private PlannedStep(long waitMs, DisplaySpec display,
+        private PlannedStep(long waitMs, String gamepadSequence, DisplaySpec display,
                 float startX, float startY, float endX, float endY, long durationMs) {
             this.waitMs = waitMs;
+            this.gamepadSequence = gamepadSequence;
             this.display = display;
             this.startX = startX;
             this.startY = startY;
@@ -354,11 +404,16 @@ final class ShizukuTouchMacroReplay {
         }
 
         static PlannedStep waitStep(long waitMs) {
-            return new PlannedStep(waitMs, null, 0f, 0f, 0f, 0f, 0L);
+            return new PlannedStep(waitMs, null, null, 0f, 0f, 0f, 0f, 0L);
+        }
+
+        static PlannedStep gamepadStep(String sequence) {
+            return new PlannedStep(-1L, sequence, null,
+                    0f, 0f, 0f, 0f, 0L);
         }
 
         static PlannedStep touchStep(DisplaySpec display, TouchTarget target) {
-            return new PlannedStep(-1L, display, target.startX, target.startY,
+            return new PlannedStep(-1L, null, display, target.startX, target.startY,
                     target.endX, target.endY, target.durationMs);
         }
     }

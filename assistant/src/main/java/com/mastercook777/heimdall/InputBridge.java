@@ -112,9 +112,11 @@ public final class InputBridge {
     }
 
     public static void dispatch(Context context, Macro macro,
-            boolean enhancedTouchCoexistence, Callback callback) {
-        if (enhancedTouchCoexistence) {
-            SHIZUKU_BACKEND.dispatchMappedTouchMacro(context, macro, callback);
+            boolean enhancedTouchMode, boolean protectThorMapping,
+            Callback callback) {
+        if (enhancedTouchMode) {
+            SHIZUKU_BACKEND.dispatchMappedTouchMacro(context, macro,
+                    !protectThorMapping, callback);
             return;
         }
         dispatch(context, macro, callback);

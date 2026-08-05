@@ -202,6 +202,9 @@
     <string name="macro_settings_empty">No macro module is in the current Grid. Add one from the main-screen layout first.</string>
     <string name="macro_settings_edit_buttons">Edit macro buttons</string>
     <string name="macro_settings_help">Edit names, icons, and steps in the button editor.</string>
+    <string name="macro_settings_enhanced_touch_controller_policy">Enhanced Touch controller macros</string>
+    <string name="macro_settings_protect_thor_mapping">Protect Thor built-in mapping (recommended)</string>
+    <string name="macro_settings_protect_thor_mapping_help">When enabled, Enhanced Touch blocks macros containing controller steps so replay cannot interrupt Thor built-in mapping. Turn this off only for Profiles that do not use Thor mapping.</string>
     <string name="macro_settings_group">Macro Button Group %1$d</string>
     <string name="macro_settings_first_button">Start</string>
     <string name="macro_settings_button_count">Count</string>
@@ -474,7 +477,8 @@
     <string name="macro_editor_add_wait">Add wait</string>
     <string name="macro_editor_help">Test controller steps in the confirmation panel, or rerecord them from the list. Wait times are in milliseconds.</string>
     <string name="macro_editor_help_enhanced_touch">Enhanced Touch coexistence runs tap, hold, swipe, and wait steps through the mapping-compatible route. Controller steps stay saved but cannot run in this mode.</string>
-    <string name="macro_enhanced_touch_controller_blocked">This macro contains controller input. Enhanced Touch coexistence only runs screen steps; switch touch mode before replaying controller steps.</string>
+    <string name="macro_editor_help_enhanced_touch_controller_enabled">Enhanced Touch keeps screen steps on the mapping-compatible route. Controller steps are enabled for this Profile; use them only while Thor built-in mapping is off.</string>
+    <string name="macro_enhanced_touch_controller_blocked">This macro contains controller input. Keep Thor mapping protection on while built-in mapping is active. If mapping is off, disable protection under Settings > Macro Buttons, or switch touch mode.</string>
     <string name="macro_enhanced_touch_macro_busy">Another Enhanced Touch macro is already running.</string>
     <string name="macro_enhanced_touch_gesture_busy">Finish the active Enhanced Touch gesture before running a macro.</string>
     <string name="touchpad_enhanced_touch_macro_busy">Wait for the current Enhanced Touch macro to finish.</string>

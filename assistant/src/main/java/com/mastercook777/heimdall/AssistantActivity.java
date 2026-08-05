@@ -158,6 +158,8 @@ public class AssistantActivity extends Activity {
     private static final String STATE_SETTINGS_SCROLL_Y = "heimdall.settings_scroll_y";
     private static final String STATE_LAYOUT_DRAFT = "heimdall.layout_draft";
     private static final String STATE_TOUCHPAD_DRAFT = "heimdall.touchpad_draft";
+    private static final String STATE_MACRO_MAPPING_PROTECTION_DRAFT =
+            "heimdall.macro_mapping_protection_draft";
     private static final String STATE_MAGNIFIER_DRAFT = "heimdall.magnifier_draft";
     private static final String STATE_THEME_DRAFT = "heimdall.theme_draft";
     private static final String STATE_COMPATIBILITY_DRAFT = "heimdall.compatibility_draft";
@@ -191,6 +193,8 @@ public class AssistantActivity extends Activity {
     private TextView statusText;
     private final List<MacroGridBinding> macroGrids = new ArrayList<>();
     private final List<MacroModuleEditorBinding> settingsMacroModuleEditors = new ArrayList<>();
+    private CheckBox settingsMacroMappingProtectionInput;
+    private Boolean settingsMacroMappingProtectionDraft;
     private final List<View> transientAnimatedViews = new ArrayList<>();
     private final List<View> closingAnimatedPanels = new ArrayList<>();
     private final List<PanelOverlay> panelOverlays = new ArrayList<>();
@@ -470,11 +474,19 @@ public class AssistantActivity extends Activity {
         if (settingsContentScroll != null) {
             settingsContentScrollY = settingsContentScroll.getScrollY();
         }
+        if (settingsMacroMappingProtectionInput != null) {
+            settingsMacroMappingProtectionDraft =
+                    settingsMacroMappingProtectionInput.isChecked();
+        }
         outState.putInt(STATE_ACTIVE_SCREEN, activeScreen);
         outState.putInt(STATE_SETTINGS_SECTION, activeSettingsSection);
         outState.putInt(STATE_SETTINGS_SCROLL_Y, settingsContentScrollY);
         putJsonState(outState, STATE_LAYOUT_DRAFT, draftWidgetLayout);
         putJsonState(outState, STATE_TOUCHPAD_DRAFT, settingsTouchpadDraft);
+        if (settingsMacroMappingProtectionDraft != null) {
+            outState.putBoolean(STATE_MACRO_MAPPING_PROTECTION_DRAFT,
+                    settingsMacroMappingProtectionDraft);
+        }
         putJsonState(outState, STATE_MAGNIFIER_DRAFT, settingsMagnifierDraft);
         if (settingsThemeDraft != null) {
             outState.putString(STATE_THEME_DRAFT, settingsThemeDraft);
@@ -528,6 +540,10 @@ public class AssistantActivity extends Activity {
             // A malformed transient bundle must never overwrite persisted Profile data.
         }
         settingsThemeDraft = state.getString(STATE_THEME_DRAFT);
+        if (state.containsKey(STATE_MACRO_MAPPING_PROTECTION_DRAFT)) {
+            settingsMacroMappingProtectionDraft = state.getBoolean(
+                    STATE_MACRO_MAPPING_PROTECTION_DRAFT);
+        }
         if (state.containsKey(STATE_COMPATIBILITY_DRAFT)) {
             settingsPerformanceCompatibilityDraft =
                     state.getBoolean(STATE_COMPATIBILITY_DRAFT);
@@ -2538,6 +2554,8 @@ public class AssistantActivity extends Activity {
         draftWidgetLayout = null;
         settingsTouchpadDraft = null;
         settingsMagnifierDraft = null;
+        settingsMacroMappingProtectionInput = null;
+        settingsMacroMappingProtectionDraft = null;
         viewingGuideInline = null;
         editingGuideInline = null;
         editingGuideTypeInline = null;
@@ -2731,15 +2749,20 @@ public class AssistantActivity extends Activity {
         if (statusText != null) {
             statusText.setText(getString(R.string.status_macro_running, macro.label));
         }
-        InputBridge.dispatch(this, macro, isEnhancedTouchCoexistenceActive(),
-                inputStatusCallback);
+        InputBridge.dispatch(this, macro, isEnhancedTouchModeActive(),
+                shouldProtectThorMappingFromControllerMacros(), inputStatusCallback);
     }
 
-    private boolean isEnhancedTouchCoexistenceActive() {
+    private boolean isEnhancedTouchModeActive() {
         return selectedProfile != null
                 && selectedProfile.touchpadSettings != null
                 && TouchpadSettings.MODE_SHIZUKU_TOUCH.equals(
                         selectedProfile.touchpadSettings.mode);
+    }
+
+    private boolean shouldProtectThorMappingFromControllerMacros() {
+        return isEnhancedTouchModeActive()
+                && selectedProfile.protectThorMappingDuringEnhancedTouch;
     }
 
     private void updateBridgeStatus() {
@@ -3314,12 +3337,20 @@ public class AssistantActivity extends Activity {
         if (activeSettingsSection != section && activeSettingsSection == SETTINGS_MAGNIFIER) {
             settingsMagnifierDraft = null;
         }
+        if (activeSettingsSection != section && activeSettingsSection == SETTINGS_MACRO) {
+            settingsMacroMappingProtectionInput = null;
+            settingsMacroMappingProtectionDraft = null;
+        }
         activeSettingsSection = section;
         if (section == SETTINGS_TOUCHPAD) {
             ensureSettingsTouchpadDraft();
         }
         if (section == SETTINGS_MAGNIFIER) {
             ensureSettingsMagnifierDraft();
+        }
+        if (section == SETTINGS_MACRO && settingsMacroMappingProtectionDraft == null) {
+            settingsMacroMappingProtectionDraft =
+                    selectedProfile.protectThorMappingDuringEnhancedTouch;
         }
         if (section == SETTINGS_APPEARANCE) {
             settingsThemeDraft = HeimdallUi.theme(this);
@@ -3786,6 +3817,26 @@ public class AssistantActivity extends Activity {
 
     private void populateMacroSettingsContent(LinearLayout content) {
         settingsMacroModuleEditors.clear();
+        if (settingsMacroMappingProtectionDraft == null) {
+            settingsMacroMappingProtectionDraft =
+                    selectedProfile.protectThorMappingDuringEnhancedTouch;
+        }
+        addSettingsLabel(content, getString(
+                R.string.macro_settings_enhanced_touch_controller_policy));
+        settingsMacroMappingProtectionInput = new CheckBox(this);
+        settingsMacroMappingProtectionInput.setText(
+                R.string.macro_settings_protect_thor_mapping);
+        settingsMacroMappingProtectionInput.setTextSize(12);
+        styleCheckBox(settingsMacroMappingProtectionInput);
+        settingsMacroMappingProtectionInput.setChecked(
+                settingsMacroMappingProtectionDraft);
+        settingsMacroMappingProtectionInput.setOnCheckedChangeListener((button, checked) ->
+                settingsMacroMappingProtectionDraft = checked);
+        content.addView(settingsMacroMappingProtectionInput,
+                new LinearLayout.LayoutParams(-1, dp(42)));
+        addSettingsHelp(content, getString(
+                R.string.macro_settings_protect_thor_mapping_help));
+
         WidgetLayout layout = editableWidgetLayout();
         List<WidgetLayout.Item> items = new ArrayList<>();
         for (WidgetLayout.Item item : layout.items) {
@@ -5016,6 +5067,8 @@ public class AssistantActivity extends Activity {
             return;
         } else if (activeSettingsSection == SETTINGS_MACRO) {
             resetMacroModulesToDefault();
+            settingsMacroMappingProtectionDraft = true;
+            settingsMacroMappingProtectionInput = null;
             showDebugAction(getString(R.string.settings_reset_macro_draft));
             refreshSettingsContent();
             return;
@@ -5064,6 +5117,13 @@ public class AssistantActivity extends Activity {
         }
         if (activeSettingsSection == SETTINGS_MACRO) {
             applySettingsMacroModuleInputs();
+            if (settingsMacroMappingProtectionInput != null) {
+                settingsMacroMappingProtectionDraft =
+                        settingsMacroMappingProtectionInput.isChecked();
+            }
+            selectedProfile.protectThorMappingDuringEnhancedTouch =
+                    settingsMacroMappingProtectionDraft == null
+                            || settingsMacroMappingProtectionDraft;
             if (draftWidgetLayout != null) {
                 selectedProfile.widgetLayout = draftWidgetLayout.copy();
                 draftWidgetLayout = null;
@@ -8442,6 +8502,8 @@ public class AssistantActivity extends Activity {
         selectedProfile = profiles.get(selectedProfileIndex);
         draftWidgetLayout = null;
         settingsTouchpadDraft = null;
+        settingsMacroMappingProtectionInput = null;
+        settingsMacroMappingProtectionDraft = null;
         touchpadSettings = selectedProfile.safeTouchpadSettings();
         ProfileStore.saveSelectedIndex(this, selectedProfileIndex);
         ProfileStore.saveProfiles(this, profiles);
@@ -9580,6 +9642,8 @@ public class AssistantActivity extends Activity {
         profile.macroColumns = source.macroColumns;
         profile.macroRows = source.macroRows;
         profile.rightHandPriority = source.rightHandPriority;
+        profile.protectThorMappingDuringEnhancedTouch =
+                source.protectThorMappingDuringEnhancedTouch;
         profile.touchpadSettings = source.safeTouchpadSettings().copy();
         profile.widgetLayout = source.safeWidgetLayout().copy();
         profile.normalizeLayout();
@@ -9588,6 +9652,8 @@ public class AssistantActivity extends Activity {
         selectedProfile = profile;
         draftWidgetLayout = null;
         settingsTouchpadDraft = null;
+        settingsMacroMappingProtectionInput = null;
+        settingsMacroMappingProtectionDraft = null;
         touchpadSettings = selectedProfile.safeTouchpadSettings();
         ProfileStore.saveSelectedIndex(this, selectedProfileIndex);
         ProfileStore.saveProfiles(this, profiles);
@@ -9614,6 +9680,8 @@ public class AssistantActivity extends Activity {
         selectedProfile = profile;
         draftWidgetLayout = null;
         settingsTouchpadDraft = null;
+        settingsMacroMappingProtectionInput = null;
+        settingsMacroMappingProtectionDraft = null;
         touchpadSettings = selectedProfile.safeTouchpadSettings();
         ProfileStore.saveSelectedIndex(this, selectedProfileIndex);
         ProfileStore.saveProfiles(this, profiles);
@@ -9644,6 +9712,8 @@ public class AssistantActivity extends Activity {
         selectedProfile = profiles.get(selectedProfileIndex);
         draftWidgetLayout = null;
         settingsTouchpadDraft = null;
+        settingsMacroMappingProtectionInput = null;
+        settingsMacroMappingProtectionDraft = null;
         touchpadSettings = selectedProfile.safeTouchpadSettings();
         ProfileStore.saveSelectedIndex(this, selectedProfileIndex);
         ProfileStore.saveProfiles(this, profiles);
@@ -9864,9 +9934,12 @@ public class AssistantActivity extends Activity {
             renderStepList(draftSteps, stepsList);
         }));
 
-        TextView help = text(getString(isEnhancedTouchCoexistenceActive()
-                        ? R.string.macro_editor_help_enhanced_touch
-                        : R.string.macro_editor_help),
+        int helpText = shouldProtectThorMappingFromControllerMacros()
+                ? R.string.macro_editor_help_enhanced_touch
+                : (isEnhancedTouchModeActive()
+                        ? R.string.macro_editor_help_enhanced_touch_controller_enabled
+                        : R.string.macro_editor_help);
+        TextView help = text(getString(helpText),
                 HeimdallUi.TYPE_META, MUTED, false);
         stepsPanel.addView(help, new LinearLayout.LayoutParams(-1, dp(32)));
 
@@ -10889,7 +10962,7 @@ public class AssistantActivity extends Activity {
                 || session.sequence == null) {
             return;
         }
-        if (isEnhancedTouchCoexistenceActive()) {
+        if (shouldProtectThorMappingFromControllerMacros()) {
             status.setTextColor(HeimdallUi.COLOR_DANGER);
             status.setText(R.string.gamepad_test_enhanced_touch_blocked);
             showErrorAction(getString(R.string.macro_enhanced_touch_controller_blocked));

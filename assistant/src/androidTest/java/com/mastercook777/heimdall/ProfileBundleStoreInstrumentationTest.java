@@ -79,6 +79,7 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
         macro.iconKey = "user:" + macroSource.getName();
         GameProfile profile = new GameProfile("中文 Profile", "通用", "",
                 Collections.singletonList(macro));
+        profile.protectThorMappingDuringEnhancedTouch = false;
         profile.iconUri = iconSource.toString();
         profile.maps.add(new MapEntry("同名攻略", mapSource.toString()));
         profile.maps.add(new MapEntry("PDF 地图", pdfSource.toString()));
@@ -122,6 +123,7 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
 
         GameProfile restored = installed.profiles.get(0);
         assertEquals("中文 Profile", restored.name);
+        assertFalse(restored.protectThorMappingDuringEnhancedTouch);
         assertTrue(restored.iconUri.startsWith("content://"
                 + target.getPackageName() + ".profile-assets/"));
         assertReadable(Uri.parse(restored.iconUri));
@@ -172,7 +174,9 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
                 Collections.singletonList(new MacroStep(MacroStep.TYPE_WAIT, "80ms")));
         GameProfile profile = new GameProfile("旧版 Profile", "通用", "",
                 Collections.singletonList(macro));
-        JSONArray legacy = new JSONArray().put(profile.toJson());
+        JSONObject legacyProfile = profile.toJson();
+        legacyProfile.remove("protectThorMappingDuringEnhancedTouch");
+        JSONArray legacy = new JSONArray().put(legacyProfile);
         Uri source = fixture("legacy-json", "旧版.json",
                 legacy.toString().getBytes(StandardCharsets.UTF_8));
         PrepareResult result = prepare(source);
@@ -180,6 +184,8 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
         assertNotNull(result.prepared);
         assertTrue(result.prepared.legacyJson);
         assertEquals("旧版 Profile", result.prepared.profiles.get(0).name);
+        assertTrue(result.prepared.profiles.get(0)
+                .protectThorMappingDuringEnhancedTouch);
         result.prepared.close();
     }
 

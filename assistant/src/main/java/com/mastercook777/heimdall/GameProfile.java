@@ -18,6 +18,7 @@ public final class GameProfile {
     public int macroColumns = 4;
     public int macroRows = 0;
     public boolean rightHandPriority = true;
+    public boolean protectThorMappingDuringEnhancedTouch = true;
     public String mapTitle = "";
     public String mapUri = "";
     public String interactiveMapTitle = "";
@@ -61,6 +62,8 @@ public final class GameProfile {
         object.put("macroColumns", macroColumns);
         object.put("macroRows", macroRows);
         object.put("rightHandPriority", rightHandPriority);
+        object.put("protectThorMappingDuringEnhancedTouch",
+                protectThorMappingDuringEnhancedTouch);
         object.put("mapTitle", mapTitle);
         object.put("mapUri", mapUri);
         object.put("interactiveMapTitle", interactiveMapTitle);
@@ -120,6 +123,8 @@ public final class GameProfile {
         profile.macroColumns = object.optInt("macroColumns", 4);
         profile.macroRows = object.optInt("macroRows", 0);
         profile.rightHandPriority = object.optBoolean("rightHandPriority", true);
+        profile.protectThorMappingDuringEnhancedTouch = object.optBoolean(
+                "protectThorMappingDuringEnhancedTouch", true);
         profile.romContextHint = object.optString("romContextHint", "");
         profile.defaultForPackage = object.optBoolean("defaultForPackage", false);
         profile.iconUri = object.optString("iconUri", "");
