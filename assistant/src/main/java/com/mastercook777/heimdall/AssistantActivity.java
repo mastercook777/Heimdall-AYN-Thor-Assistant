@@ -88,7 +88,6 @@ import org.json.JSONObject;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -253,7 +252,9 @@ public class AssistantActivity extends Activity {
     private String[] pendingGuideFileUriDraft;
     private EditText pendingGuideFileTitleInput;
     private GuideFileTitleState pendingGuideFileTitleState;
-    private String pendingProfileExportJson;
+    private List<GameProfile> pendingProfileExportProfiles;
+    private ProfileBundleStore.PreparedImport pendingProfileImport;
+    private ProfileBundleStore.Request pendingProfileBundleRequest;
     private int pendingProfileIconIndex = -1;
     private String[] pendingMacroIconKey;
     private ImageView pendingMacroIconPreview;
@@ -282,11 +283,20 @@ public class AssistantActivity extends Activity {
     private boolean imeVisibleForPerformanceCompatibility;
     private View fullscreenMapControls;
     private View fullscreenMapReveal;
+    private View fullscreenGuideControls;
+    private View fullscreenGuideReveal;
     private MapMarker editingMapMarkerInline;
     private boolean creatingMapMarkerInline;
     private GuideEntry editingGuideInline;
     private String editingGuideTypeInline;
     private GuideEntry viewingGuideInline;
+    private GuideTextReaderView activeGuideReaderView;
+    private GuideEntry activeGuideReaderEntry;
+    private String activeGuideReaderFingerprint = "";
+    private GuideTextDocument cachedGuideTextDocument;
+    private GuideEntry cachedGuideTextEntry;
+    private int guideTextLoadGeneration;
+    private boolean guideReaderFullscreen;
     private EditText pendingGuideTextInput;
     private List<MacroStep> activeDraftSteps;
     private LinearLayout activeStepsList;
@@ -351,6 +361,12 @@ public class AssistantActivity extends Activity {
         @Override
         public void run() {
             setFullscreenMapControlsVisible(false);
+        }
+    };
+    private final Runnable hideFullscreenGuideControls = new Runnable() {
+        @Override
+        public void run() {
+            setFullscreenGuideControlsVisible(false);
         }
     };
     private boolean statusReceiverRegistered;
@@ -569,6 +585,7 @@ public class AssistantActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        flushGuideReadingPosition();
         for (View view : new ArrayList<>(transientAnimatedViews)) {
             view.animate().cancel();
         }
@@ -578,11 +595,13 @@ public class AssistantActivity extends Activity {
         releaseMagnifierViews();
         releaseCanvasViews();
         cancelPendingCanvasImport();
+        cancelPendingProfileBundleWork();
         stopMagnifierProjection();
         releaseMapWebView();
         releaseLocalMapBitmap();
         releaseLocalMapThumbnails();
         uiHandler.removeCallbacks(hideFullscreenMapControls);
+        uiHandler.removeCallbacks(hideFullscreenGuideControls);
         stopStatusUpdates();
         unregisterReceiver(captureReceiver);
         ThorAccessibilityService.setDiagnosticScanningSuspended(false);
@@ -621,6 +640,7 @@ public class AssistantActivity extends Activity {
 
     @Override
     protected void onPause() {
+        saveGuideReadingPosition();
         if (!magnifierRegionCaptureInProgress) {
             pauseMagnifierViews();
         }
@@ -884,6 +904,20 @@ public class AssistantActivity extends Activity {
             }
             return;
         }
+        if (requestCode == REQUEST_EXPORT_PROFILES) {
+            if (resultCode == RESULT_OK && data != null && data.getData() != null) {
+                writeProfileExport(data.getData());
+            } else {
+                pendingProfileExportProfiles = null;
+            }
+            return;
+        }
+        if (requestCode == REQUEST_IMPORT_PROFILES) {
+            if (resultCode == RESULT_OK && data != null && data.getData() != null) {
+                readProfileImport(data.getData());
+            }
+            return;
+        }
         if (requestCode == REQUEST_PROFILE_ICON) {
             if (resultCode == RESULT_OK && data != null && data.getData() != null
                     && pendingProfileIconIndex >= 0 && pendingProfileIconIndex < profiles.size()) {
@@ -1007,10 +1041,6 @@ public class AssistantActivity extends Activity {
             if (activeScreen == SCREEN_MAP) {
                 rebuildContent();
             }
-        } else if (requestCode == REQUEST_EXPORT_PROFILES && resultCode == RESULT_OK && data != null && data.getData() != null) {
-            writeProfileExport(data.getData());
-        } else if (requestCode == REQUEST_IMPORT_PROFILES && resultCode == RESULT_OK && data != null && data.getData() != null) {
-            readProfileImport(data.getData());
         }
     }
 
@@ -1061,6 +1091,10 @@ public class AssistantActivity extends Activity {
         if (dismissTopPanelOverlay()) {
             return;
         }
+        if (guideReaderFullscreen) {
+            closeGuideFullscreen();
+            return;
+        }
         if (mapViewerFullscreen) {
             closeMapFullscreen();
             return;
@@ -1076,7 +1110,10 @@ public class AssistantActivity extends Activity {
         }
         if (activeScreen == SCREEN_GUIDE
                 && (viewingGuideInline != null || editingGuideTypeInline != null)) {
-            viewingGuideInline = null;
+            if (viewingGuideInline != null) {
+                closeGuideReader();
+                return;
+            }
             editingGuideInline = null;
             editingGuideTypeInline = null;
             showGuidePanel();
@@ -1270,6 +1307,11 @@ public class AssistantActivity extends Activity {
         applySystemGestureExclusion(host);
         if (mapViewerFullscreen && activeScreen == SCREEN_MAP) {
             host.addView(createFullscreenMapLayout(), new FrameLayout.LayoutParams(-1, -1));
+            return host;
+        }
+        if (guideReaderFullscreen && activeScreen == SCREEN_GUIDE
+                && isInlineTextGuide(viewingGuideInline)) {
+            host.addView(createFullscreenGuideLayout(), new FrameLayout.LayoutParams(-1, -1));
             return host;
         }
         LinearLayout root = new TrackedLinearLayout("Root background");
@@ -1834,7 +1876,8 @@ public class AssistantActivity extends Activity {
         UpperScreenProjectionService.setRegion(item.magnifierLeft, item.magnifierTop,
                 item.magnifierRight, item.magnifierBottom);
         UpperScreenProjectionService.setTuning(
-                item.magnifierAspectRatio, item.magnifierFps, item.magnifierZoom);
+                WidgetLayout.magnifierTargetAspectRatio(item),
+                item.magnifierFps, item.magnifierZoom);
         if (UpperScreenProjectionService.isActiveOrStarting()) {
             resumeMagnifierViews();
             schedulePendingMagnifierRegionAfterProjection();
@@ -1864,7 +1907,8 @@ public class AssistantActivity extends Activity {
         UpperScreenProjectionService.setRegion(item.magnifierLeft, item.magnifierTop,
                 item.magnifierRight, item.magnifierBottom);
         UpperScreenProjectionService.setTuning(
-                item.magnifierAspectRatio, item.magnifierFps, item.magnifierZoom);
+                WidgetLayout.magnifierTargetAspectRatio(item),
+                item.magnifierFps, item.magnifierZoom);
         Intent start = new Intent(this, UpperScreenProjectionService.class);
         start.setAction(UpperScreenProjectionService.ACTION_START);
         start.putExtra(UpperScreenProjectionService.EXTRA_RESULT_CODE, resultCode);
@@ -1923,6 +1967,8 @@ public class AssistantActivity extends Activity {
                 this, CoordinateCaptureActivity.MODE_REGION);
         intent.putExtra(CoordinateCaptureActivity.EXTRA_TARGET_ASPECT,
                 Math.max(0.2f, Math.min(5f, targetAspectRatio)));
+        intent.putExtra(CoordinateCaptureActivity.EXTRA_REGION_SHAPE,
+                WidgetLayout.normalizeMagnifierShape(item.magnifierShape));
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
                 | Intent.FLAG_ACTIVITY_CLEAR_TASK
                 | Intent.FLAG_ACTIVITY_NO_ANIMATION);
@@ -2012,7 +2058,8 @@ public class AssistantActivity extends Activity {
         float bottom = intent.getFloatExtra(
                 CoordinateCaptureActivity.EXTRA_REGION_BOTTOM, item.magnifierBottom);
         float aspect = intent.getFloatExtra(
-                CoordinateCaptureActivity.EXTRA_TARGET_ASPECT, item.magnifierAspectRatio);
+                CoordinateCaptureActivity.EXTRA_TARGET_ASPECT,
+                WidgetLayout.magnifierTargetAspectRatio(item));
         UpperScreenProjectionService.setRegion(left, top, right, bottom);
         UpperScreenProjectionService.setTuning(aspect, item.magnifierFps, 1f);
     }
@@ -2023,7 +2070,8 @@ public class AssistantActivity extends Activity {
             UpperScreenProjectionService.setRegion(item.magnifierLeft, item.magnifierTop,
                     item.magnifierRight, item.magnifierBottom);
             UpperScreenProjectionService.setTuning(
-                    item.magnifierAspectRatio, item.magnifierFps, item.magnifierZoom);
+                    WidgetLayout.magnifierTargetAspectRatio(item),
+                    item.magnifierFps, item.magnifierZoom);
         }
         finishMagnifierRegionCapture();
     }
@@ -2044,7 +2092,7 @@ public class AssistantActivity extends Activity {
                 intent.getFloatExtra(CoordinateCaptureActivity.EXTRA_REGION_BOTTOM,
                         item.magnifierBottom),
                 intent.getFloatExtra(CoordinateCaptureActivity.EXTRA_TARGET_ASPECT,
-                        item.magnifierAspectRatio));
+                        WidgetLayout.magnifierTargetAspectRatio(item)));
     }
 
     private void commitMagnifierRegion(float left, float top, float right, float bottom,
@@ -2068,7 +2116,8 @@ public class AssistantActivity extends Activity {
         UpperScreenProjectionService.setRegion(item.magnifierLeft, item.magnifierTop,
                 item.magnifierRight, item.magnifierBottom);
         UpperScreenProjectionService.setTuning(
-                item.magnifierAspectRatio, item.magnifierFps, item.magnifierZoom);
+                WidgetLayout.magnifierTargetAspectRatio(item),
+                item.magnifierFps, item.magnifierZoom);
         finishMagnifierRegionCapture();
         rebuildContent();
     }
@@ -2484,6 +2533,8 @@ public class AssistantActivity extends Activity {
         if (index < 0 || index >= profiles.size()) {
             return;
         }
+        flushGuideReadingPosition();
+        invalidateGuideTextCache();
         draftWidgetLayout = null;
         settingsTouchpadDraft = null;
         settingsMagnifierDraft = null;
@@ -2494,6 +2545,7 @@ public class AssistantActivity extends Activity {
         editingMapMarkerInline = null;
         creatingMapMarkerInline = false;
         mapViewerFullscreen = false;
+        guideReaderFullscreen = false;
         mapWebCurrentUrl = null;
         activeLocalMapIndex = 0;
         selectedProfileIndex = index;
@@ -3023,6 +3075,10 @@ public class AssistantActivity extends Activity {
     private void showSettingsPanel() {
         if (activeScreen == SCREEN_SETTINGS || settingsTransitionState != SETTINGS_TRANSITION_NONE) {
             return;
+        }
+        flushGuideReadingPosition();
+        if (guideReaderFullscreen) {
+            leaveGuideFullscreenState();
         }
         cancelContentTransitions();
         clearPanelOverlays();
@@ -4238,6 +4294,15 @@ public class AssistantActivity extends Activity {
             return;
         }
 
+        addSettingsLabel(content, getString(R.string.magnifier_shape));
+        LinearLayout shapeRow = settingsActionRow(content);
+        shapeRow.addView(magnifierShapeButton(
+                getString(R.string.magnifier_shape_rectangle),
+                WidgetLayout.MAGNIFIER_SHAPE_RECTANGLE));
+        shapeRow.addView(magnifierShapeButton(
+                getString(R.string.magnifier_shape_circle),
+                WidgetLayout.MAGNIFIER_SHAPE_CIRCLE));
+
         addSettingsLabel(content, getString(R.string.magnifier_frame_rate));
         LinearLayout fpsRow = settingsActionRow(content);
         fpsRow.addView(magnifierFpsButton("15 FPS", 15));
@@ -4270,7 +4335,9 @@ public class AssistantActivity extends Activity {
             }));
         }
 
-        addSettingsHelp(content, getString(R.string.magnifier_settings_help));
+        addSettingsHelp(content, getString(WidgetLayout.isCircularMagnifier(draft)
+                ? R.string.magnifier_settings_help_circle
+                : R.string.magnifier_settings_help_rectangle));
     }
 
     private WidgetLayout.Item ensureSettingsMagnifierDraft() {
@@ -4297,6 +4364,22 @@ public class AssistantActivity extends Activity {
         return button;
     }
 
+    private Button magnifierShapeButton(String label, String shape) {
+        String normalizedShape = WidgetLayout.normalizeMagnifierShape(shape);
+        Button button = editorButton(label, () -> {
+            WidgetLayout.Item draft = ensureSettingsMagnifierDraft();
+            if (draft != null) {
+                draft.magnifierShape = normalizedShape;
+                refreshSettingsContent();
+            }
+        });
+        WidgetLayout.Item draft = ensureSettingsMagnifierDraft();
+        HeimdallUi.applyChoiceButton(this, button, draft != null
+                && normalizedShape.equals(
+                        WidgetLayout.normalizeMagnifierShape(draft.magnifierShape)));
+        return button;
+    }
+
     private Button magnifierZoomButton(String label, float zoom) {
         Button button = editorButton(label, () -> {
             WidgetLayout.Item draft = ensureSettingsMagnifierDraft();
@@ -4316,20 +4399,32 @@ public class AssistantActivity extends Activity {
                 WidgetLayout.normalizeMagnifierZoom(zoom));
     }
 
-    private void applySettingsMagnifierDraft() {
+    private boolean applySettingsMagnifierDraft() {
         if (settingsMagnifierDraft == null) {
-            return;
+            return false;
         }
         WidgetLayout.Item target = currentWidgetLayout().findItem(WidgetLayout.TYPE_MAGNIFIER);
         if (target == null) {
-            return;
+            return false;
         }
+        String oldShape = WidgetLayout.normalizeMagnifierShape(target.magnifierShape);
+        String newShape = WidgetLayout.normalizeMagnifierShape(
+                settingsMagnifierDraft.magnifierShape);
         target.magnifierFps = WidgetLayout.normalizeMagnifierFps(
                 settingsMagnifierDraft.magnifierFps);
         target.magnifierZoom = WidgetLayout.normalizeMagnifierZoom(
                 settingsMagnifierDraft.magnifierZoom);
+        target.magnifierShape = newShape;
+        boolean shapeChanged = !oldShape.equals(newShape);
+        if (shapeChanged && WidgetLayout.MAGNIFIER_SHAPE_CIRCLE.equals(newShape)
+                && UpperScreenProjectionService.isFrozen()
+                && !magnifierRegionCaptureInProgress) {
+            UpperScreenProjectionService.setFrozen(false);
+        }
         UpperScreenProjectionService.setTuning(
-                target.magnifierAspectRatio, target.magnifierFps, target.magnifierZoom);
+                WidgetLayout.magnifierTargetAspectRatio(target),
+                target.magnifierFps, target.magnifierZoom);
+        return shapeChanged;
     }
 
     private void applyProfileSettingsInputs() {
@@ -4930,6 +5025,8 @@ public class AssistantActivity extends Activity {
             if (settingsMagnifierDraft != null) {
                 settingsMagnifierDraft.magnifierFps = 30;
                 settingsMagnifierDraft.magnifierScaleMode = WidgetLayout.MAGNIFIER_SCALE_FILL;
+                settingsMagnifierDraft.magnifierShape =
+                        WidgetLayout.MAGNIFIER_SHAPE_RECTANGLE;
                 settingsMagnifierDraft.magnifierZoom = 1f;
             }
             showDebugAction(getString(R.string.settings_reset_magnifier_draft));
@@ -4954,6 +5051,7 @@ public class AssistantActivity extends Activity {
 
     private void saveActiveSettingsSection() {
         boolean savingLayout = activeSettingsSection == SETTINGS_LAYOUT;
+        boolean magnifierShapeChanged = false;
         if (activeSettingsSection == SETTINGS_LAYOUT && draftWidgetLayout != null) {
             selectedProfile.widgetLayout = draftWidgetLayout.copy();
             draftWidgetLayout = null;
@@ -4972,7 +5070,7 @@ public class AssistantActivity extends Activity {
             }
         }
         if (activeSettingsSection == SETTINGS_MAGNIFIER) {
-            applySettingsMagnifierDraft();
+            magnifierShapeChanged = applySettingsMagnifierDraft();
             settingsMagnifierDraft = null;
         }
         if (activeSettingsSection == SETTINGS_PROFILE) {
@@ -4993,7 +5091,7 @@ public class AssistantActivity extends Activity {
                 ? getString(R.string.grid_layout_saved)
                 : getString(R.string.settings_section_saved, settingsSectionTitle()));
         updateBridgeStatus();
-        if (themeChanged) {
+        if (themeChanged || magnifierShapeChanged) {
             rebuildContent();
         } else {
             refreshSettingsContent();
@@ -6820,7 +6918,10 @@ public class AssistantActivity extends Activity {
                         editingGuideTypeInline = null;
                     }
                     if (viewingGuideInline == guide) {
+                        flushGuideReadingPosition();
                         viewingGuideInline = null;
+                        guideReaderFullscreen = false;
+                        invalidateGuideTextCache();
                     }
                     showGuidePanel();
                 }), iconButtonParams());
@@ -6845,6 +6946,9 @@ public class AssistantActivity extends Activity {
     }
 
     private void showGuideEditor(AlertDialog[] parentDialogHolder, String type, GuideEntry editingGuide) {
+        flushGuideReadingPosition();
+        invalidateGuideTextCache();
+        guideReaderFullscreen = false;
         viewingGuideInline = null;
         editingGuideInline = editingGuide;
         editingGuideTypeInline = GuideEntry.normalizeType(type);
@@ -7003,9 +7107,14 @@ public class AssistantActivity extends Activity {
                 return;
             }
             if (editing) {
+                boolean contentChanged = !GuideEntry.normalizeType(type).equals(editingGuide.type)
+                        || !content.equals(editingGuide.content);
                 editingGuide.title = nonEmpty(titleInput.getText().toString(), defaultGuideTitle(type));
                 editingGuide.type = GuideEntry.normalizeType(type);
                 editingGuide.content = content;
+                if (contentChanged) {
+                    editingGuide.clearReadingPosition();
+                }
             } else {
                 selectedProfile.guides.add(new GuideEntry(
                         nonEmpty(titleInput.getText().toString(), defaultGuideTitle(type)),
@@ -7036,7 +7145,7 @@ public class AssistantActivity extends Activity {
         summary.setPadding(dp(10), dp(6), dp(10), dp(6));
         summary.setMaxLines(2);
         summary.setEllipsize(android.text.TextUtils.TruncateAt.END);
-        summary.setBackground(HeimdallUi.insetPanel(this, 8));
+        summary.setBackground(HeimdallUi.fieldPanel(this, 8));
         return summary;
     }
 
@@ -7140,6 +7249,9 @@ public class AssistantActivity extends Activity {
     }
 
     private void openGuide(GuideEntry guide) {
+        flushGuideReadingPosition();
+        invalidateGuideTextCache();
+        guideReaderFullscreen = false;
         if (GuideEntry.TYPE_NOTE.equals(guide.type)) {
             viewingGuideInline = guide;
             editingGuideInline = null;
@@ -7148,7 +7260,14 @@ public class AssistantActivity extends Activity {
             return;
         }
 
-        if (GuideEntry.TYPE_FILE.equals(guide.type) && canPreviewInline(guide.content, guide.title)) {
+        if (GuideEntry.TYPE_FILE.equals(guide.type)
+                && isPdfDocument(guide.content, guide.title)) {
+            openGuideExternally(guide);
+            return;
+        }
+
+        if (GuideEntry.TYPE_FILE.equals(guide.type)
+                && canPreviewInline(guide.content, guide.title)) {
             viewingGuideInline = guide;
             editingGuideInline = null;
             editingGuideTypeInline = null;
@@ -7177,62 +7296,522 @@ public class AssistantActivity extends Activity {
     private View createGuideReaderPage(GuideEntry guide) {
         LinearLayout panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL);
-        int pad = dp(8);
-        panel.setPadding(pad, pad, pad, pad);
+        panel.setPadding(dp(8), dp(8), dp(8), dp(8));
         panel.setBackground(HeimdallUi.isPearl(this)
                 ? HeimdallUi.cncFlush(this, 12)
                 : HeimdallUi.surfacePanel(this, 12));
 
-        LinearLayout card = new LinearLayout(this);
-        card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(dp(10), dp(8), dp(10), dp(8));
-        card.setBackground(HeimdallUi.isPearl(this)
-                ? HeimdallUi.pearlMenuPanel(this, 10)
-                : HeimdallUi.insetPanel(this, 10));
-        panel.addView(card, new LinearLayout.LayoutParams(-1, 0, 1));
-
-        TextView title = text(getString(R.string.guide_reader_title,
-                nonEmpty(guide.title, getString(R.string.common_guide_fallback))),
-                13, PRIMARY, true);
-        title.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
-        card.addView(title, new LinearLayout.LayoutParams(-1, dp(34)));
-
-        ScrollView contentScroll = new ScrollView(this);
-        contentScroll.setFillViewport(false);
-        contentScroll.setScrollbarFadingEnabled(false);
-        contentScroll.setBackground(HeimdallUi.insetPanel(this, 8));
-        LinearLayout content = new LinearLayout(this);
-        content.setOrientation(LinearLayout.VERTICAL);
-        content.setPadding(dp(4), dp(4), dp(4), dp(4));
-        contentScroll.addView(content, new ScrollView.LayoutParams(-1, -2));
-        LinearLayout.LayoutParams contentParams = new LinearLayout.LayoutParams(-1, 0, 1);
-        contentParams.setMargins(0, dp(4), 0, dp(8));
-        card.addView(contentScroll, contentParams);
-
-        if (GuideEntry.TYPE_NOTE.equals(guide.type)) {
-            addReaderText(content, guide.content);
+        if (isInlineTextGuide(guide)) {
+            panel.addView(createGuideReaderToolbar(guide, false),
+                    new LinearLayout.LayoutParams(-1, dp(48)));
+            GuideTextReaderView reader = createGuideTextReaderView(guide);
+            reader.setBackground(HeimdallUi.isPearl(this)
+                    ? HeimdallUi.pearlMenuPanel(this, 8)
+                    : HeimdallUi.rounded(this, HeimdallUi.COLOR_SURFACE_INSET, 0, 8, 0));
+            LinearLayout.LayoutParams readerParams = new LinearLayout.LayoutParams(-1, 0, 1);
+            readerParams.setMargins(0, dp(4), 0, 0);
+            panel.addView(reader, readerParams);
+            loadGuideText(reader, guide);
         } else if (GuideEntry.TYPE_FILE.equals(guide.type)) {
+            panel.addView(createGuideReaderToolbar(guide, false),
+                    new LinearLayout.LayoutParams(-1, dp(48)));
+            LinearLayout content = new LinearLayout(this);
+            content.setOrientation(LinearLayout.VERTICAL);
+            content.setPadding(dp(8), dp(8), dp(8), dp(8));
+            panel.addView(content, new LinearLayout.LayoutParams(-1, 0, 1));
             addDocumentPreview(content,
                     nonEmpty(guide.title, getString(R.string.guide_default_file)),
                     guide.content, guide.title, false);
         } else {
+            LinearLayout content = new LinearLayout(this);
+            content.setOrientation(LinearLayout.VERTICAL);
+            content.setPadding(dp(8), dp(8), dp(8), dp(8));
+            panel.addView(content, new LinearLayout.LayoutParams(-1, 0, 1));
             addTextPreview(content, guideUri(guide).toString(), 86);
         }
-
-        LinearLayout actions = new LinearLayout(this);
-        actions.setOrientation(LinearLayout.HORIZONTAL);
-        card.addView(actions, new LinearLayout.LayoutParams(-1, dp(48)));
-        actions.addView(editorButton(getString(R.string.guide_close_reader), () -> {
-            viewingGuideInline = null;
-            rebuildContent();
-        }));
-        actions.addView(editorButton(getString(R.string.common_copy),
-                () -> copyGuideContent(guide)));
-        if (!GuideEntry.TYPE_NOTE.equals(guide.type)) {
-            actions.addView(editorButton(getString(R.string.common_open_external),
-                    () -> openGuideExternally(guide)));
-        }
         return panel;
+    }
+
+    private boolean isInlineTextGuide(GuideEntry guide) {
+        return guide != null && (GuideEntry.TYPE_NOTE.equals(guide.type)
+                || (GuideEntry.TYPE_FILE.equals(guide.type)
+                && isTextDocument(guide.content, guide.title)));
+    }
+
+    private LinearLayout createGuideReaderToolbar(GuideEntry guide, boolean fullscreen) {
+        LinearLayout toolbar = new LinearLayout(this);
+        toolbar.setOrientation(LinearLayout.HORIZONTAL);
+        toolbar.setGravity(Gravity.CENTER_VERTICAL);
+        toolbar.setPadding(dp(4), dp(3), dp(4), dp(3));
+        if (fullscreen) {
+            toolbar.setBackground(HeimdallUi.isPearl(this)
+                    ? HeimdallUi.cncFlush(this, HeimdallUi.RADIUS_PANEL)
+                    : HeimdallUi.glass(this, 0xDD111824, 0xEE080C12,
+                            HeimdallUi.COLOR_SYSTEM_BORDER_TOP,
+                            HeimdallUi.COLOR_SYSTEM_BORDER_BOTTOM,
+                            HeimdallUi.RADIUS_PANEL, 2));
+        } else {
+            toolbar.setBackgroundColor(Color.TRANSPARENT);
+        }
+        addGuideIconTool(toolbar, R.drawable.ic_arrow_back,
+                fullscreen ? getString(R.string.common_exit_fullscreen)
+                        : getString(R.string.guide_close_reader),
+                fullscreen ? this::closeGuideFullscreen : this::closeGuideReader);
+        TextView title = text(nonEmpty(guide.title, getString(R.string.common_guide_fallback)),
+                13, TEXT, true);
+        title.setSingleLine(true);
+        title.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
+        toolbar.addView(title, new LinearLayout.LayoutParams(0, -1, 1));
+
+        if (isInlineTextGuide(guide)) {
+            String currentLayout = GuideEntry.READER_MODE_ORIGINAL.equals(guide.readerMode)
+                    ? getString(R.string.guide_layout_original)
+                    : getString(R.string.guide_layout_reading);
+            addGuideIconTool(toolbar, R.drawable.ic_reader_layout,
+                    getString(R.string.guide_layout_action, currentLayout),
+                    () -> showGuideReaderOptions(guide));
+            addGuideIconTool(toolbar, R.drawable.ic_bookmark,
+                    getString(R.string.guide_bookmark_action),
+                    () -> showGuideBookmarks(guide));
+
+            if (!fullscreen) {
+                addGuideIconTool(toolbar, R.drawable.ic_fullscreen,
+                        getString(R.string.guide_enter_fullscreen), this::openGuideFullscreen);
+            }
+        }
+        if (!GuideEntry.TYPE_NOTE.equals(guide.type)) {
+            addGuideIconTool(toolbar, R.drawable.ic_open_external,
+                    getString(R.string.common_open_external), () -> openGuideExternally(guide));
+        }
+        return toolbar;
+    }
+
+    private void addGuideIconTool(LinearLayout toolbar, int iconRes, String description,
+            Runnable action) {
+        ImageButton button = compactMapIconButton(iconRes, description, action);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(42), dp(40));
+        params.setMargins(dp(2), 0, dp(2), 0);
+        toolbar.addView(button, params);
+    }
+
+    private GuideTextReaderView createGuideTextReaderView(GuideEntry guide) {
+        boolean original = GuideEntry.READER_MODE_ORIGINAL.equals(guide.readerMode);
+        GuideTextReaderView reader = new GuideTextReaderView(this, original);
+        reader.showMessage(getString(R.string.guide_loading_text), MUTED);
+        return reader;
+    }
+
+    private void loadGuideText(GuideTextReaderView reader, GuideEntry guide) {
+        flushGuideReadingPosition();
+        activeGuideReaderView = reader;
+        activeGuideReaderEntry = guide;
+        activeGuideReaderFingerprint = "";
+        if (cachedGuideTextEntry == guide && cachedGuideTextDocument != null) {
+            attachGuideTextDocument(reader, guide, cachedGuideTextDocument);
+            return;
+        }
+        int generation = ++guideTextLoadGeneration;
+        GuideTextLoader.load(this, guide, result -> {
+            if (generation != guideTextLoadGeneration || viewingGuideInline != guide
+                    || activeGuideReaderView != reader) {
+                return;
+            }
+            if (result.document == null) {
+                int message = result.failure == GuideTextLoader.Failure.TOO_LARGE
+                        ? R.string.guide_text_too_large : R.string.guide_text_read_failed;
+                reader.showMessage(getString(message), DANGER);
+                return;
+            }
+            cachedGuideTextEntry = guide;
+            cachedGuideTextDocument = result.document;
+            attachGuideTextDocument(reader, guide, result.document);
+        });
+    }
+
+    private void attachGuideTextDocument(GuideTextReaderView reader, GuideEntry guide,
+            GuideTextDocument document) {
+        activeGuideReaderFingerprint = document.fingerprint;
+        boolean restore = guide.hasReadingPositionFor(document.fingerprint);
+        GuideTextReaderView.Position position = new GuideTextReaderView.Position(
+                restore ? guide.readerAnchor : 0,
+                restore ? guide.readerAnchorTop : 0,
+                restore ? guide.readerHorizontalColumn : 0,
+                restore ? guide.readerViewportWidth : 0);
+        reader.setDocument(document, position);
+    }
+
+    private void closeGuideReader() {
+        flushGuideReadingPosition();
+        guideReaderFullscreen = false;
+        viewingGuideInline = null;
+        invalidateGuideTextCache();
+        rebuildContent();
+    }
+
+    private void invalidateGuideTextCache() {
+        guideTextLoadGeneration++;
+        cachedGuideTextEntry = null;
+        cachedGuideTextDocument = null;
+    }
+
+    private void showGuideReaderOptions(GuideEntry guide) {
+        LinearLayout shell = new LinearLayout(this);
+        shell.setOrientation(LinearLayout.VERTICAL);
+        shell.setPadding(dp(14), dp(12), dp(14), dp(12));
+        shell.setBackground(guideReaderOverlayPanel());
+        TextView title = text(getString(R.string.guide_layout_title), 15, TEXT, true);
+        shell.addView(title, new LinearLayout.LayoutParams(-1, dp(38)));
+
+        PanelOverlay[] holder = new PanelOverlay[1];
+        LinearLayout modeRow = new LinearLayout(this);
+        modeRow.setOrientation(LinearLayout.HORIZONTAL);
+        modeRow.addView(guideReaderOptionButton(getString(R.string.guide_layout_reading),
+                GuideEntry.READER_MODE_READING.equals(guide.readerMode),
+                () -> applyGuideReaderOptions(holder[0], guide,
+                        GuideEntry.READER_MODE_READING)));
+        modeRow.addView(guideReaderOptionButton(getString(R.string.guide_layout_original),
+                GuideEntry.READER_MODE_ORIGINAL.equals(guide.readerMode),
+                () -> applyGuideReaderOptions(holder[0], guide,
+                        GuideEntry.READER_MODE_ORIGINAL)));
+        shell.addView(modeRow, new LinearLayout.LayoutParams(-1, dp(52)));
+
+        TextView note = text(getString(R.string.guide_layout_help), 11, MUTED, false);
+        note.setGravity(Gravity.TOP | Gravity.START);
+        note.setPadding(dp(4), dp(6), dp(4), 0);
+        shell.addView(note, new LinearLayout.LayoutParams(-1, 0, 1));
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(dp(440), dp(170));
+        params.gravity = Gravity.CENTER;
+        holder[0] = showPanelOverlay(shell, params, null);
+    }
+
+    private Button guideReaderOptionButton(String label, boolean selected, Runnable action) {
+        Button button = editorButton(label, action);
+        HeimdallUi.applyChoiceButton(this, button, selected);
+        return button;
+    }
+
+    private void applyGuideReaderOptions(PanelOverlay overlay, GuideEntry guide,
+            String mode) {
+        Runnable apply = () -> {
+            flushGuideReadingPosition();
+            if (guide.updateReaderPresentation(mode)) {
+                ProfileStore.saveProfiles(this, profiles);
+            }
+            rebuildContent();
+        };
+        if (overlay != null) {
+            dismissPanelAnimated(overlay, apply);
+        } else {
+            apply.run();
+        }
+    }
+
+    private void showGuideBookmarks(GuideEntry guide) {
+        if (guide == null || viewingGuideInline != guide) {
+            return;
+        }
+        LinearLayout shell = new LinearLayout(this);
+        shell.setOrientation(LinearLayout.VERTICAL);
+        shell.setPadding(dp(14), dp(12), dp(14), dp(12));
+        shell.setBackground(guideReaderOverlayPanel());
+
+        PanelOverlay[] holder = new PanelOverlay[1];
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        TextView title = text(getString(R.string.guide_bookmarks), 15, TEXT, true);
+        header.addView(title, new LinearLayout.LayoutParams(0, -1, 1));
+        ImageButton add = compactMapIconButton(R.drawable.ic_add,
+                getString(R.string.guide_bookmark_add),
+                () -> addGuideBookmark(holder[0], guide));
+        header.addView(add, new LinearLayout.LayoutParams(dp(42), dp(40)));
+        shell.addView(header, new LinearLayout.LayoutParams(-1, dp(48)));
+
+        ScrollView scroller = new ScrollView(this);
+        scroller.setFillViewport(true);
+        scroller.setVerticalScrollBarEnabled(true);
+        scroller.setScrollbarFadingEnabled(false);
+        LinearLayout list = new LinearLayout(this);
+        list.setOrientation(LinearLayout.VERTICAL);
+        list.setPadding(0, dp(4), 0, dp(4));
+        scroller.addView(list, new ScrollView.LayoutParams(-1, -2));
+        shell.addView(scroller, new LinearLayout.LayoutParams(-1, 0, 1));
+
+        if (guide.bookmarks.isEmpty()) {
+            TextView empty = text(getString(R.string.guide_bookmark_empty), 13, MUTED, false);
+            empty.setGravity(Gravity.CENTER);
+            empty.setPadding(dp(18), dp(18), dp(18), dp(18));
+            list.addView(empty, new LinearLayout.LayoutParams(-1, dp(110)));
+        } else {
+            List<GuideEntry.Bookmark> ordered = new ArrayList<>(guide.bookmarks);
+            String fingerprint = activeGuideReaderFingerprint;
+            Collections.sort(ordered, (left, right) -> {
+                boolean leftCurrent = left.belongsTo(fingerprint);
+                boolean rightCurrent = right.belongsTo(fingerprint);
+                if (leftCurrent != rightCurrent) {
+                    return leftCurrent ? -1 : 1;
+                }
+                return Integer.compare(left.anchor, right.anchor);
+            });
+            for (GuideEntry.Bookmark bookmark : ordered) {
+                list.addView(guideBookmarkRow(holder, guide, bookmark),
+                        new LinearLayout.LayoutParams(-1, dp(56)));
+            }
+        }
+
+        Button close = editorButton(getString(R.string.common_close), () -> {
+            if (holder[0] != null) {
+                dismissPanelAnimated(holder[0]);
+            }
+        });
+        LinearLayout.LayoutParams closeParams = new LinearLayout.LayoutParams(-1, dp(44));
+        closeParams.setMargins(0, dp(8), 0, 0);
+        shell.addView(close, closeParams);
+
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
+                settingsOverlayWidth(600), settingsOverlayHeight(620), Gravity.CENTER);
+        params.setMargins(dp(12), dp(12), dp(12), dp(12));
+        holder[0] = showPanelOverlay(shell, params, null);
+    }
+
+    private Drawable guideReaderOverlayPanel() {
+        if (HeimdallUi.isPearl(this)) {
+            return HeimdallUi.cncFlush(this, 12);
+        }
+        return HeimdallUi.glass(this, 0xFF111824, 0xFF080C12,
+                HeimdallUi.COLOR_SYSTEM_BORDER_TOP,
+                HeimdallUi.COLOR_SYSTEM_BORDER_BOTTOM, 12, 1);
+    }
+
+    private View guideBookmarkRow(PanelOverlay[] holder, GuideEntry guide,
+            GuideEntry.Bookmark bookmark) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(0, dp(2), 0, dp(2));
+
+        boolean current = bookmark.belongsTo(activeGuideReaderFingerprint);
+        String fallback = getString(R.string.guide_bookmark_default,
+                Math.max(1, guide.bookmarks.indexOf(bookmark) + 1));
+        String label = nonEmpty(bookmark.label, fallback);
+        Button open = new Button(this);
+        open.setAllCaps(false);
+        open.setSingleLine(true);
+        open.setText(current ? label : getString(R.string.guide_bookmark_stale, label));
+        open.setTextSize(13);
+        open.setTextColor(current ? HeimdallUi.textColor(this) : HeimdallUi.mutedTextColor(this));
+        open.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
+        open.setBackground(HeimdallUi.isPearl(this)
+                ? HeimdallUi.pearlMenuControl(this, 8, false, !current)
+                : HeimdallUi.surfacePanel(this, 8));
+        open.setMinHeight(0);
+        open.setMinWidth(0);
+        open.setPadding(dp(10), 0, dp(8), 0);
+        open.setContentDescription(getString(R.string.guide_bookmark_open, label));
+        open.setOnClickListener(view -> {
+            if (!bookmark.belongsTo(activeGuideReaderFingerprint)) {
+                showErrorAction(getString(R.string.guide_bookmark_stale_message));
+                return;
+            }
+            jumpToGuideBookmark(holder[0], guide, bookmark, label);
+        });
+        row.addView(open, new LinearLayout.LayoutParams(0, dp(52), 1));
+
+        ImageButton delete = iconButton(R.drawable.ic_trash,
+                getString(R.string.guide_bookmark_delete), true,
+                () -> deleteGuideBookmark(holder[0], guide, bookmark));
+        LinearLayout.LayoutParams deleteParams = new LinearLayout.LayoutParams(dp(58), dp(48));
+        deleteParams.setMargins(dp(4), dp(2), 0, dp(2));
+        row.addView(delete, deleteParams);
+        return row;
+    }
+
+    private void addGuideBookmark(PanelOverlay overlay, GuideEntry guide) {
+        if (activeGuideReaderView == null || activeGuideReaderEntry != guide
+                || activeGuideReaderFingerprint.length() == 0
+                || cachedGuideTextEntry != guide || cachedGuideTextDocument == null) {
+            showErrorAction(getString(R.string.guide_bookmark_loading));
+            return;
+        }
+        if (guide.bookmarks.size() >= GuideEntry.MAX_BOOKMARKS) {
+            showErrorAction(getString(R.string.guide_bookmark_limit));
+            return;
+        }
+        GuideTextReaderView.Position position = activeGuideReaderView.capturePosition();
+        if (guide.hasBookmarkAt(activeGuideReaderFingerprint, position.anchor)) {
+            showAction(getString(R.string.guide_bookmark_duplicate));
+            return;
+        }
+        String heading = cachedGuideTextDocument.nearbyMarkdownHeading(position.anchor);
+        String label = nonEmpty(heading, getString(R.string.guide_bookmark_default,
+                guide.bookmarks.size() + 1));
+        GuideEntry.Bookmark bookmark = guide.addBookmark(label, position.anchor,
+                position.anchorTop, position.horizontalColumn, position.viewportWidth,
+                activeGuideReaderFingerprint);
+        if (bookmark == null) {
+            showErrorAction(getString(R.string.guide_bookmark_limit));
+            return;
+        }
+        ProfileStore.saveProfiles(this, profiles);
+        Runnable refresh = () -> {
+            showAction(getString(R.string.guide_bookmark_added));
+            showGuideBookmarks(guide);
+        };
+        if (overlay != null) {
+            dismissPanelAnimated(overlay, refresh);
+        } else {
+            refresh.run();
+        }
+    }
+
+    private void jumpToGuideBookmark(PanelOverlay overlay, GuideEntry guide,
+            GuideEntry.Bookmark bookmark, String label) {
+        GuideTextReaderView reader = activeGuideReaderView;
+        if (reader == null || activeGuideReaderEntry != guide
+                || !bookmark.belongsTo(activeGuideReaderFingerprint)) {
+            showErrorAction(getString(R.string.guide_bookmark_stale_message));
+            return;
+        }
+        GuideTextReaderView.Position position = new GuideTextReaderView.Position(
+                bookmark.anchor, bookmark.anchorTop, bookmark.horizontalColumn,
+                bookmark.viewportWidth);
+        Runnable jump = () -> {
+            reader.scrollToPosition(position);
+            if (guide.updateReadingPosition(0, bookmark.anchor, bookmark.anchorTop,
+                    bookmark.horizontalColumn, bookmark.viewportWidth,
+                    bookmark.fingerprint)) {
+                ProfileStore.saveProfiles(this, profiles);
+            }
+            showAction(getString(R.string.guide_bookmark_open, label));
+        };
+        if (overlay != null) {
+            dismissPanelAnimated(overlay, jump);
+        } else {
+            jump.run();
+        }
+    }
+
+    private void deleteGuideBookmark(PanelOverlay overlay, GuideEntry guide,
+            GuideEntry.Bookmark bookmark) {
+        if (!guide.removeBookmark(bookmark)) {
+            return;
+        }
+        ProfileStore.saveProfiles(this, profiles);
+        Runnable refresh = () -> {
+            showAction(getString(R.string.guide_bookmark_deleted));
+            showGuideBookmarks(guide);
+        };
+        if (overlay != null) {
+            dismissPanelAnimated(overlay, refresh);
+        } else {
+            refresh.run();
+        }
+    }
+
+    private void openGuideFullscreen() {
+        if (!isInlineTextGuide(viewingGuideInline)) {
+            return;
+        }
+        flushGuideReadingPosition();
+        guideReaderFullscreen = true;
+        rebuildContent();
+    }
+
+    private View createFullscreenGuideLayout() {
+        profileIconView = null;
+        profileTitle = null;
+        systemTimeText = null;
+        systemNetworkIcon = null;
+        systemBatteryIcon = null;
+        systemBatteryText = null;
+        statusText = null;
+        profileList = null;
+        touchPadView = null;
+        macroGrids.clear();
+
+        FrameLayout root = new FrameLayout(this);
+        root.setBackgroundColor(HeimdallUi.isPearl(this) ? 0xFFD4DCE3 : BG);
+        applySystemGestureExclusion(root);
+        GuideEntry guide = viewingGuideInline;
+        if (!isInlineTextGuide(guide)) {
+            guideReaderFullscreen = false;
+            return root;
+        }
+        GuideTextReaderView reader = createGuideTextReaderView(guide);
+        root.addView(reader, new FrameLayout.LayoutParams(-1, -1));
+        LinearLayout toolbar = createGuideReaderToolbar(guide, true);
+        installFullscreenGuideControls(root, toolbar, reader);
+        loadGuideText(reader, guide);
+        return root;
+    }
+
+    private void installFullscreenGuideControls(FrameLayout root, LinearLayout toolbar,
+            View content) {
+        FrameLayout.LayoutParams toolbarParams = new FrameLayout.LayoutParams(-1, dp(50));
+        toolbarParams.gravity = Gravity.TOP;
+        toolbarParams.setMargins(dp(8), dp(8), dp(8), 0);
+        root.addView(toolbar, toolbarParams);
+        fullscreenGuideControls = toolbar;
+
+        ImageButton reveal = compactMapIconButton(R.drawable.ic_toolbar_reveal,
+                getString(R.string.guide_show_toolbar), this::showFullscreenGuideControls);
+        reveal.setBackground(HeimdallUi.isPearl(this)
+                ? HeimdallUi.pearlMenuControl(this, 8, false, false)
+                : HeimdallUi.glass(this, 0xA6111824, 0xC9080C12,
+                        HeimdallUi.COLOR_SYSTEM_BORDER_TOP,
+                        HeimdallUi.COLOR_SYSTEM_BORDER_BOTTOM, 8, 1));
+        FrameLayout.LayoutParams revealParams = new FrameLayout.LayoutParams(dp(46), dp(24));
+        revealParams.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
+        revealParams.setMargins(0, dp(3), 0, 0);
+        root.addView(reveal, revealParams);
+        fullscreenGuideReveal = reveal;
+
+        content.setOnTouchListener((view, event) -> {
+            if (event.getActionMasked() == MotionEvent.ACTION_DOWN
+                    && (event.getY() <= dp(26)
+                    || event.getY() >= view.getHeight() - dp(26))) {
+                showFullscreenGuideControls();
+            }
+            return false;
+        });
+        toolbar.setOnTouchListener((view, event) -> {
+            if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
+                showFullscreenGuideControls();
+            }
+            return false;
+        });
+        showFullscreenGuideControls();
+    }
+
+    private void showFullscreenGuideControls() {
+        setFullscreenGuideControlsVisible(true);
+        uiHandler.removeCallbacks(hideFullscreenGuideControls);
+        uiHandler.postDelayed(hideFullscreenGuideControls, 3000);
+    }
+
+    private void setFullscreenGuideControlsVisible(boolean visible) {
+        if (fullscreenGuideControls != null) {
+            fullscreenGuideControls.setVisibility(visible ? View.VISIBLE : View.GONE);
+        }
+        if (fullscreenGuideReveal != null) {
+            fullscreenGuideReveal.setVisibility(visible ? View.GONE : View.VISIBLE);
+        }
+    }
+
+    private void closeGuideFullscreen() {
+        uiHandler.removeCallbacks(hideFullscreenGuideControls);
+        flushGuideReadingPosition();
+        fullscreenGuideControls = null;
+        fullscreenGuideReveal = null;
+        guideReaderFullscreen = false;
+        rebuildContent();
+    }
+
+    private void leaveGuideFullscreenState() {
+        uiHandler.removeCallbacks(hideFullscreenGuideControls);
+        fullscreenGuideControls = null;
+        fullscreenGuideReveal = null;
+        guideReaderFullscreen = false;
     }
 
     private void addDocumentPreview(LinearLayout parent, String title, String uriString,
@@ -7250,7 +7829,7 @@ public class AssistantActivity extends Activity {
             Bitmap page = renderPdfFirstPage(uri, Math.max(dp(480), getResources().getDisplayMetrics().widthPixels - dp(48)));
             if (page != null) {
                 addBitmapPreview(card, page, 260);
-                addTextPreview(card, getString(R.string.guide_pdf_first_page), 34);
+                addPreviewCaption(card, getString(R.string.guide_pdf_first_page));
             } else {
                 addTextPreview(card, getString(R.string.guide_pdf_preview_failed), 72);
             }
@@ -7295,7 +7874,15 @@ public class AssistantActivity extends Activity {
         parent.addView(body, blockParams(heightDp, 4, 8));
     }
 
-    private void addReaderText(LinearLayout parent, String value) {
+    private void addPreviewCaption(LinearLayout parent, String value) {
+        TextView caption = text(nonEmpty(value, getString(R.string.common_no_content)),
+                12, MUTED, false);
+        caption.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
+        caption.setPadding(dp(10), dp(2), dp(10), dp(2));
+        parent.addView(caption, blockParams(34, 0, 6));
+    }
+
+    private TextView addReaderText(LinearLayout parent, String value) {
         TextView body = text(nonEmpty(value, getString(R.string.common_no_content)),
                 13, TEXT, false);
         body.setGravity(Gravity.TOP | Gravity.START);
@@ -7303,6 +7890,32 @@ public class AssistantActivity extends Activity {
         body.setLineSpacing(dp(2), 1f);
         body.setTextIsSelectable(true);
         parent.addView(body, new LinearLayout.LayoutParams(-1, -2));
+        return body;
+    }
+
+    private void flushGuideReadingPosition() {
+        if (activeGuideReaderView == null || activeGuideReaderEntry == null) {
+            return;
+        }
+        saveGuideReadingPosition();
+        activeGuideReaderView = null;
+        activeGuideReaderEntry = null;
+        activeGuideReaderFingerprint = "";
+    }
+
+    private void saveGuideReadingPosition() {
+        GuideTextReaderView reader = activeGuideReaderView;
+        GuideEntry guide = activeGuideReaderEntry;
+        if (reader == null || guide == null || activeGuideReaderFingerprint.length() == 0) {
+            return;
+        }
+        GuideTextReaderView.Position position = reader.capturePosition();
+        boolean changed = guide.updateReadingPosition(0, position.anchor,
+                position.anchorTop, position.horizontalColumn, position.viewportWidth,
+                activeGuideReaderFingerprint);
+        if (changed) {
+            ProfileStore.saveProfiles(this, profiles);
+        }
     }
 
     private Bitmap decodeImagePreview(Uri uri, int maxSide) {
@@ -7396,8 +8009,7 @@ public class AssistantActivity extends Activity {
     }
 
     private boolean canPreviewInline(String uriString, String fileName) {
-        return isPdfDocument(uriString, fileName)
-                || isImageDocument(uriString, fileName)
+        return isImageDocument(uriString, fileName)
                 || isTextDocument(uriString, fileName);
     }
 
@@ -7568,9 +8180,12 @@ public class AssistantActivity extends Activity {
         if (parentDialogHolder != null && parentDialogHolder[0] != null) {
             parentDialogHolder[0].dismiss();
         }
+        cancelPendingProfileBundleWork();
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         intent.addCategory(Intent.CATEGORY_OPENABLE);
         intent.setType("*/*");
+        intent.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{
+                ProfileBundleStore.MIME_TYPE, "application/json", "application/octet-stream"});
         intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
         try {
             startActivityForResult(intent, REQUEST_IMPORT_PROFILES);
@@ -7583,6 +8198,7 @@ public class AssistantActivity extends Activity {
         if (releaseTextInputFocusThen(() -> exportProfiles(allProfiles))) {
             return;
         }
+        cancelPendingProfileBundleWork();
         List<GameProfile> exportList = new ArrayList<>();
         if (allProfiles) {
             exportList.addAll(profiles);
@@ -7590,73 +8206,102 @@ public class AssistantActivity extends Activity {
             exportList.add(selectedProfile);
         }
         String timestamp = new SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(new Date());
-        pendingProfileExportJson = ProfileStore.profilesToExportJson(exportList, timestamp);
+        try {
+            pendingProfileExportProfiles = ProfileStore.profilesFromJson(
+                    ProfileStore.profilesToJson(exportList));
+        } catch (JSONException ex) {
+            pendingProfileExportProfiles = null;
+            showErrorAction(getString(R.string.error_profile_export_empty));
+            return;
+        }
         String filename = allProfiles
-                ? "heimdall-profiles-" + timestamp + ".json"
-                : "heimdall-profile-" + safeFilename(selectedProfile.name) + "-" + timestamp + ".json";
+                ? "heimdall-profiles-" + timestamp + ProfileBundleStore.FILE_EXTENSION
+                : "heimdall-profile-" + safeFilename(selectedProfile.name) + "-" + timestamp
+                        + ProfileBundleStore.FILE_EXTENSION;
         Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
         intent.addCategory(Intent.CATEGORY_OPENABLE);
-        intent.setType("application/json");
+        intent.setType(ProfileBundleStore.MIME_TYPE);
         intent.putExtra(Intent.EXTRA_TITLE, filename);
         intent.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
         try {
             startActivityForResult(intent, REQUEST_EXPORT_PROFILES);
         } catch (Exception ex) {
-            pendingProfileExportJson = null;
+            pendingProfileExportProfiles = null;
             showErrorAction(getString(R.string.error_profile_export_picker));
         }
     }
 
     private void writeProfileExport(Uri uri) {
-        if (pendingProfileExportJson == null || pendingProfileExportJson.length() == 0) {
+        if (pendingProfileExportProfiles == null || pendingProfileExportProfiles.isEmpty()) {
             showErrorAction(getString(R.string.error_profile_export_empty));
             return;
         }
-        try (OutputStream output = getContentResolver().openOutputStream(uri, "wt")) {
-            if (output == null) {
-                throw new IllegalStateException("No output stream");
-            }
-            output.write(pendingProfileExportJson.getBytes(StandardCharsets.UTF_8));
-            output.flush();
-            showAction(getString(R.string.profile_export_complete));
-        } catch (Exception ex) {
-            showErrorAction(getString(R.string.error_profile_export_write));
-        } finally {
-            pendingProfileExportJson = null;
-        }
+        List<GameProfile> exportProfiles = pendingProfileExportProfiles;
+        pendingProfileExportProfiles = null;
+        cancelPendingProfileBundleRequest();
+        showAction(getString(R.string.profile_export_preparing));
+        final ProfileBundleStore.Request[] holder = new ProfileBundleStore.Request[1];
+        holder[0] = ProfileBundleStore.exportAsync(this, exportProfiles,
+                new SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(new Date()), uri,
+                new ProfileBundleStore.ExportCallback() {
+                    @Override
+                    public void onExported(int assetCount, long assetBytes) {
+                        if (pendingProfileBundleRequest != holder[0]) {
+                            return;
+                        }
+                        pendingProfileBundleRequest = null;
+                        showAction(getString(R.string.profile_export_complete,
+                                assetCount, android.text.format.Formatter.formatShortFileSize(
+                                        AssistantActivity.this, assetBytes)));
+                    }
+
+                    @Override
+                    public void onError(ProfileBundleStore.Failure failure) {
+                        if (pendingProfileBundleRequest != holder[0]) {
+                            return;
+                        }
+                        pendingProfileBundleRequest = null;
+                        showErrorAction(profileBundleFailureMessage(failure));
+                    }
+                });
+        pendingProfileBundleRequest = holder[0];
     }
 
     private void readProfileImport(Uri uri) {
         try {
-            try {
-                getContentResolver().takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
-            } catch (Exception ignored) {
-            }
-            List<GameProfile> imported = ProfileStore.profilesFromJson(readText(uri));
-            showProfileImportConfirm(imported);
-        } catch (JSONException ex) {
-            showErrorAction(getString(R.string.error_profile_import_format));
-        } catch (Exception ex) {
-            showErrorAction(getString(R.string.error_profile_import_read));
+            getContentResolver().takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        } catch (Exception ignored) {
         }
+        cancelPendingProfileBundleWork();
+        showAction(getString(R.string.profile_import_validating));
+        final ProfileBundleStore.Request[] holder = new ProfileBundleStore.Request[1];
+        holder[0] = ProfileBundleStore.prepareImportAsync(this, uri,
+                new ProfileBundleStore.ImportCallback() {
+                    @Override
+                    public void onPrepared(ProfileBundleStore.PreparedImport preparedImport) {
+                        if (pendingProfileBundleRequest != holder[0]) {
+                            preparedImport.close();
+                            return;
+                        }
+                        pendingProfileBundleRequest = null;
+                        pendingProfileImport = preparedImport;
+                        showProfileImportConfirm(preparedImport);
+                    }
+
+                    @Override
+                    public void onError(ProfileBundleStore.Failure failure) {
+                        if (pendingProfileBundleRequest != holder[0]) {
+                            return;
+                        }
+                        pendingProfileBundleRequest = null;
+                        showErrorAction(profileBundleFailureMessage(failure));
+                    }
+                });
+        pendingProfileBundleRequest = holder[0];
     }
 
-    private String readText(Uri uri) throws Exception {
-        try (InputStream input = getContentResolver().openInputStream(uri);
-             ByteArrayOutputStream output = new ByteArrayOutputStream()) {
-            if (input == null) {
-                throw new IllegalStateException("No input stream");
-            }
-            byte[] buffer = new byte[4096];
-            int read;
-            while ((read = input.read(buffer)) != -1) {
-                output.write(buffer, 0, read);
-            }
-            return new String(output.toByteArray(), StandardCharsets.UTF_8);
-        }
-    }
-
-    private void showProfileImportConfirm(List<GameProfile> imported) {
+    private void showProfileImportConfirm(ProfileBundleStore.PreparedImport preparedImport) {
+        List<GameProfile> imported = preparedImport.profiles;
         String firstName = imported.isEmpty() ? "" : imported.get(0).name;
         String importedCount = getResources().getQuantityString(R.plurals.profile_count,
                 imported.size(), imported.size());
@@ -7665,10 +8310,101 @@ public class AssistantActivity extends Activity {
         String message = getString(R.string.profile_import_read_summary, importedCount)
                 + (firstName == null || firstName.length() == 0 ? ""
                 : "\n" + getString(R.string.profile_import_first_name, firstName))
+                + "\n" + (preparedImport.legacyJson
+                ? getString(R.string.profile_import_legacy_summary)
+                : getString(R.string.profile_import_asset_summary,
+                        preparedImport.assetCount,
+                        android.text.format.Formatter.formatShortFileSize(
+                                this, preparedImport.assetBytes)))
                 + "\n\n" + getString(R.string.profile_import_choice_summary, currentCount);
         showSettingsDecisionPanel(getString(R.string.profile_import), message,
-                getString(R.string.profile_import_replace_all), () -> replaceProfiles(imported),
-                getString(R.string.profile_import_append), () -> appendProfiles(imported));
+                getString(R.string.profile_import_replace_all),
+                () -> installPreparedProfiles(preparedImport, true),
+                getString(R.string.profile_import_append),
+                () -> installPreparedProfiles(preparedImport, false));
+    }
+
+    private void installPreparedProfiles(ProfileBundleStore.PreparedImport preparedImport,
+            boolean replaceAll) {
+        if (pendingProfileImport != preparedImport || preparedImport == null) {
+            showErrorAction(getString(R.string.error_profile_import_read));
+            return;
+        }
+        pendingProfileImport = null;
+        cancelPendingProfileBundleRequest();
+        showAction(getString(R.string.profile_import_installing));
+        final ProfileBundleStore.Request[] holder = new ProfileBundleStore.Request[1];
+        holder[0] = ProfileBundleStore.installAsync(this, preparedImport,
+                new ProfileBundleStore.InstallCallback() {
+                    @Override
+                    public void onInstalled(List<GameProfile> imported) {
+                        if (pendingProfileBundleRequest != holder[0]) {
+                            return;
+                        }
+                        pendingProfileBundleRequest = null;
+                        if (replaceAll) {
+                            replaceProfiles(imported);
+                        } else {
+                            appendProfiles(imported);
+                        }
+                    }
+
+                    @Override
+                    public void onError(ProfileBundleStore.Failure failure) {
+                        if (pendingProfileBundleRequest != holder[0]) {
+                            return;
+                        }
+                        pendingProfileBundleRequest = null;
+                        showErrorAction(profileBundleFailureMessage(failure));
+                    }
+                });
+        pendingProfileBundleRequest = holder[0];
+    }
+
+    private String profileBundleFailureMessage(ProfileBundleStore.Failure failure) {
+        if (failure == null) {
+            return getString(R.string.error_profile_import_read);
+        }
+        String detail = nonEmpty(failure.detail, getString(R.string.profile_asset_unknown));
+        if (failure.code == ProfileBundleStore.ErrorCode.MISSING_ASSET) {
+            return getString(R.string.error_profile_bundle_missing_asset, detail);
+        }
+        if (failure.code == ProfileBundleStore.ErrorCode.UNSUPPORTED_ASSET) {
+            return getString(R.string.error_profile_bundle_unsupported_asset, detail);
+        }
+        if (failure.code == ProfileBundleStore.ErrorCode.TOO_LARGE) {
+            return getString(R.string.error_profile_bundle_too_large, detail);
+        }
+        if (failure.code == ProfileBundleStore.ErrorCode.UNSUPPORTED_VERSION) {
+            return getString(R.string.error_profile_bundle_version, detail);
+        }
+        if (failure.code == ProfileBundleStore.ErrorCode.UNSAFE_PATH) {
+            return getString(R.string.error_profile_bundle_unsafe_path, detail);
+        }
+        if (failure.code == ProfileBundleStore.ErrorCode.CORRUPT
+                || failure.code == ProfileBundleStore.ErrorCode.INVALID_FORMAT) {
+            return getString(R.string.error_profile_bundle_corrupt, detail);
+        }
+        if (failure.code == ProfileBundleStore.ErrorCode.EMPTY) {
+            return getString(R.string.error_profile_import_format);
+        }
+        return getString(R.string.error_profile_bundle_storage, detail);
+    }
+
+    private void cancelPendingProfileBundleRequest() {
+        if (pendingProfileBundleRequest != null) {
+            pendingProfileBundleRequest.cancel();
+            pendingProfileBundleRequest = null;
+        }
+    }
+
+    private void cancelPendingProfileBundleWork() {
+        cancelPendingProfileBundleRequest();
+        pendingProfileExportProfiles = null;
+        if (pendingProfileImport != null) {
+            pendingProfileImport.close();
+            pendingProfileImport = null;
+        }
     }
 
     private void appendProfiles(List<GameProfile> imported) {
@@ -7841,6 +8577,7 @@ public class AssistantActivity extends Activity {
         if (releaseTextInputFocusThen(this::rebuildContent)) {
             return;
         }
+        flushGuideReadingPosition();
         cancelSettingsTransition();
         cancelContentTransitions();
         clearPanelOverlays();
@@ -7870,6 +8607,10 @@ public class AssistantActivity extends Activity {
     private void switchPlayScreen(int targetScreen) {
         if (releaseTextInputFocusThen(() -> switchPlayScreen(targetScreen))) {
             return;
+        }
+        flushGuideReadingPosition();
+        if (guideReaderFullscreen && targetScreen != SCREEN_GUIDE) {
+            leaveGuideFullscreenState();
         }
         if (settingsTransitionState != SETTINGS_TRANSITION_NONE) {
             return;
@@ -7941,6 +8682,7 @@ public class AssistantActivity extends Activity {
         if (releaseTextInputFocusThen(() -> refreshCurrentPlayContent(screen))) {
             return;
         }
+        flushGuideReadingPosition();
         if (contentHost == null || currentContentPage == null || !isPlayScreen(screen)) {
             activeScreen = screen;
             rebuildContent();
@@ -8824,7 +9566,7 @@ public class AssistantActivity extends Activity {
         profile.defaultForPackage = false;
         profile.iconUri = source.iconUri;
         for (GuideEntry guide : source.guides) {
-            profile.guides.add(new GuideEntry(guide.title, guide.type, guide.content));
+            profile.guides.add(guide.copy());
         }
         for (MapEntry map : source.safeMaps()) {
             profile.maps.add(new MapEntry(map.title, map.uri));
@@ -10698,6 +11440,14 @@ public class AssistantActivity extends Activity {
         private float surfacePressProgress;
         private long lastDispatchTime;
         private boolean relativeMouseErrorShown;
+        private long touchDragGestureToken;
+        private boolean touchDragStarted;
+        private boolean touchDragAcceptingMoves;
+        private boolean touchDragErrorShown;
+        private InputBridge.Callback touchDragCallback;
+        private boolean rightStickGestureStarted;
+        private boolean rightStickGestureActive;
+        private boolean rightStickErrorShown;
         private ValueAnimator surfacePressAnimator;
         private final Runnable relativeMouseNeutralReset = new Runnable() {
             @Override
@@ -10734,9 +11484,13 @@ public class AssistantActivity extends Activity {
             String mode = TouchpadSettings.normalizeMode(touchpadSettings.mode);
             if (TouchpadSettings.MODE_RELATIVE_MOUSE.equals(mode)) {
                 cancelRelativeMousePulse(true);
-            } else {
+            } else if (TouchpadSettings.MODE_RIGHT_STICK.equals(mode)) {
                 recenterRightStick(false);
+            } else {
+                cancelTouchDragGesture(mode);
             }
+            rightStickGestureStarted = false;
+            rightStickGestureActive = false;
             currentStickX = 0f;
             currentStickY = 0f;
             x = -1;
@@ -11246,18 +12000,34 @@ public class AssistantActivity extends Activity {
                 lastDispatchTime = 0;
                 shizukuSmoothedDx = 0f;
                 shizukuSmoothedDy = 0f;
+                long gestureToken = ++touchDragGestureToken;
+                touchDragErrorShown = false;
+                touchDragCallback = createTouchDragCallback(gestureToken);
+                boolean started;
                 if (shizukuTouchMode) {
-                    InputBridge.startShizukuTouchpadDrag(AssistantActivity.this, targetDisplayId, targetDisplayWidth, targetDisplayHeight,
-                            touchpadSettings.anchorX, touchpadSettings.anchorY, inputStatusCallback);
+                    started = InputBridge.startShizukuTouchpadDrag(AssistantActivity.this,
+                            targetDisplayId, targetDisplayWidth, targetDisplayHeight,
+                            touchpadSettings.anchorX, touchpadSettings.anchorY, touchDragCallback);
                 } else {
-                    InputBridge.startTouchpadDrag(AssistantActivity.this, targetDisplayId, targetDisplayWidth, targetDisplayHeight,
-                            touchpadSettings.anchorX, touchpadSettings.anchorY, inputStatusCallback);
+                    started = InputBridge.startTouchpadDrag(AssistantActivity.this,
+                            targetDisplayId, targetDisplayWidth, targetDisplayHeight,
+                            touchpadSettings.anchorX, touchpadSettings.anchorY, touchDragCallback);
+                }
+                touchDragStarted = started;
+                touchDragAcceptingMoves = started;
+                if (!started) {
+                    clearUnavailableGestureVisual();
                 }
                 invalidate();
                 return true;
             }
 
             if (event.getActionMasked() == MotionEvent.ACTION_MOVE) {
+                if (!touchDragAcceptingMoves) {
+                    x = -1f;
+                    y = -1f;
+                    return true;
+                }
                 long now = event.getEventTime();
                 float dx = x - lastX;
                 float dy = y - lastY;
@@ -11269,17 +12039,25 @@ public class AssistantActivity extends Activity {
                         float smoothing = clampFloat(touchpadSettings.shizukuTouchSmoothing, 0f, 0.9f);
                         shizukuSmoothedDx = shizukuSmoothedDx * smoothing + outDx * (1f - smoothing);
                         shizukuSmoothedDy = shizukuSmoothedDy * smoothing + outDy * (1f - smoothing);
-                        InputBridge.moveShizukuTouchpadDrag(AssistantActivity.this,
+                        boolean moved = InputBridge.moveShizukuTouchpadDrag(AssistantActivity.this,
                                 shizukuSmoothedDx, shizukuSmoothedDy, touchpadSettings.shizukuTouchFrameMs,
-                                inputStatusCallback);
+                                touchDragCallback);
+                        if (!moved) {
+                            touchDragAcceptingMoves = false;
+                            clearUnavailableGestureVisual();
+                        }
                         lastX = x;
                         lastY = y;
                     }
                 } else if (now - lastDispatchTime >= touchpadSettings.intervalMs
                         && (Math.abs(dx) >= touchpadSettings.minDelta || Math.abs(dy) >= touchpadSettings.minDelta)) {
                     float scale = touchpadSettings.sensitivity;
-                    InputBridge.moveTouchpadDrag(AssistantActivity.this,
-                            dx * scale, dy * scale, touchpadSettings.strokeMs, inputStatusCallback);
+                    boolean moved = InputBridge.moveTouchpadDrag(AssistantActivity.this,
+                            dx * scale, dy * scale, touchpadSettings.strokeMs, touchDragCallback);
+                    if (!moved) {
+                        touchDragAcceptingMoves = false;
+                        clearUnavailableGestureVisual();
+                    }
                     lastDispatchTime = now;
                     lastX = x;
                     lastY = y;
@@ -11289,6 +12067,11 @@ public class AssistantActivity extends Activity {
             }
 
             if (event.getActionMasked() == MotionEvent.ACTION_UP || event.getActionMasked() == MotionEvent.ACTION_CANCEL) {
+                boolean shouldEndDrag = touchDragStarted;
+                InputBridge.Callback callback = touchDragCallback;
+                touchDragStarted = false;
+                touchDragAcceptingMoves = false;
+                touchDragCallback = null;
                 x = -1;
                 y = -1;
                 lastX = -1;
@@ -11297,14 +12080,77 @@ public class AssistantActivity extends Activity {
                 originY = -1;
                 shizukuSmoothedDx = 0f;
                 shizukuSmoothedDy = 0f;
-                if (shizukuTouchMode) {
-                    InputBridge.endShizukuTouchpadDrag(AssistantActivity.this, touchpadSettings.strokeMs, inputStatusCallback);
-                } else {
-                    InputBridge.endTouchpadDrag(AssistantActivity.this, touchpadSettings.strokeMs, inputStatusCallback);
+                if (shouldEndDrag && callback != null) {
+                    if (shizukuTouchMode) {
+                        InputBridge.endShizukuTouchpadDrag(AssistantActivity.this,
+                                touchpadSettings.strokeMs, callback);
+                    } else {
+                        InputBridge.endTouchpadDrag(AssistantActivity.this,
+                                touchpadSettings.strokeMs, callback);
+                    }
                 }
             }
             invalidate();
             return true;
+        }
+
+        private InputBridge.Callback createTouchDragCallback(long gestureToken) {
+            return new InputBridge.Callback() {
+                @Override
+                public void onStatus(String message) {
+                    uiHandler.post(() -> {
+                        if (gestureToken == touchDragGestureToken) {
+                            inputStatusCallback.onStatus(message);
+                        }
+                    });
+                }
+
+                @Override
+                public void onError(String message) {
+                    uiHandler.post(() -> {
+                        if (gestureToken != touchDragGestureToken) {
+                            return;
+                        }
+                        touchDragAcceptingMoves = false;
+                        clearUnavailableGestureVisual();
+                        if (!touchDragErrorShown) {
+                            touchDragErrorShown = true;
+                            inputStatusCallback.onError(message);
+                        }
+                    });
+                }
+            };
+        }
+
+        private void cancelTouchDragGesture(String mode) {
+            boolean shouldCancel = touchDragStarted;
+            InputBridge.Callback callback = touchDragCallback;
+            touchDragGestureToken++;
+            touchDragStarted = false;
+            touchDragAcceptingMoves = false;
+            touchDragCallback = null;
+            if (!shouldCancel) {
+                return;
+            }
+            if (TouchpadSettings.MODE_SHIZUKU_TOUCH.equals(mode)) {
+                InputBridge.cancelShizukuTouchpadDrag(AssistantActivity.this);
+            } else if (callback != null) {
+                InputBridge.endTouchpadDrag(AssistantActivity.this,
+                        touchpadSettings.strokeMs, callback);
+            }
+        }
+
+        private void clearUnavailableGestureVisual() {
+            currentStickX = 0f;
+            currentStickY = 0f;
+            x = -1f;
+            y = -1f;
+            lastX = -1f;
+            lastY = -1f;
+            originX = -1f;
+            originY = -1f;
+            setSurfacePressed(false);
+            invalidate();
         }
 
         private float transformShizukuTouchDelta(float delta, float sensitivity) {
@@ -11408,11 +12254,16 @@ public class AssistantActivity extends Activity {
             String mode = TouchpadSettings.normalizeMode(touchpadSettings.mode);
             if (TouchpadSettings.MODE_RELATIVE_MOUSE.equals(mode)) {
                 cancelRelativeMousePulse(true);
-            } else if (TouchpadSettings.MODE_SHIZUKU_TOUCH.equals(mode)) {
-                InputBridge.cancelShizukuTouchpadDrag(AssistantActivity.this);
+            } else if (TouchpadSettings.MODE_RIGHT_STICK.equals(mode)) {
+                if (rightStickGestureStarted) {
+                    recenterRightStick(false);
+                }
             } else {
-                uiHandler.removeCallbacks(relativeMouseNeutralReset);
+                cancelTouchDragGesture(mode);
             }
+            rightStickGestureStarted = false;
+            rightStickGestureActive = false;
+            uiHandler.removeCallbacks(relativeMouseNeutralReset);
             super.onDetachedFromWindow();
         }
 
@@ -11442,6 +12293,9 @@ public class AssistantActivity extends Activity {
         private boolean handleRightStickTouch(MotionEvent event) {
             int action = event.getActionMasked();
             if (action == MotionEvent.ACTION_DOWN) {
+                rightStickErrorShown = false;
+                rightStickGestureStarted = true;
+                rightStickGestureActive = true;
                 if (TouchpadSettings.RIGHT_STICK_CENTER_STATIC.equals(
                         TouchpadSettings.normalizeRightStickCenterMode(touchpadSettings.rightStickCenterMode))) {
                     originX = staticStickCenterX();
@@ -11453,18 +12307,31 @@ public class AssistantActivity extends Activity {
                 currentStickX = 0f;
                 currentStickY = 0f;
                 lastDispatchTime = 0;
-                recenterRightStick(false);
-                updateRightStickFromTouch(event.getEventTime(), true);
+                if (!recenterRightStick(false)
+                        || !updateRightStickFromTouch(event.getEventTime(), true)) {
+                    rightStickGestureActive = false;
+                    clearUnavailableGestureVisual();
+                }
                 invalidate();
                 return true;
             }
             if (action == MotionEvent.ACTION_MOVE) {
-                updateRightStickFromTouch(event.getEventTime(), false);
+                if (!rightStickGestureActive) {
+                    x = -1f;
+                    y = -1f;
+                } else if (!updateRightStickFromTouch(event.getEventTime(), false)) {
+                    rightStickGestureActive = false;
+                    clearUnavailableGestureVisual();
+                }
                 invalidate();
                 return true;
             }
             if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
-                recenterRightStick(false);
+                if (rightStickGestureStarted) {
+                    recenterRightStick(false);
+                }
+                rightStickGestureStarted = false;
+                rightStickGestureActive = false;
                 currentStickX = 0f;
                 currentStickY = 0f;
                 x = -1;
@@ -11479,17 +12346,18 @@ public class AssistantActivity extends Activity {
             return true;
         }
 
-        private void updateRightStickFromTouch(long eventTime, boolean force) {
+        private boolean updateRightStickFromTouch(long eventTime, boolean force) {
             if (!force && eventTime - lastDispatchTime < touchpadSettings.intervalMs) {
-                return;
+                return true;
             }
             float radius = rightStickRadiusPixels();
             float stickX = applyRightStickCurve((x - stickCenterX()) / radius);
             float stickY = applyRightStickCurve((y - stickCenterY()) / radius);
             currentStickX = stickX;
             currentStickY = stickY;
-            emitRightStick(stickX, stickY, false);
+            boolean sent = emitRightStick(stickX, stickY, false);
             lastDispatchTime = eventTime;
+            return sent;
         }
 
         private float stickCenterX() {
@@ -11524,32 +12392,45 @@ public class AssistantActivity extends Activity {
             return Math.signum(scaled) * clampUnit(curved * touchpadSettings.rightStickMaxOutput);
         }
 
-        private void recenterRightStick(boolean showOk) {
+        private boolean recenterRightStick(boolean showOk) {
             int count = Math.max(1, touchpadSettings.rightStickRecenterBursts);
             for (int i = 0; i < count; i++) {
-                emitRightStick(0f, 0f, showOk && i == count - 1);
+                if (!emitRightStick(0f, 0f, showOk && i == count - 1)) {
+                    return false;
+                }
                 if (i < count - 1) {
                     try {
                         Thread.sleep(4L);
                     } catch (InterruptedException ignored) {
                         Thread.currentThread().interrupt();
-                        return;
+                        return false;
                     }
                 }
             }
+            return true;
         }
 
-        private void emitRightStick(float stickX, float stickY, boolean showOk) {
+        private boolean emitRightStick(float stickX, float stickY, boolean showOk) {
             try {
                 NativeGamepadPath.Device device = NativeGamepadPath.requireDevice();
                 String result = InputBridge.emitNativeRightStick(
                         AssistantActivity.this, device, stickX, stickY);
                 if (!NativeGamepadPath.operationSucceeded(result)) {
-                    showErrorAction(getString(R.string.native_controller_write_failed));
+                    showRightStickErrorOnce();
+                    return false;
                 } else if (showOk) {
                     showAction(getString(R.string.native_controller_step_complete));
                 }
+                return true;
             } catch (Throwable t) {
+                showRightStickErrorOnce();
+                return false;
+            }
+        }
+
+        private void showRightStickErrorOnce() {
+            if (!rightStickErrorShown) {
+                rightStickErrorShown = true;
                 showErrorAction(getString(R.string.native_controller_write_failed));
             }
         }

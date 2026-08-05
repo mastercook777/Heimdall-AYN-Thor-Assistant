@@ -113,6 +113,63 @@ final class CanvasAssetStore {
         return file.isFile() ? file : null;
     }
 
+    static synchronized String installBundledAsset(Context context, File source,
+            String expectedSha256, String expectedExtension) throws IOException {
+        validateBundledAsset(source, expectedExtension);
+        if (context == null) {
+            throw new IOException("Missing Canvas storage context");
+        }
+        String digest = expectedSha256 == null
+                ? "" : expectedSha256.trim().toLowerCase(Locale.US);
+        if (!digest.matches("^[0-9a-f]{64}$")
+                || !digest.equals(ProfileAssetStore.sha256(source))) {
+            throw new IOException("Bundled Canvas checksum mismatch");
+        }
+        String extension = expectedExtension.trim().toLowerCase(Locale.US);
+
+        File directory = assetDirectory(context);
+        if (!directory.exists() && !directory.mkdirs()) {
+            throw new IOException("Unable to create Canvas storage");
+        }
+        String assetId = digest + "." + extension;
+        File destination = new File(directory, assetId);
+        if (destination.isFile()) {
+            if (!digest.equals(ProfileAssetStore.sha256(destination))) {
+                throw new IOException("Existing Canvas checksum mismatch");
+            }
+            return assetId;
+        }
+        File temporary = new File(directory, ".bundle-" + UUID.randomUUID() + ".tmp");
+        try {
+            copyFile(source, temporary);
+            if (!digest.equals(ProfileAssetStore.sha256(temporary))
+                    || !temporary.renameTo(destination)) {
+                throw new IOException("Unable to install bundled Canvas asset");
+            }
+        } finally {
+            temporary.delete();
+        }
+        return assetId;
+    }
+
+    static void validateBundledAsset(File source, String expectedExtension) throws IOException {
+        if (source == null || !source.isFile()
+                || source.length() <= 0L || source.length() > MAX_SOURCE_BYTES) {
+            throw new IOException("Invalid bundled Canvas asset");
+        }
+        String requestedExtension = expectedExtension == null
+                ? "" : expectedExtension.trim().toLowerCase(Locale.US);
+        try {
+            String detectedExtension = detectStaticFormat(source);
+            validateBounds(source);
+            if (!detectedExtension.equals(requestedExtension)) {
+                throw new IOException("Bundled Canvas format mismatch");
+            }
+        } catch (ImportException ex) {
+            throw new IOException("Unsupported bundled Canvas asset", ex);
+        }
+    }
+
     private static String importImage(Context context, Uri uri) throws ImportException {
         if (uri == null) {
             throw new ImportException(ImportError.UNAVAILABLE);
@@ -283,6 +340,19 @@ final class CanvasAssetStore {
 
     private static File assetDirectory(Context context) {
         return new File(context.getApplicationContext().getFilesDir(), DIRECTORY);
+    }
+
+    private static void copyFile(File source, File destination) throws IOException {
+        try (FileInputStream input = new FileInputStream(source);
+             FileOutputStream output = new FileOutputStream(destination)) {
+            byte[] buffer = new byte[64 * 1024];
+            int read;
+            while ((read = input.read(buffer)) != -1) {
+                output.write(buffer, 0, read);
+            }
+            output.flush();
+            output.getFD().sync();
+        }
     }
 
     private static boolean isPngHeader(byte[] value) {

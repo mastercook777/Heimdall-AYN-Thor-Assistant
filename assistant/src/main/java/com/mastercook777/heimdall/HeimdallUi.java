@@ -277,20 +277,36 @@ final class HeimdallUi {
 
     static Drawable glass(Context context, int topColor, int bottomColor,
             int borderTopColor, int borderBottomColor, int radiusDp, int borderDp) {
+        return glass(context, topColor, bottomColor, borderTopColor, borderBottomColor,
+                radiusDp, borderDp, false);
+    }
+
+    static Drawable glassCircle(Context context, int topColor, int bottomColor,
+            int borderTopColor, int borderBottomColor, int borderDp) {
+        return glass(context, topColor, bottomColor, borderTopColor, borderBottomColor,
+                0, borderDp, true);
+    }
+
+    private static Drawable glass(Context context, int topColor, int bottomColor,
+            int borderTopColor, int borderBottomColor, int radiusDp, int borderDp,
+            boolean circular) {
         if (DebugPerformanceDiagnostics.isFlatUi()) {
             return flatSurface(context, radiusDp,
-                    borderDp > 0 && Color.alpha(borderTopColor) >= 0x70);
+                    borderDp > 0 && Color.alpha(borderTopColor) >= 0x70, circular);
         }
         if (borderDp <= 0) {
-            return glassFill(context, topColor, bottomColor, radiusDp);
+            return glassFill(context, topColor, bottomColor, radiusDp, circular);
         }
         GradientDrawable border = new GradientDrawable(
                 GradientDrawable.Orientation.TL_BR,
                 new int[]{borderTopColor, borderBottomColor});
-        border.setShape(GradientDrawable.RECTANGLE);
-        border.setCornerRadius(dp(context, radiusDp));
+        border.setShape(circular ? GradientDrawable.OVAL : GradientDrawable.RECTANGLE);
+        if (!circular) {
+            border.setCornerRadius(dp(context, radiusDp));
+        }
 
-        GradientDrawable fill = glassFill(context, topColor, bottomColor, Math.max(0, radiusDp - borderDp));
+        GradientDrawable fill = glassFill(context, topColor, bottomColor,
+                Math.max(0, radiusDp - borderDp), circular);
         LayerDrawable layered = new LayerDrawable(new Drawable[]{border, fill});
         int inset = dp(context, borderDp);
         layered.setLayerInset(1, inset, inset, inset, inset);
@@ -298,11 +314,18 @@ final class HeimdallUi {
     }
 
     private static GradientDrawable glassFill(Context context, int topColor, int bottomColor, int radiusDp) {
+        return glassFill(context, topColor, bottomColor, radiusDp, false);
+    }
+
+    private static GradientDrawable glassFill(Context context, int topColor, int bottomColor,
+            int radiusDp, boolean circular) {
         GradientDrawable drawable = new GradientDrawable(
                 GradientDrawable.Orientation.TOP_BOTTOM,
                 new int[]{topColor, bottomColor});
-        drawable.setShape(GradientDrawable.RECTANGLE);
-        drawable.setCornerRadius(dp(context, radiusDp));
+        drawable.setShape(circular ? GradientDrawable.OVAL : GradientDrawable.RECTANGLE);
+        if (!circular) {
+            drawable.setCornerRadius(dp(context, radiusDp));
+        }
         return drawable;
     }
 
@@ -643,17 +666,33 @@ final class HeimdallUi {
     }
 
     static Drawable cncInputFrame(Context context, int radiusDp) {
+        return cncInputFrame(context, radiusDp, false);
+    }
+
+    static Drawable cncInputFrame(Context context, int radiusDp, boolean circular) {
         if (DebugPerformanceDiagnostics.isFlatUi()) {
-            return flatSurface(context, radiusDp, false);
+            return flatSurface(context, radiusDp, false, circular);
         }
         return new CncSurfaceDrawable(context, radiusDp,
-                CncSurfaceDrawable.INPUT_FRAME, false, false);
+                CncSurfaceDrawable.INPUT_FRAME, false, false, circular);
     }
 
     private static Drawable flatSurface(Context context, int radiusDp, boolean selected) {
+        return flatSurface(context, radiusDp, selected, false);
+    }
+
+    private static Drawable flatSurface(Context context, int radiusDp, boolean selected,
+            boolean circular) {
         int fill = isPearl(context) ? 0xFFE4E6E7 : 0xFF18212B;
         int stroke = selected ? accent(context)
                 : (isPearl(context) ? 0xFF9CA5AD : 0xFF354353);
+        if (circular) {
+            GradientDrawable drawable = new GradientDrawable();
+            drawable.setShape(GradientDrawable.OVAL);
+            drawable.setColor(fill);
+            drawable.setStroke(dp(context, 1), stroke);
+            return drawable;
+        }
         return rounded(context, fill, stroke, radiusDp, 1);
     }
 
@@ -677,14 +716,21 @@ final class HeimdallUi {
         private final int mode;
         private final boolean accent;
         private final boolean muted;
+        private final boolean circular;
         private int alpha = 255;
 
         CncSurfaceDrawable(Context context, int radiusDp, int mode, boolean accent, boolean muted) {
+            this(context, radiusDp, mode, accent, muted, false);
+        }
+
+        CncSurfaceDrawable(Context context, int radiusDp, int mode, boolean accent, boolean muted,
+                boolean circular) {
             density = context.getResources().getDisplayMetrics().density;
             radius = radiusDp * density;
             this.mode = mode;
             this.accent = accent;
             this.muted = muted;
+            this.circular = circular;
         }
 
         @Override
@@ -816,16 +862,14 @@ final class HeimdallUi {
                             : mode == SHALLOW_INSET ? 0x30747F87
                             : mode == CONTROL ? 0x34747F87
                             : (mode == FLUSH ? 0x50717C85 : 0x68717B84))));
-            canvas.drawRoundRect(keyline, Math.max(0f, radius - px(0.35f)),
-                    Math.max(0f, radius - px(0.35f)), paint);
+            drawShape(canvas, keyline, Math.max(0f, radius - px(0.35f)), paint);
 
             if (accent) {
                 RectF glow = new RectF(rim);
                 glow.inset(px(0.35f), px(0.35f));
                 paint.setStrokeWidth(px(mode == CONTROL ? 2f : 3f));
                 paint.setColor(withDrawableAlpha(mode == CONTROL ? 0x10F08A2A : 0x18F08A2A));
-                canvas.drawRoundRect(glow, Math.max(0f, rimRadius - px(0.35f)),
-                        Math.max(0f, rimRadius - px(0.35f)), paint);
+                drawShape(canvas, glow, Math.max(0f, rimRadius - px(0.35f)), paint);
             }
         }
 
@@ -833,8 +877,7 @@ final class HeimdallUi {
             paint.setStyle(Paint.Style.FILL);
             paint.setShader(null);
             paint.setColor(withDrawableAlpha(color));
-            canvas.drawRoundRect(bounds, Math.max(0f, layerRadius),
-                    Math.max(0f, layerRadius), paint);
+            drawShape(canvas, bounds, Math.max(0f, layerRadius), paint);
         }
 
         private void drawGradientLayer(Canvas canvas, RectF bounds, float layerRadius,
@@ -845,9 +888,16 @@ final class HeimdallUi {
             float endY = bounds.bottom;
             paint.setShader(new LinearGradient(bounds.left, bounds.top, endX, endY,
                     colors, positions, Shader.TileMode.CLAMP));
-            canvas.drawRoundRect(bounds, Math.max(0f, layerRadius),
-                    Math.max(0f, layerRadius), paint);
+            drawShape(canvas, bounds, Math.max(0f, layerRadius), paint);
             paint.setShader(null);
+        }
+
+        private void drawShape(Canvas canvas, RectF bounds, float layerRadius, Paint layerPaint) {
+            if (circular) {
+                canvas.drawOval(bounds, layerPaint);
+            } else {
+                canvas.drawRoundRect(bounds, layerRadius, layerRadius, layerPaint);
+            }
         }
 
         private float px(float value) {

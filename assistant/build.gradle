@@ -57,6 +57,7 @@ android {
         targetSdk 35
         versionCode 2
         versionName "0.1.0-alpha.1"
+        testInstrumentationRunner "com.mastercook777.heimdall.ProfileBundleStoreInstrumentationTest"
 
         externalNativeBuild {
             cmake {

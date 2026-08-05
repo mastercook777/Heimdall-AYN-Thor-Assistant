@@ -6,6 +6,7 @@ import android.content.Intent;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
+import android.graphics.Path;
 import android.graphics.RectF;
 import android.os.Bundle;
 import android.view.MotionEvent;
@@ -31,6 +32,7 @@ public final class CoordinateCaptureActivity extends Activity {
     public static final String EXTRA_REGION_BOTTOM = "region_bottom";
     public static final String EXTRA_DISPLAY_ID = "display_id";
     public static final String EXTRA_TARGET_ASPECT = "target_aspect";
+    public static final String EXTRA_REGION_SHAPE = "region_shape";
     public static final String MODE_TAP = "tap";
     public static final String MODE_HOLD = "hold";
     public static final String MODE_SWIPE = "swipe";
@@ -137,6 +139,7 @@ public final class CoordinateCaptureActivity extends Activity {
         private long downTime;
         private boolean selectionTooSmall;
         private final float targetAspectRatio;
+        private final boolean circularRegion;
         private final RectF selectedRegion = new RectF();
         private final RectF cancelButton = new RectF();
         private final RectF confirmButton = new RectF();
@@ -162,6 +165,10 @@ public final class CoordinateCaptureActivity extends Activity {
             displayId = display == null ? Display.DEFAULT_DISPLAY : display.getDisplayId();
             targetAspectRatio = Math.max(0.2f, Math.min(5f,
                     getIntent().getFloatExtra(EXTRA_TARGET_ASPECT, 1f)));
+            circularRegion = MODE_REGION.equals(this.mode)
+                    && WidgetLayout.MAGNIFIER_SHAPE_CIRCLE.equals(
+                            WidgetLayout.normalizeMagnifierShape(
+                                    getIntent().getStringExtra(EXTRA_REGION_SHAPE)));
             setBackgroundColor(Color.TRANSPARENT);
         }
 
@@ -205,11 +212,19 @@ public final class CoordinateCaptureActivity extends Activity {
                 float bottom = region.bottom;
                 paint.setStyle(Paint.Style.FILL);
                 paint.setColor(0x3358A6FF);
-                canvas.drawRect(left, top, right, bottom, paint);
+                if (circularRegion) {
+                    canvas.drawOval(region, paint);
+                } else {
+                    canvas.drawRect(left, top, right, bottom, paint);
+                }
                 paint.setStyle(Paint.Style.STROKE);
                 paint.setStrokeWidth(5);
                 paint.setColor(selectionTooSmall ? 0xFFFF6B7A : PRIMARY);
-                canvas.drawRect(left, top, right, bottom, paint);
+                if (circularRegion) {
+                    canvas.drawOval(region, paint);
+                } else {
+                    canvas.drawRect(left, top, right, bottom, paint);
+                }
                 paint.setStyle(Paint.Style.FILL);
                 paint.setTextSize(20);
                 canvas.drawText(Math.round(right - left) + " x " + Math.round(bottom - top),
@@ -243,16 +258,29 @@ public final class CoordinateCaptureActivity extends Activity {
         private void drawAdjustmentOverlay(Canvas canvas) {
             paint.setStyle(Paint.Style.FILL);
             paint.setColor(0x4405070A);
-            canvas.drawRect(0, 0, getWidth(), selectedRegion.top, paint);
-            canvas.drawRect(0, selectedRegion.bottom, getWidth(), getHeight(), paint);
-            canvas.drawRect(0, selectedRegion.top, selectedRegion.left, selectedRegion.bottom, paint);
-            canvas.drawRect(selectedRegion.right, selectedRegion.top,
-                    getWidth(), selectedRegion.bottom, paint);
+            if (circularRegion) {
+                Path dimmedOutside = new Path();
+                dimmedOutside.setFillType(Path.FillType.EVEN_ODD);
+                dimmedOutside.addRect(0f, 0f, getWidth(), getHeight(), Path.Direction.CW);
+                dimmedOutside.addOval(selectedRegion, Path.Direction.CW);
+                canvas.drawPath(dimmedOutside, paint);
+            } else {
+                canvas.drawRect(0, 0, getWidth(), selectedRegion.top, paint);
+                canvas.drawRect(0, selectedRegion.bottom, getWidth(), getHeight(), paint);
+                canvas.drawRect(0, selectedRegion.top,
+                        selectedRegion.left, selectedRegion.bottom, paint);
+                canvas.drawRect(selectedRegion.right, selectedRegion.top,
+                        getWidth(), selectedRegion.bottom, paint);
+            }
 
             paint.setStyle(Paint.Style.STROKE);
             paint.setStrokeWidth(5);
             paint.setColor(PRIMARY);
-            canvas.drawRoundRect(selectedRegion, 12, 12, paint);
+            if (circularRegion) {
+                canvas.drawOval(selectedRegion, paint);
+            } else {
+                canvas.drawRoundRect(selectedRegion, 12, 12, paint);
+            }
             paint.setStyle(Paint.Style.FILL);
             paint.setColor(PRIMARY);
             float handleRadius = 13;

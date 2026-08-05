@@ -90,12 +90,12 @@ Heimdall 让游戏继续显示在 Thor 上屏，同时把下屏变成常驻控�
 从旧测试版迁移前：
 
 1. 在旧版 Profile 管理中选择“导出全部 Profile”。
-2. 把 JSON 保存在容易找到的位置。
+2. 把导出文件保存在容易找到的位置。
 3. 安装并打开公开 Alpha。
 4. 重新授权实际使用的服务。
-5. 导入 Profile JSON；确认关键 Profile 正常后，再删除旧版或旧备份。
+5. 导入该文件；确认关键 Profile 正常后，再删除旧版或旧备份。
 
-当前 Profile 导出是配置 JSON，不包含自定义 Profile 图标文件、用户导入的宏图标文件或 Canvas 图片文件。迁移后需要重新选择或导入这些资源。
+旧版导出的是仅含配置的 JSON；新版仍可导入，但源资源丢失时无法恢复。当前版本导出自包含 `.heimdall-profile` 迁移包，包含 Profile 数据以及受支持的 Profile 图标、地图、文件 Guide、用户宏图标和 Canvas 图片。
 
 ## 2. 创建第一个 Profile
 
@@ -197,7 +197,7 @@ Quick Actions 可以捕获上屏。录屏使用 Android MediaProjection 和 Audi
 
 ## 6. 卸载前先备份
 
-完成重要 Grid 或宏配置后，进入 Profile 管理导出当前或全部 Profile，并在 Heimdall 之外保存副本。Heimdall 会为部分破坏性 Profile 操作保留有限恢复快照，但自动快照不能代替手动导出。
+完成重要 Grid 或宏配置后，进入 Profile 管理导出当前或全部 Profile，并在 Heimdall 之外保存副本。`.heimdall-profile` 会自包含受支持的 Profile 资源，并在导入前完成完整校验。Heimdall 会为部分破坏性 Profile 操作保留有限恢复快照，但自动快照不能代替手动导出。格式细节见 [Profile 迁移包格式](docs/PROFILE_BUNDLE_FORMAT.md)。
 
 Alpha 默认关闭 Android 平台备份。卸载应用会删除 Heimdall 本地数据。
 
@@ -208,7 +208,6 @@ Alpha 默认关闭 Android 平台备份。卸载应用会删除 Heimdall 本地�
 - Thor 映射可能隐藏宏录制需要的已映射实体按键。
 - 每个 Profile 当前只支持一个实时放大镜；放大镜不能与录屏共享 MediaProjection。
 - 从其他下屏 Tab 返回 Main 后，冻结画面的 Stop 标记偶尔可能不显示；停止后也可能保留最后一帧。这是已知显示状态问题，不代表画面仍在实时更新。
-- Profile JSON 不会打包自定义图标或 Canvas 图片文件。
 
 完整测试范围、迁移说明和限制请阅读 [v0.1.0-alpha.1 发行说明](docs/releases/v0.1.0-alpha.1.md)。
 

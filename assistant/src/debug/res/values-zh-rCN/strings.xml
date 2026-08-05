@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Heimdall Debug</string>
+    <string name="accessibility_service_name">Heimdall Debug \u8f93\u5165\u6865\u63a5</string>
+</resources>
