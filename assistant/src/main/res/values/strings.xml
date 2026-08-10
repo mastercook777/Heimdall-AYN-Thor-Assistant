@@ -99,14 +99,16 @@
     <string name="settings_category_magnifier">Upper-Screen Magnifier</string>
     <string name="settings_category_appearance">App Preferences</string>
     <string name="settings_category_connection">Connection &amp; Permissions</string>
+    <string name="settings_category_diagnostics">Diagnostics</string>
     <string name="settings_no_reset">No reset</string>
+    <string name="settings_no_save">No save needed</string>
     <string name="settings_use_basic_connection">Basic Touch</string>
     <string name="settings_restore_defaults">Reset</string>
     <string name="settings_selection_applies_immediately">Auto-applied</string>
     <string name="settings_theme">Theme</string>
     <string name="settings_theme_help">Choose the look that best fits your environment. Save to apply it throughout Heimdall.</string>
     <string name="settings_performance_compatibility">Thor game performance compatibility (global)</string>
-    <string name="settings_performance_compatibility_help">Try this if some games lose frame rate while Heimdall is open. It is off by default and does not follow Profiles.</string>
+    <string name="settings_performance_compatibility_help">Experimental. Try this if some games lose frame rate while Heimdall is open. It changes lower-screen composition and can add compositor load; turn it off if game loading becomes unstable. It is off by default and does not follow Profiles.</string>
     <string name="settings_layout_balanced">Balanced layout</string>
     <string name="settings_layout_controls_first">Controls first</string>
     <string name="settings_layout_macros_first">Macro buttons first</string>
@@ -324,7 +326,17 @@
     <string name="settings_summary_magnifier">Adjust smoothness and magnification. Hold the main-screen magnifier to select the region again.</string>
     <string name="settings_summary_connection">Basic Touch handles upper-screen taps and drags. Controller Enhancement enables controller recording, replay, and aiming.</string>
     <string name="settings_summary_appearance">Theme, language, and Thor game performance compatibility are global and do not follow Profiles.</string>
+    <string name="settings_summary_diagnostics">Export a privacy-limited report after a crash, ANR, or unexpected exit.</string>
     <string name="settings_summary_profile">Manage Profiles, upper-screen associations, and backups. Save changes below.</string>
+    <string name="diagnostics_last_exit">Last Heimdall exit</string>
+    <string name="diagnostics_export_title">Diagnostic report</string>
+    <string name="diagnostics_export_help">Export after reproducing a problem. The report includes Heimdall version and device state, the system-recorded Heimdall exit reason, memory and thermal-pressure events, and Heimdall crash stack frames.</string>
+    <string name="diagnostics_privacy_help">The report excludes Profiles, macro contents, URLs, selected files, screenshots, and logs from other apps. Review the text file before sharing it.</string>
+    <string name="diagnostics_export_action">Export diagnostic report</string>
+    <string name="diagnostics_export_preparing">Preparing diagnostic report…</string>
+    <string name="diagnostics_export_complete">Diagnostic report exported</string>
+    <string name="diagnostics_export_picker_error">Unable to open the report destination</string>
+    <string name="diagnostics_export_error">Unable to export the diagnostic report</string>
 
     <string name="action_controller_enhancement_required">Enable Controller Enhancement under Connection &amp; Permissions first.</string>
     <string name="action_connection_setup_required">Finish connection setup before using this control mode.</string>

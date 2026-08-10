@@ -88,6 +88,7 @@ import org.json.JSONObject;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -125,6 +126,7 @@ public class AssistantActivity extends Activity {
     private static final int REQUEST_RECORD_AUDIO = 2109;
     private static final int REQUEST_MAGNIFIER_PROJECTION = 2110;
     private static final int REQUEST_CANVAS_IMAGE = 2111;
+    private static final int REQUEST_DIAGNOSTIC_EXPORT = 2112;
     private static final int MAGNIFIER_REGION_START_MAX_ATTEMPTS = 12;
     private static final long MAGNIFIER_REGION_START_RETRY_MS = 150L;
     private static final int BG = HeimdallUi.COLOR_BG;
@@ -153,6 +155,7 @@ public class AssistantActivity extends Activity {
     private static final int SETTINGS_PROFILE = 4;
     private static final int SETTINGS_MAGNIFIER = 5;
     private static final int SETTINGS_APPEARANCE = 6;
+    private static final int SETTINGS_DIAGNOSTICS = 7;
     private static final String STATE_ACTIVE_SCREEN = "heimdall.active_screen";
     private static final String STATE_SETTINGS_SECTION = "heimdall.settings_section";
     private static final String STATE_SETTINGS_SCROLL_Y = "heimdall.settings_scroll_y";
@@ -275,6 +278,8 @@ public class AssistantActivity extends Activity {
     private String mapWebCurrentUrl;
     private final ThorPerformanceCompatibility thorPerformanceCompatibility =
             new ThorPerformanceCompatibility();
+    private final HeimdallStabilityDiagnostics stabilityDiagnostics =
+            new HeimdallStabilityDiagnostics(thorPerformanceCompatibility);
     private final ThorGameFocusProtection thorGameFocusProtection =
             new ThorGameFocusProtection();
     private final ThorTextInputFocusLease thorTextInputFocusLease =
@@ -435,6 +440,7 @@ public class AssistantActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         DebugPerformanceDiagnostics.initialize(this);
+        HeimdallStabilityDiagnostics.reportPreviousExit(this);
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         enterImmersiveMode();
 
@@ -624,6 +630,7 @@ public class AssistantActivity extends Activity {
         thorTextInputFocusLease.cancel();
         thorImeSessionInitializer.cancel();
         removeTextInputCompatibilityObservers();
+        stabilityDiagnostics.stop();
         thorPerformanceCompatibility.release();
         DebugPerformanceDiagnostics.shutdown();
         super.onDestroy();
@@ -633,6 +640,13 @@ public class AssistantActivity extends Activity {
     protected void onStart() {
         super.onStart();
         activityStarted = true;
+        stabilityDiagnostics.start(this);
+        getWindow().getDecorView().post(() -> {
+            if (activityStarted && !isFinishing() && !isDestroyed()) {
+                thorPerformanceCompatibility.apply(this,
+                        DebugPerformanceDiagnostics.isCompositionProbe());
+            }
+        });
         if (DebugPerformanceDiagnostics.isStaticUi()) {
             ThorAccessibilityService.setDiagnosticScanningSuspended(true);
             return;
@@ -671,6 +685,8 @@ public class AssistantActivity extends Activity {
     @Override
     protected void onStop() {
         activityStarted = false;
+        stabilityDiagnostics.stop();
+        thorPerformanceCompatibility.release();
         profileAwarenessActive = false;
         uiHandler.removeCallbacks(profileAwarenessTicker);
         DebugPerformanceDiagnostics.unregisterRepeatingTask(
@@ -678,6 +694,18 @@ public class AssistantActivity extends Activity {
         ForegroundAppTracker.clearListener(foregroundAppListener);
         stopStatusUpdates();
         super.onStop();
+    }
+
+    @Override
+    public void onTrimMemory(int level) {
+        super.onTrimMemory(level);
+        stabilityDiagnostics.onTrimMemory(this, level);
+    }
+
+    @Override
+    public void onLowMemory() {
+        super.onLowMemory();
+        stabilityDiagnostics.onLowMemory(this);
     }
 
     private void installTextInputCompatibilityObservers() {
@@ -925,6 +953,12 @@ public class AssistantActivity extends Activity {
                 writeProfileExport(data.getData());
             } else {
                 pendingProfileExportProfiles = null;
+            }
+            return;
+        }
+        if (requestCode == REQUEST_DIAGNOSTIC_EXPORT) {
+            if (resultCode == RESULT_OK && data != null && data.getData() != null) {
+                writeDiagnosticReport(data.getData());
             }
             return;
         }
@@ -3395,6 +3429,8 @@ public class AssistantActivity extends Activity {
                 R.drawable.ic_bridge, SETTINGS_INPUT));
         nav.addView(settingsCategoryButton(getString(R.string.common_profile_fallback),
                 R.drawable.ic_profile, SETTINGS_PROFILE));
+        nav.addView(settingsCategoryButton(getString(R.string.settings_category_diagnostics),
+                R.drawable.ic_guide, SETTINGS_DIAGNOSTICS));
 
         LinearLayout exitSection = new LinearLayout(this);
         exitSection.setOrientation(LinearLayout.VERTICAL);
@@ -3443,8 +3479,9 @@ public class AssistantActivity extends Activity {
 
         footer.addView(settingsFooterButton(getString(R.string.common_back),
                 this::closeSettingsPanel, false, true));
-        boolean canReset = activeSettingsSection != SETTINGS_PROFILE;
-        String resetLabel = activeSettingsSection == SETTINGS_PROFILE
+        boolean canReset = activeSettingsSection != SETTINGS_PROFILE
+                && activeSettingsSection != SETTINGS_DIAGNOSTICS;
+        String resetLabel = !canReset
                 ? getString(R.string.settings_no_reset)
                 : (activeSettingsSection == SETTINGS_INPUT
                         ? getString(R.string.settings_use_basic_connection)
@@ -3452,9 +3489,12 @@ public class AssistantActivity extends Activity {
         footer.addView(settingsFooterButton(resetLabel,
                 () -> runAfterTextInputFocusRelease(this::resetActiveSettingsSection),
                 false, canReset));
-        boolean canSave = activeSettingsSection != SETTINGS_INPUT;
+        boolean canSave = activeSettingsSection != SETTINGS_INPUT
+                && activeSettingsSection != SETTINGS_DIAGNOSTICS;
         String saveLabel = canSave ? getString(R.string.common_save)
-                : getString(R.string.settings_selection_applies_immediately);
+                : getString(activeSettingsSection == SETTINGS_DIAGNOSTICS
+                        ? R.string.settings_no_save
+                        : R.string.settings_selection_applies_immediately);
         footer.addView(settingsFooterButton(saveLabel,
                 () -> runAfterTextInputFocusRelease(this::saveActiveSettingsSection),
                 canSave, canSave));
@@ -3578,6 +3618,8 @@ public class AssistantActivity extends Activity {
             populateInputSettingsContent(content);
         } else if (activeSettingsSection == SETTINGS_APPEARANCE) {
             populateAppearanceSettingsContent(content);
+        } else if (activeSettingsSection == SETTINGS_DIAGNOSTICS) {
+            populateDiagnosticsSettingsContent(content);
         } else {
             populateProfileSettingsContent(content);
         }
@@ -4024,6 +4066,61 @@ public class AssistantActivity extends Activity {
                 showDebugAction(getString(R.string.connection_details_refreshed));
             }));
         }
+    }
+
+    private void populateDiagnosticsSettingsContent(LinearLayout content) {
+        addSettingsInfoCard(content, getString(R.string.diagnostics_last_exit),
+                HeimdallStabilityDiagnostics.previousExitSummary(this),
+                HeimdallUi.SEMANTIC_NEUTRAL);
+        addSettingsLabel(content, getString(R.string.diagnostics_export_title));
+        addSettingsHelp(content, getString(R.string.diagnostics_export_help));
+        addSettingsHelp(content, getString(R.string.diagnostics_privacy_help));
+        LinearLayout row = settingsActionRow(content);
+        row.addView(editorButton(getString(R.string.diagnostics_export_action),
+                this::requestDiagnosticExport));
+    }
+
+    private void requestDiagnosticExport() {
+        String timestamp = new SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US)
+                .format(new Date());
+        Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("text/plain");
+        intent.putExtra(Intent.EXTRA_TITLE, "heimdall-diagnostics-" + timestamp + ".txt");
+        intent.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+        try {
+            startActivityForResult(intent, REQUEST_DIAGNOSTIC_EXPORT);
+        } catch (Exception error) {
+            showErrorAction(getString(R.string.diagnostics_export_picker_error));
+        }
+    }
+
+    private void writeDiagnosticReport(Uri uri) {
+        showAction(getString(R.string.diagnostics_export_preparing));
+        new Thread(() -> {
+            boolean success = false;
+            try (OutputStream output = getContentResolver().openOutputStream(uri, "w")) {
+                if (output != null) {
+                    output.write(stabilityDiagnostics.buildReport(this)
+                            .getBytes(StandardCharsets.UTF_8));
+                    output.flush();
+                    success = true;
+                }
+            } catch (Exception error) {
+                android.util.Log.w(HeimdallStabilityDiagnostics.TAG,
+                        "diagnostic export failed", error);
+            }
+            boolean exported = success;
+            runOnUiThread(() -> {
+                if (!isFinishing() && !isDestroyed()) {
+                    if (exported) {
+                        showAction(getString(R.string.diagnostics_export_complete));
+                    } else {
+                        showErrorAction(getString(R.string.diagnostics_export_error));
+                    }
+                }
+            });
+        }, "heimdall-diagnostic-export").start();
     }
 
     private void populateProfileSettingsContent(LinearLayout content) {
@@ -5021,6 +5118,9 @@ public class AssistantActivity extends Activity {
         if (activeSettingsSection == SETTINGS_APPEARANCE) {
             return getString(R.string.settings_category_appearance);
         }
+        if (activeSettingsSection == SETTINGS_DIAGNOSTICS) {
+            return getString(R.string.settings_category_diagnostics);
+        }
         return "Profile";
     }
 
@@ -5048,6 +5148,9 @@ public class AssistantActivity extends Activity {
         }
         if (activeSettingsSection == SETTINGS_APPEARANCE) {
             return getString(R.string.settings_summary_appearance);
+        }
+        if (activeSettingsSection == SETTINGS_DIAGNOSTICS) {
+            return getString(R.string.settings_summary_diagnostics);
         }
         return getString(R.string.settings_summary_profile);
     }
