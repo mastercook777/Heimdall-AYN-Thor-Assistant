@@ -21,6 +21,7 @@ final class ThorPerformanceCompatibility {
     private Dialog dialog;
     private boolean pausedForTextInput;
     private boolean lastForceForDiagnostics;
+    private boolean suspendedForResourcePressure;
 
     static boolean isSupported() {
         return Build.VERSION.SDK_INT >= Build.VERSION_CODES.S;
@@ -41,7 +42,7 @@ final class ThorPerformanceCompatibility {
     void apply(Activity activity, boolean forceForDiagnostics) {
         lastForceForDiagnostics = forceForDiagnostics;
         boolean enabled = isSupported() && (forceForDiagnostics || isEnabled(activity));
-        if (pausedForTextInput) {
+        if (pausedForTextInput || suspendedForResourcePressure) {
             release();
             return;
         }
@@ -100,6 +101,26 @@ final class ThorPerformanceCompatibility {
                     "thorPerformanceCompatibility pausedForTextInput=false");
             apply(activity, lastForceForDiagnostics);
         }
+    }
+
+    void suspendForResourcePressure(String reason) {
+        if (suspendedForResourcePressure) {
+            return;
+        }
+        suspendedForResourcePressure = true;
+        boolean wasActive = dialog != null && dialog.isShowing();
+        release();
+        Log.w(HeimdallStabilityDiagnostics.TAG,
+                "performanceCompatibility suspended reason=" + reason
+                        + " wasActive=" + wasActive);
+    }
+
+    boolean isActive() {
+        return dialog != null && dialog.isShowing();
+    }
+
+    boolean isSuspendedForResourcePressure() {
+        return suspendedForResourcePressure;
     }
 
     void release() {

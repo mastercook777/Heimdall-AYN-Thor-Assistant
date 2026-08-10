@@ -97,14 +97,16 @@
     <string name="settings_category_magnifier">上屏放大镜</string>
     <string name="settings_category_appearance">外观与兼容性</string>
     <string name="settings_category_connection">连接与权限</string>
+    <string name="settings_category_diagnostics">诊断与日志</string>
     <string name="settings_no_reset">无可重置项</string>
+    <string name="settings_no_save">无需保存</string>
     <string name="settings_use_basic_connection">使用基础连接</string>
     <string name="settings_restore_defaults">恢复默认</string>
     <string name="settings_selection_applies_immediately">选择后即生效</string>
     <string name="settings_theme">主题</string>
     <string name="settings_theme_help">选择更适合当前环境的外观，保存后全局应用。</string>
     <string name="settings_performance_compatibility">Thor 游戏性能兼容模式（全局）</string>
-    <string name="settings_performance_compatibility_help">如果部分游戏在 Heimdall 打开时帧率下降，可尝试开启。默认关闭，不随 Profile 切换。</string>
+    <string name="settings_performance_compatibility_help">实验性功能。部分游戏在 Heimdall 打开时掉帧可尝试开启；它会改变下屏合成路径并可能增加合成负载，如游戏 loading 变得不稳定请关闭。默认关闭，不随 Profile 切换。</string>
     <string name="settings_layout_balanced">平衡布局</string>
     <string name="settings_layout_controls_first">操控优先</string>
     <string name="settings_layout_macros_first">宏按键优先</string>
@@ -320,7 +322,17 @@
     <string name="settings_summary_magnifier">调整画面流畅度和放大倍数；重选区域请长按主界面放大镜。</string>
     <string name="settings_summary_connection">基础触控用于上屏点击与拖动；手柄录制、回放和瞄准需要手柄增强。</string>
     <string name="settings_summary_appearance">主题、语言和 Thor 游戏性能兼容均为全局设置，不随 Profile 切换。</string>
+    <string name="settings_summary_diagnostics">在崩溃、无响应或异常退出后，导出经过隐私限制的诊断报告。</string>
     <string name="settings_summary_profile">管理游戏场景、上屏关联和备份；编辑后点击底部保存。</string>
+    <string name="diagnostics_last_exit">Heimdall 上次退出</string>
+    <string name="diagnostics_export_title">诊断报告</string>
+    <string name="diagnostics_export_help">复现问题后导出。报告包含 Heimdall 版本与设备状态、系统记录的 Heimdall 退出原因、内存与热压力事件，以及 Heimdall 崩溃堆栈。</string>
+    <string name="diagnostics_privacy_help">报告不包含 Profile、宏内容、网址、所选文件、截图或其他应用日志。分享前可先查看文本内容。</string>
+    <string name="diagnostics_export_action">导出诊断报告</string>
+    <string name="diagnostics_export_preparing">正在生成诊断报告…</string>
+    <string name="diagnostics_export_complete">诊断报告已导出</string>
+    <string name="diagnostics_export_picker_error">无法打开报告保存位置</string>
+    <string name="diagnostics_export_error">无法导出诊断报告</string>
 
     <string name="action_controller_enhancement_required">请先在“连接与权限”中启用手柄增强。</string>
     <string name="action_connection_setup_required">当前操控方式需要先完成连接设置。</string>
