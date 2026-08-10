@@ -10804,6 +10804,13 @@ public class AssistantActivity extends Activity {
             return;
         }
         stopGamepadRecordingTicker(session);
+        GamepadSequencePolicy.Inspection inspection =
+                GamepadSequencePolicy.inspect(sequence);
+        if (inspection.hasUnreleasedSystemNavigationKey) {
+            renderGamepadRecordingError(session,
+                    getString(R.string.native_controller_replay_missing_release));
+            return;
+        }
         GamepadSequenceSummary summary = gamepadSummary(sequence);
         if (summary.valid && sequence != null && sequence.startsWith("seq:")) {
             session.sequence = sequence;
@@ -10811,6 +10818,17 @@ public class AssistantActivity extends Activity {
             return;
         }
         renderGamepadRecordingError(session, sequence);
+    }
+
+    private String gamepadSystemNavigationLabel(int scanCode) {
+        if (scanCode == GamepadSequencePolicy.KEY_BACK) {
+            return getString(R.string.gamepad_system_key_back);
+        }
+        if (scanCode == GamepadSequencePolicy.KEY_RECENT_APPS
+                || scanCode == GamepadSequencePolicy.KEY_APPSELECT) {
+            return getString(R.string.gamepad_system_key_recents);
+        }
+        return getString(R.string.gamepad_system_key_home);
     }
 
     private void renderGamepadRecordingResult(GamepadRecordingSession session,
@@ -10825,6 +10843,17 @@ public class AssistantActivity extends Activity {
             addGamepadStateCard(session.body,
                     getString(R.string.gamepad_many_inputs_title),
                     getString(R.string.gamepad_many_inputs_body),
+                    HeimdallUi.SEMANTIC_WARNING);
+        }
+
+        GamepadSequencePolicy.Inspection inspection =
+                GamepadSequencePolicy.inspect(session.sequence);
+        if (inspection.containsSystemNavigationKey()) {
+            addGamepadStateCard(session.body,
+                    getString(R.string.gamepad_system_navigation_warning_title),
+                    getString(R.string.gamepad_system_navigation_warning_body,
+                            gamepadSystemNavigationLabel(
+                                    inspection.systemNavigationScanCode)),
                     HeimdallUi.SEMANTIC_WARNING);
         }
 

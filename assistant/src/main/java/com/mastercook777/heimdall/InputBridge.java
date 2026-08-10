@@ -4,6 +4,12 @@ import android.content.Context;
 import android.content.SharedPreferences;
 
 import java.util.List;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 public final class InputBridge {
     public interface Callback {
@@ -42,6 +48,12 @@ public final class InputBridge {
     private static final String KEY_SELECTED_BACKEND = "selected_backend";
     private static final InputBackend ACCESSIBILITY_BACKEND = new AccessibilityInputBackend();
     private static final ShizukuInputBackend SHIZUKU_BACKEND = new ShizukuInputBackend();
+    private static final ExecutorService CONTROLLER_REPLAY_EXECUTOR =
+            Executors.newSingleThreadExecutor(runnable -> {
+                Thread thread = new Thread(runnable, "native-controller-replay-guard");
+                thread.setDaemon(true);
+                return thread;
+            });
 
     private InputBridge() {
     }
@@ -108,18 +120,24 @@ public final class InputBridge {
     }
 
     public static void dispatch(Context context, Macro macro, Callback callback) {
+        if (!controllerMacroAllowed(context, macro, callback)) {
+            return;
+        }
         activeBackend(context).dispatchMacro(context, macro, callback);
     }
 
     public static void dispatch(Context context, Macro macro,
             boolean enhancedTouchMode, boolean protectThorMapping,
             Callback callback) {
+        if (!controllerMacroAllowed(context, macro, callback)) {
+            return;
+        }
         if (enhancedTouchMode) {
             SHIZUKU_BACKEND.dispatchMappedTouchMacro(context, macro,
                     !protectThorMapping, callback);
             return;
         }
-        dispatch(context, macro, callback);
+        activeBackend(context).dispatchMacro(context, macro, callback);
     }
 
     public static boolean dispatchTouchMove(Context context, int displayId, int width, int height,
@@ -194,6 +212,35 @@ public final class InputBridge {
     }
 
     public static String replayNativeGamepadSequence(Context context, String sequence) {
+        GamepadSequencePolicy.Inspection inspection = GamepadSequencePolicy.inspect(sequence);
+        if (inspection.hasUnreleasedSystemNavigationKey) {
+            return context.getString(R.string.native_controller_replay_missing_release);
+        }
+        if (inspection.exceedsReplayLimits()) {
+            return context.getString(R.string.native_controller_replay_too_large);
+        }
+
+        Context appContext = context.getApplicationContext();
+        Future<String> replay = CONTROLLER_REPLAY_EXECUTOR.submit(
+                () -> replayNativeGamepadSequenceBlocking(appContext, sequence));
+        try {
+            return replay.get(inspection.replayTimeoutMs(), TimeUnit.MILLISECONDS);
+        } catch (TimeoutException e) {
+            replay.cancel(true);
+            if (BACKEND_SHIZUKU.equals(selectedBackendId(appContext))) {
+                ShizukuNativeController.invalidateService();
+            }
+            return context.getString(R.string.native_controller_replay_timed_out);
+        } catch (InterruptedException e) {
+            replay.cancel(true);
+            Thread.currentThread().interrupt();
+            return context.getString(R.string.native_controller_replay_failed);
+        } catch (ExecutionException e) {
+            return context.getString(R.string.native_controller_replay_failed);
+        }
+    }
+
+    private static String replayNativeGamepadSequenceBlocking(Context context, String sequence) {
         if (BACKEND_SHIZUKU.equals(selectedBackendId(context))) {
             if (!ShizukuNativeController.isReady()) {
                 return context.getString(R.string.controller_enhancement_unavailable);
@@ -203,6 +250,31 @@ public final class InputBridge {
         }
         return UinputNativeProbe.emitEvdevCombo(
                 NativeGamepadPath.requireWritable(), sequence, 90);
+    }
+
+    private static boolean controllerMacroAllowed(Context context, Macro macro,
+            Callback callback) {
+        if (macro == null) {
+            return true;
+        }
+        for (MacroStep step : macro.steps) {
+            if (!MacroStep.TYPE_GAMEPAD.equals(step.type)) {
+                continue;
+            }
+            GamepadSequencePolicy.Inspection inspection =
+                    GamepadSequencePolicy.inspect(step.value);
+            if (inspection.hasUnreleasedSystemNavigationKey) {
+                callback.onError(context.getString(
+                        R.string.native_controller_replay_missing_release));
+                return false;
+            }
+            if (inspection.exceedsReplayLimits()) {
+                callback.onError(context.getString(
+                        R.string.native_controller_replay_too_large));
+                return false;
+            }
+        }
+        return true;
     }
 
     public static String getLastExternalPackageName() {

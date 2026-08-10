@@ -502,10 +502,10 @@ public final class ThorAccessibilityService extends AccessibilityService {
                 handler.post(() -> {
                     if (NativeGamepadPath.operationSucceeded(finalResult)) {
                         callback.onStatus(getString(R.string.native_controller_step_complete));
+                        handler.postDelayed(() -> runStep(macro, callback, index + 1), 60);
                     } else {
                         callback.onError(finalResult);
                     }
-                    handler.postDelayed(() -> runStep(macro, callback, index + 1), 60);
                 });
             }, "macro-gamepad-combo").start();
             return;

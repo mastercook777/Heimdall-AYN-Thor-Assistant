@@ -787,4 +787,12 @@
     <string name="canvas_remove_confirm">要从画布中移除这张图片吗？画布模块会继续保留在 Grid 中。</string>
     <string name="canvas_image_removed">画布图片已移除。</string>
     <string name="grid_editor_add_canvas">+ 画布</string>
+    <string name="gamepad_system_navigation_warning_title">系统导航宏 · 实验性</string>
+    <string name="gamepad_system_navigation_warning_body">本次录制包含%1$s。Heimdall 会把录下的按下/抬起事件作为一个整体回放。测试可能触发 Android 或模拟器导航；若通道卡住，回放超时会恢复 Heimdall 控件。</string>
+    <string name="gamepad_system_key_back">Android 返回键</string>
+    <string name="gamepad_system_key_home">Android 主页键</string>
+    <string name="gamepad_system_key_recents">Android 最近任务键</string>
+    <string name="native_controller_replay_too_large">录制序列超过安全事件数或时长限制，已阻止回放。请重新录制此步骤。</string>
+    <string name="native_controller_replay_missing_release">系统导航键缺少已录制的抬起事件，已阻止回放。请重新录制此步骤。</string>
+    <string name="native_controller_replay_timed_out">手柄宏回放超时，已停止；回放控件现已恢复可用。</string>
 </resources>

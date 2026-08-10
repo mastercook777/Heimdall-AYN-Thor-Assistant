@@ -77,10 +77,11 @@ public final class AccessibilityInputBackend implements InputBackend {
                 handler.post(() -> {
                     if (NativeGamepadPath.operationSucceeded(finalResult)) {
                         callback.onStatus(context.getString(R.string.native_controller_step_complete));
+                        handler.postDelayed(() -> dispatchNativeOnlyMacro(
+                                context, macro, callback, index + 1), 60);
                     } else {
                         callback.onError(finalResult);
                     }
-                    handler.postDelayed(() -> dispatchNativeOnlyMacro(context, macro, callback, index + 1), 60);
                 });
             }, "native-controller-macro").start();
             return;

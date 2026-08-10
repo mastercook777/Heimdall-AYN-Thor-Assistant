@@ -42,16 +42,58 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
         try {
             target = getTargetContext();
             assertNotNull(target);
+            testControllerSequenceSafetyPolicy();
             testSelfContainedRoundTripAfterSourcesAreDeleted();
             testCorruptMissingUnsafeAndOversizedBundlesFailClosed();
             testLegacyProfileJsonRemainsImportable();
-            result.putString("result", "Profile bundle migration checks passed");
+            result.putString("result",
+                    "Profile bundle and controller sequence safety checks passed");
             finish(Activity.RESULT_OK, result);
         } catch (Throwable failure) {
             result.putString("result", failure.toString());
             result.putString("stack", android.util.Log.getStackTraceString(failure));
             finish(Activity.RESULT_CANCELED, result);
         }
+    }
+
+    public void testControllerSequenceSafetyPolicy() {
+        GamepadSequencePolicy.Inspection ordinary = GamepadSequencePolicy.inspect(
+                "seq:1,304,1,0;1,304,0,80;1,316,1,20;1,316,0,40");
+        assertFalse(ordinary.containsSystemNavigationKey());
+        assertFalse(ordinary.hasUnreleasedSystemNavigationKey);
+        assertFalse(ordinary.exceedsReplayLimits());
+        assertEquals(4, ordinary.eventCount);
+        assertTrue(ordinary.replayTimeoutMs() >= 3_000L);
+
+        assertSystemNavigationDetected(GamepadSequencePolicy.KEY_BACK);
+        assertSystemNavigationDetected(GamepadSequencePolicy.KEY_HOME);
+        assertSystemNavigationDetected(GamepadSequencePolicy.KEY_RECENT_APPS);
+        assertSystemNavigationDetected(GamepadSequencePolicy.KEY_APPSELECT);
+
+        GamepadSequencePolicy.Inspection malformed = GamepadSequencePolicy.inspect(
+                "seq:not-an-event;1,304,1,0;1,304,0,20");
+        assertFalse(malformed.containsSystemNavigationKey());
+        assertEquals(2, malformed.eventCount);
+
+        StringBuilder overlong = new StringBuilder("seq:");
+        for (int i = 0; i < 21; i++) {
+            if (i > 0) overlong.append(';');
+            overlong.append("1,304,1,500");
+        }
+        assertTrue(GamepadSequencePolicy.inspect(overlong.toString())
+                .exceedsReplayLimits());
+    }
+
+    private static void assertSystemNavigationDetected(int scanCode) {
+        GamepadSequencePolicy.Inspection inspection = GamepadSequencePolicy.inspect(
+                "seq:1," + scanCode + ",1,0;1," + scanCode + ",0,40");
+        assertTrue(inspection.containsSystemNavigationKey());
+        assertFalse(inspection.hasUnreleasedSystemNavigationKey);
+        assertEquals(scanCode, inspection.systemNavigationScanCode);
+
+        GamepadSequencePolicy.Inspection missingRelease =
+                GamepadSequencePolicy.inspect("seq:1," + scanCode + ",1,0");
+        assertTrue(missingRelease.hasUnreleasedSystemNavigationKey);
     }
 
     public void testSelfContainedRoundTripAfterSourcesAreDeleted() throws Exception {

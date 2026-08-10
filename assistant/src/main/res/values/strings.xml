@@ -792,4 +792,12 @@
     <string name="canvas_remove_confirm">Remove the image from this Canvas? The Canvas module will remain in the Grid.</string>
     <string name="canvas_image_removed">Canvas image removed.</string>
     <string name="grid_editor_add_canvas">+ Canvas</string>
+    <string name="gamepad_system_navigation_warning_title">System navigation macro · Experimental</string>
+    <string name="gamepad_system_navigation_warning_body">This recording contains %1$s. Heimdall will replay its recorded down/up events together. Testing can navigate Android or the emulator; the replay timeout will restore Heimdall controls if the route stalls.</string>
+    <string name="gamepad_system_key_back">Android Back</string>
+    <string name="gamepad_system_key_home">Android Home</string>
+    <string name="gamepad_system_key_recents">Android Recents</string>
+    <string name="native_controller_replay_too_large">Controller replay was blocked because the recorded sequence exceeds the safe event or duration limit. Rerecord this step.</string>
+    <string name="native_controller_replay_missing_release">Controller replay was blocked because a system-navigation key has no recorded release. Rerecord this step.</string>
+    <string name="native_controller_replay_timed_out">Controller replay timed out and was stopped. Replay controls are available again.</string>
 </resources>
