@@ -18,6 +18,9 @@ public final class InputBridge {
         default void onError(String message) {
             onStatus(message);
         }
+
+        default void onGestureCancelled() {
+        }
     }
 
     public static final class BackendOption {

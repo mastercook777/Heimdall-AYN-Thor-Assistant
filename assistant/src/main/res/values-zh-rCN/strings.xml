@@ -211,6 +211,7 @@
     <string name="common_columns">列</string>
     <string name="common_rows">行</string>
     <string name="macro_settings_align_right">优先靠右排列</string>
+    <string name="macro_settings_icon_only">仅显示图标（隐藏文字）</string>
 
     <string name="connection_capabilities">可用能力</string>
     <string name="connection_capability_summary">触控宏与上屏拖动：%1$s\n手柄宏、虚拟右摇杆与精细瞄准：%2$s</string>
@@ -599,7 +600,6 @@
     <string name="touchpad_status_multidisplay_unsupported">当前 Android 版本不支持指定多屏手势</string>
     <string name="touchpad_status_continuous_unsupported">当前 Android 版本不支持持续触摸板手势</string>
     <string name="touchpad_status_not_pressed">触摸板未按下</string>
-    <string name="touchpad_status_gesture_cancelled">触摸板手势被取消</string>
     <string name="touchpad_status_gesture_submit_failed">触摸板手势提交失败</string>
     <string name="macro_status_invalid_tap">无效 tap 步骤：%1$s</string>
     <string name="macro_status_invalid_hold">无效 hold 步骤：%1$s</string>
@@ -793,6 +793,10 @@
     <string name="canvas_saved_first_hint">画布已保存 · 双击全屏 · 长按选项</string>
     <string name="canvas_composition_saved">画布构图已保存。</string>
     <string name="canvas_options">画布选项</string>
+    <string name="canvas_use_circle">使用圆形剪裁</string>
+    <string name="canvas_use_rectangle">使用矩形剪裁</string>
+    <string name="canvas_circle_enabled">画布已切换为圆形剪裁。</string>
+    <string name="canvas_rectangle_enabled">画布已切换为矩形剪裁。</string>
     <string name="canvas_replace_image">更换图片</string>
     <string name="canvas_view_fullscreen">全屏查看</string>
     <string name="canvas_remove_image">移除图片</string>

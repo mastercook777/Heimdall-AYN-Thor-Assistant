@@ -423,7 +423,7 @@ public final class ThorAccessibilityService extends AccessibilityService {
                 InputBridge.Callback callback = activeTouchpadCallback;
                 resetTouchpadGesture();
                 if (callback != null) {
-                    callback.onError(getString(R.string.touchpad_status_gesture_cancelled));
+                    callback.onGestureCancelled();
                 }
             }
         }, handler);

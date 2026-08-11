@@ -213,6 +213,7 @@
     <string name="common_columns">Columns</string>
     <string name="common_rows">Rows</string>
     <string name="macro_settings_align_right">Align to the right</string>
+    <string name="macro_settings_icon_only">Icon only (hide labels)</string>
 
     <string name="connection_capabilities">Available Capabilities</string>
     <string name="connection_capability_summary">Touch macros and upper-screen drag: %1$s\nController macros, Virtual Right Stick, and Precision Aim: %2$s</string>
@@ -603,7 +604,6 @@
     <string name="touchpad_status_multidisplay_unsupported">This Android version does not support gestures on a specific display</string>
     <string name="touchpad_status_continuous_unsupported">This Android version does not support continuous touchpad gestures</string>
     <string name="touchpad_status_not_pressed">Touchpad is not pressed</string>
-    <string name="touchpad_status_gesture_cancelled">Touchpad gesture was cancelled</string>
     <string name="touchpad_status_gesture_submit_failed">Could not submit the touchpad gesture</string>
     <string name="macro_status_invalid_tap">Invalid tap step: %1$s</string>
     <string name="macro_status_invalid_hold">Invalid hold step: %1$s</string>
@@ -798,6 +798,10 @@
     <string name="canvas_saved_first_hint">Canvas saved · Double-tap for fullscreen · Hold for options</string>
     <string name="canvas_composition_saved">Canvas composition saved.</string>
     <string name="canvas_options">Canvas options</string>
+    <string name="canvas_use_circle">Use circular crop</string>
+    <string name="canvas_use_rectangle">Use rectangular crop</string>
+    <string name="canvas_circle_enabled">Canvas now uses a circular crop.</string>
+    <string name="canvas_rectangle_enabled">Canvas now uses a rectangular crop.</string>
     <string name="canvas_replace_image">Replace image</string>
     <string name="canvas_view_fullscreen">View fullscreen</string>
     <string name="canvas_remove_image">Remove image</string>

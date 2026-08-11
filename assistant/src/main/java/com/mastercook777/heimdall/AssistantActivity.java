@@ -2255,6 +2255,9 @@ public class AssistantActivity extends Activity {
                         }
                         CanvasConfig draft = new CanvasConfig();
                         draft.assetId = assetId;
+                        if (item.canvasConfig != null) {
+                            draft.shape = item.canvasConfig.shape;
+                        }
                         showCanvasCompositionEditor(profile, item, draft, true,
                                 frameWidth, frameHeight);
                     }
@@ -2409,6 +2412,12 @@ public class AssistantActivity extends Activity {
         shell.addView(title, new LinearLayout.LayoutParams(-1, dp(38)));
 
         final PanelOverlay[] overlayHolder = new PanelOverlay[1];
+        boolean circular = targetItem.canvasConfig.isCircular();
+        shell.addView(canvasOptionButton(circular
+                ? R.string.canvas_use_rectangle
+                : R.string.canvas_use_circle, () ->
+                dismissCanvasOptionThen(overlayHolder[0], () ->
+                        setCanvasShape(profile, targetItem, !circular))));
         shell.addView(canvasOptionButton(R.string.canvas_edit_composition, () ->
                 dismissCanvasOptionThen(overlayHolder[0], () ->
                         showCanvasCompositionEditor(profile, targetItem,
@@ -2456,6 +2465,20 @@ public class AssistantActivity extends Activity {
         }
     }
 
+    private void setCanvasShape(GameProfile profile, WidgetLayout.Item item, boolean circular) {
+        if (!isCanvasTargetValid(profile, item) || selectedProfile != profile
+                || item.canvasConfig == null) {
+            return;
+        }
+        item.canvasConfig.shape = circular
+                ? CanvasConfig.SHAPE_CIRCLE : CanvasConfig.SHAPE_RECTANGLE;
+        item.canvasConfig.normalize();
+        ProfileStore.saveProfiles(this, profiles);
+        rebuildContent();
+        showAction(getString(circular
+                ? R.string.canvas_circle_enabled : R.string.canvas_rectangle_enabled));
+    }
+
     private void confirmRemoveCanvasImage(GameProfile profile, WidgetLayout.Item item) {
         canvasOverlayActive = true;
         PanelOverlay overlay = showSettingsDecisionPanel(getString(R.string.canvas_remove_image),
@@ -2464,7 +2487,11 @@ public class AssistantActivity extends Activity {
                     if (!isCanvasTargetValid(profile, item) || selectedProfile != profile) {
                         return;
                     }
-                    item.canvasConfig = new CanvasConfig();
+                    CanvasConfig cleared = new CanvasConfig();
+                    if (item.canvasConfig != null) {
+                        cleared.shape = item.canvasConfig.shape;
+                    }
+                    item.canvasConfig = cleared;
                     ProfileStore.saveProfiles(this, profiles);
                     rebuildContent();
                     showAction(getString(R.string.canvas_image_removed));
@@ -2682,7 +2709,8 @@ public class AssistantActivity extends Activity {
         for (int col = 0; col < columns; col++) {
             int macroIndex = macroIndexForCell(item, row, col, rows, columns);
             if (macroIndex >= 0 && macroIndex < total) {
-                addMacroButtonToLine(line, item.macroStart + macroIndex);
+                addMacroButtonToLine(line, item.macroStart + macroIndex,
+                        item.macroIconOnly);
             } else {
                 line.addView(new View(this), new LinearLayout.LayoutParams(0, -1, 1));
             }
@@ -2696,8 +2724,8 @@ public class AssistantActivity extends Activity {
         return row * columns + col;
     }
 
-    private void addMacroButtonToLine(LinearLayout line, int macroIndex) {
-        Button button = macroButton(selectedProfile.macros.get(macroIndex), macroIndex);
+    private void addMacroButtonToLine(LinearLayout line, int macroIndex, boolean iconOnly) {
+        Button button = macroButton(selectedProfile.macros.get(macroIndex), macroIndex, iconOnly);
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, -1, 1);
         params.setMargins(dp(5), dp(5), dp(5), dp(5));
         line.addView(button, params);
@@ -2723,9 +2751,10 @@ public class AssistantActivity extends Activity {
         return required;
     }
 
-    private Button macroButton(Macro macro, int index) {
+    private Button macroButton(Macro macro, int index, boolean iconOnly) {
         MacroButtonView button = new MacroButtonView(this);
         button.setMacroLabel(macro.label);
+        button.setMacroLabelVisible(!iconOnly);
         button.setText("");
         button.setAllCaps(false);
         int macroPriority = macroPriorityFor(macro, index);
@@ -3909,7 +3938,7 @@ public class AssistantActivity extends Activity {
         card.setBackground(HeimdallUi.isPearl(this)
                 ? HeimdallUi.pearlMenuPanel(this, 10)
                 : HeimdallUi.fieldPanel(this, 10));
-        LinearLayout.LayoutParams cardParams = new LinearLayout.LayoutParams(-1, dp(166));
+        LinearLayout.LayoutParams cardParams = new LinearLayout.LayoutParams(-1, dp(204));
         cardParams.setMargins(0, dp(5), 0, dp(7));
         content.addView(card, cardParams);
 
@@ -3953,8 +3982,16 @@ public class AssistantActivity extends Activity {
         rightInput.setChecked(item.macroRightHandPriority);
         card.addView(rightInput, new LinearLayout.LayoutParams(-1, dp(38)));
 
+        CheckBox iconOnlyInput = new CheckBox(this);
+        iconOnlyInput.setText(getString(R.string.macro_settings_icon_only));
+        iconOnlyInput.setTextSize(12);
+        styleCheckBox(iconOnlyInput);
+        iconOnlyInput.setChecked(item.macroIconOnly);
+        card.addView(iconOnlyInput, new LinearLayout.LayoutParams(-1, dp(38)));
+
         settingsMacroModuleEditors.add(new MacroModuleEditorBinding(
-                item, startInput, countInput, columnsInput, rowsInput, rightInput));
+                item, startInput, countInput, columnsInput, rowsInput, rightInput,
+                iconOnlyInput));
     }
 
     private void populateInputSettingsContent(LinearLayout content) {
@@ -5061,6 +5098,7 @@ public class AssistantActivity extends Activity {
             binding.item.macroColumns = columns;
             binding.item.macroRows = rows;
             binding.item.macroRightHandPriority = binding.rightInput.isChecked();
+            binding.item.macroIconOnly = binding.iconOnlyInput.isChecked();
             binding.item.hasMacroConfig = true;
             required = Math.max(required, start + count);
         }
@@ -5271,6 +5309,7 @@ public class AssistantActivity extends Activity {
                 item.macroColumns = 2;
                 item.macroRows = 2;
                 item.macroRightHandPriority = true;
+                item.macroIconOnly = false;
                 start += item.macroCount;
             }
         }
@@ -5552,6 +5591,7 @@ public class AssistantActivity extends Activity {
         copy.macroColumns = source.macroColumns;
         copy.macroRows = source.macroRows;
         copy.macroRightHandPriority = source.macroRightHandPriority;
+        copy.macroIconOnly = source.macroIconOnly;
         layout.items.add(copy);
         layout.preset = WidgetLayout.PRESET_CUSTOM;
         layout.sanitize();
@@ -9614,16 +9654,19 @@ public class AssistantActivity extends Activity {
         final NumberStepper columnsInput;
         final NumberStepper rowsInput;
         final CheckBox rightInput;
+        final CheckBox iconOnlyInput;
 
         MacroModuleEditorBinding(WidgetLayout.Item item, NumberStepper startInput,
                                  NumberStepper countInput, NumberStepper columnsInput,
-                                 NumberStepper rowsInput, CheckBox rightInput) {
+                                 NumberStepper rowsInput, CheckBox rightInput,
+                                 CheckBox iconOnlyInput) {
             this.item = item;
             this.startInput = startInput;
             this.countInput = countInput;
             this.columnsInput = columnsInput;
             this.rowsInput = rowsInput;
             this.rightInput = rightInput;
+            this.iconOnlyInput = iconOnlyInput;
         }
     }
 
@@ -12274,6 +12317,11 @@ public class AssistantActivity extends Activity {
             if (event.getActionMasked() == MotionEvent.ACTION_UP || event.getActionMasked() == MotionEvent.ACTION_CANCEL) {
                 boolean shouldEndDrag = touchDragStarted;
                 InputBridge.Callback callback = touchDragCallback;
+                if (event.getActionMasked() == MotionEvent.ACTION_CANCEL) {
+                    // Leaving the local touch surface is a normal recenter path. Release the
+                    // upper-screen drag, but ignore the Accessibility cancellation callback.
+                    touchDragGestureToken++;
+                }
                 touchDragStarted = false;
                 touchDragAcceptingMoves = false;
                 touchDragCallback = null;
@@ -12322,6 +12370,17 @@ public class AssistantActivity extends Activity {
                             touchDragErrorShown = true;
                             inputStatusCallback.onError(message);
                         }
+                    });
+                }
+
+                @Override
+                public void onGestureCancelled() {
+                    uiHandler.post(() -> {
+                        if (gestureToken != touchDragGestureToken) {
+                            return;
+                        }
+                        touchDragAcceptingMoves = false;
+                        clearUnavailableGestureVisual();
                     });
                 }
             };

@@ -252,6 +252,7 @@ public final class WidgetLayout {
         public int macroColumns = 2;
         public int macroRows = 0;
         public boolean macroRightHandPriority = true;
+        public boolean macroIconOnly = false;
         public boolean hasMacroConfig = true;
         public float magnifierLeft = 0.25f;
         public float magnifierTop = 0.25f;
@@ -279,6 +280,7 @@ public final class WidgetLayout {
             item.macroColumns = macroColumns;
             item.macroRows = macroRows;
             item.macroRightHandPriority = macroRightHandPriority;
+            item.macroIconOnly = macroIconOnly;
             item.hasMacroConfig = hasMacroConfig;
             item.magnifierLeft = magnifierLeft;
             item.magnifierTop = magnifierTop;
@@ -307,6 +309,7 @@ public final class WidgetLayout {
                 object.put("macroColumns", macroColumns);
                 object.put("macroRows", macroRows);
                 object.put("macroRightHandPriority", macroRightHandPriority);
+                object.put("macroIconOnly", macroIconOnly);
             }
             if (TYPE_MAGNIFIER.equals(type)) {
                 object.put("magnifierLeft", magnifierLeft);
@@ -338,11 +341,13 @@ public final class WidgetLayout {
             item.macroColumns = object.optInt("macroColumns", 2);
             item.macroRows = object.optInt("macroRows", 0);
             item.macroRightHandPriority = object.optBoolean("macroRightHandPriority", true);
+            item.macroIconOnly = object.optBoolean("macroIconOnly", false);
             item.hasMacroConfig = object.has("macroStart")
                     || object.has("macroCount")
                     || object.has("macroColumns")
                     || object.has("macroRows")
-                    || object.has("macroRightHandPriority");
+                    || object.has("macroRightHandPriority")
+                    || object.has("macroIconOnly");
             item.magnifierLeft = (float) object.optDouble("magnifierLeft", 0.25d);
             item.magnifierTop = (float) object.optDouble("magnifierTop", 0.25d);
             item.magnifierRight = (float) object.optDouble("magnifierRight", 0.75d);
