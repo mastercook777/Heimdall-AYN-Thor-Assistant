@@ -177,7 +177,7 @@ Open the visual Grid editor to add, drag, resize, or remove modules. Modules sna
 
 Controller recording and replay require Shizuku and an available Controller Enhancement route. Thor's built-in mapper may hide already-mapped physical buttons from Heimdall's recording stream. If this happens, begin recording, temporarily return to Android Home to press the button, then return to Heimdall to review and save the sequence.
 
-Enhanced Touch mode does not replay Macros containing physical-controller steps. Heimdall will ask you to change touch mode before replay instead of silently using a different input route.
+Enhanced Touch protects Thor's built-in mapping by default and rejects Macros containing physical-controller steps before replay. If the mapper is off, you may disable that protection for the current Profile; screen steps still use the strict mapping-compatible touch route and never fall back to Accessibility.
 
 ### Touchpad, Virtual Right Stick, And Precision Aim
 
