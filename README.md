@@ -90,12 +90,12 @@ Older test packages and new Debug builds may be separate Apps and do not share d
 Before moving from an older test build:
 
 1. Open Profile management in the old build.
-2. Export all Profiles and keep the JSON somewhere easy to find.
+2. Export all Profiles and keep the exported file somewhere easy to find.
 3. Install and open the public Alpha.
 4. Re-authorize the services you use.
-5. Import the Profile JSON and confirm the important Profiles before deleting the old build or backup.
+5. Import the exported file and confirm the important Profiles before deleting the old build or backup.
 
-Current Profile export is configuration JSON. It does not include custom Profile icon files, user-imported Macro icon files, or Canvas image files; select or import those assets again after migration.
+Older builds export configuration-only JSON, which remains importable but cannot recover missing external assets. Current builds export a self-contained `.heimdall-profile` bundle containing Profile data plus supported Profile icons, maps, file Guides, user Macro icons, and Canvas images.
 
 ## 2. Create Your First Profile
 
@@ -197,7 +197,7 @@ Quick Actions can capture the upper screen. Recording uses Android MediaProjecti
 
 ## 6. Back Up Before Uninstalling
 
-Use Profile management to export the current Profile or all Profiles after completing an important layout or Macro setup. Heimdall also keeps bounded recovery snapshots for some destructive Profile changes, but these do not replace an export stored outside the App.
+Use Profile management to export the current Profile or all Profiles after completing an important layout or Macro setup. The `.heimdall-profile` bundle is self-contained for supported Profile-owned assets and is validated before import. Heimdall also keeps bounded recovery snapshots for some destructive Profile changes, but these do not replace an export stored outside the App. See the [Profile bundle format](docs/PROFILE_BUNDLE_FORMAT.md).
 
 Android platform backup is disabled for this Alpha. Uninstalling the App removes its local data.
 
@@ -208,7 +208,6 @@ Android platform backup is disabled for this Alpha. Uninstalling the App removes
 - Thor's mapper may hide mapped controller buttons from the Macro recorder.
 - Only one live magnifier is supported per Profile, and magnification cannot share MediaProjection with recording.
 - After a lower-screen Tab round trip, the frozen magnifier's Stop marker can occasionally be missing; stopping can also leave the final retained frame visible. These are known presentation-state issues, not proof that the frame is still live.
-- Profile JSON export does not bundle custom icon or Canvas image files.
 
 Read the [v0.1.0-alpha.1 release notes](docs/releases/v0.1.0-alpha.1.md) for the complete tested scope, migration notes, and known limitations.
 

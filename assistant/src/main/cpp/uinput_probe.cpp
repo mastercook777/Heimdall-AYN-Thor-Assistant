@@ -347,6 +347,28 @@ bool parse_sequence_item(const std::string& raw, SequenceItem& item) {
     return true;
 }
 
+void track_sequence_key(std::vector<int>& pressed_keys, int code, int value) {
+    auto existing = std::find(pressed_keys.begin(), pressed_keys.end(), code);
+    if (value == 0) {
+        if (existing != pressed_keys.end()) {
+            pressed_keys.erase(existing);
+        }
+    } else if (existing == pressed_keys.end()) {
+        pressed_keys.push_back(code);
+    }
+}
+
+void release_sequence_keys(int fd, const std::vector<int>& pressed_keys) {
+    if (pressed_keys.empty()) {
+        return;
+    }
+    std::ostringstream ignored;
+    for (auto key = pressed_keys.rbegin(); key != pressed_keys.rend(); ++key) {
+        emit_event(fd, EV_KEY, *key, 0, ignored, "sequence recovery release");
+    }
+    emit_event(fd, EV_SYN, SYN_REPORT, 0, ignored, "sequence recovery sync");
+}
+
 std::string emit_evdev_sequence(const char* path, const char* sequence) {
     std::ostringstream out;
     if (path == nullptr || std::strlen(path) == 0) {
@@ -368,6 +390,7 @@ std::string emit_evdev_sequence(const char* path, const char* sequence) {
     }
 
     int count = 0;
+    std::vector<int> pressed_keys;
     size_t start = 0;
     while (start < raw.size()) {
         size_t end = raw.find(';', start);
@@ -378,11 +401,16 @@ std::string emit_evdev_sequence(const char* path, const char* sequence) {
                 usleep(static_cast<useconds_t>(item.delay_ms) * 1000);
             }
             if (!emit_event(fd, item.type, item.code, item.value, out, "sequence event")) {
+                release_sequence_keys(fd, pressed_keys);
                 close(fd);
                 return out.str();
             }
+            if (item.type == EV_KEY) {
+                track_sequence_key(pressed_keys, item.code, item.value);
+            }
             if (item.type != EV_SYN) {
                 if (!emit_event(fd, EV_SYN, SYN_REPORT, 0, out, "sequence sync")) {
+                    release_sequence_keys(fd, pressed_keys);
                     close(fd);
                     return out.str();
                 }

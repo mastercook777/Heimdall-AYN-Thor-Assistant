@@ -13,6 +13,7 @@ import android.graphics.drawable.Drawable;
 import android.net.Uri;
 
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -21,6 +22,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
+import java.util.UUID;
 
 final class MacroIconRepository {
     private static final String ASSET_DIR = "macro_icons";
@@ -251,6 +253,70 @@ final class MacroIconRepository {
         }
         return MacroIconOption.file(USER_PREFIX + fileName, output.getAbsolutePath(),
                 context.getString(R.string.macro_icon_custom));
+    }
+
+    static synchronized String installBundledIcon(Context context, File source,
+            String expectedSha256) throws IOException {
+        validateBundledIcon(source);
+        if (context == null) {
+            throw new IOException("Missing Macro icon storage context");
+        }
+        String digest = expectedSha256 == null
+                ? "" : expectedSha256.trim().toLowerCase(Locale.US);
+        if (!digest.matches("^[0-9a-f]{64}$")
+                || !digest.equals(ProfileAssetStore.sha256(source))) {
+            throw new IOException("Bundled Macro icon checksum mismatch");
+        }
+        File directory = userDirectory(context);
+        if (!directory.exists() && !directory.mkdirs()) {
+            throw new IOException("Unable to create Macro icon storage");
+        }
+        String fileName = "bundle_" + digest + ".png";
+        File destination = new File(directory, fileName);
+        if (destination.isFile()) {
+            if (!digest.equals(ProfileAssetStore.sha256(destination))) {
+                throw new IOException("Existing Macro icon checksum mismatch");
+            }
+            return USER_PREFIX + fileName;
+        }
+        File temporary = new File(directory, ".bundle-" + UUID.randomUUID() + ".tmp");
+        try {
+            copyFile(source, temporary);
+            if (!digest.equals(ProfileAssetStore.sha256(temporary))
+                    || !temporary.renameTo(destination)) {
+                throw new IOException("Unable to install bundled Macro icon");
+            }
+        } finally {
+            temporary.delete();
+        }
+        return USER_PREFIX + fileName;
+    }
+
+    static void validateBundledIcon(File source) throws IOException {
+        if (source == null || !source.isFile()
+                || source.length() <= 0L || source.length() > MAX_SOURCE_BYTES) {
+            throw new IOException("Invalid bundled Macro icon");
+        }
+        BitmapFactory.Options bounds = new BitmapFactory.Options();
+        bounds.inJustDecodeBounds = true;
+        BitmapFactory.decodeFile(source.getAbsolutePath(), bounds);
+        if (bounds.outWidth != NORMALIZED_SIZE || bounds.outHeight != NORMALIZED_SIZE
+                || !"image/png".equals(bounds.outMimeType)) {
+            throw new IOException("Bundled Macro icon is not normalized PNG");
+        }
+    }
+
+    private static void copyFile(File source, File destination) throws IOException {
+        try (FileInputStream input = new FileInputStream(source);
+             FileOutputStream output = new FileOutputStream(destination)) {
+            byte[] buffer = new byte[64 * 1024];
+            int read;
+            while ((read = input.read(buffer)) != -1) {
+                output.write(buffer, 0, read);
+            }
+            output.flush();
+            output.getFD().sync();
+        }
     }
 
     private static Rect visibleBounds(Bitmap bitmap) {

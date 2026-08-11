@@ -39,6 +39,7 @@ final class CanvasCompositionEditor extends LinearLayout {
         this.initialConfig = config == null ? new CanvasConfig() : config.copy();
         this.initialFill = initialFill;
         this.listener = listener;
+        boolean circular = this.initialConfig.isCircular();
         setOrientation(VERTICAL);
         setPadding(dp(12), dp(10), dp(12), dp(10));
         setBackground(HeimdallUi.isPearl(context)
@@ -63,12 +64,15 @@ final class CanvasCompositionEditor extends LinearLayout {
         addView(previewStage, stageParams);
 
         ReferenceFrame referenceFrame = new ReferenceFrame(context,
-                targetFrameWidth, targetFrameHeight);
+                targetFrameWidth, targetFrameHeight, circular);
         referenceFrame.setBackground(HeimdallUi.isPearl(context)
-                ? HeimdallUi.cncInputFrame(context, HeimdallUi.RADIUS_MODULE)
-                : HeimdallUi.glass(context, 0xB20C131D, 0xD2070B11,
-                        0x555F7C9A, 0x33344150, HeimdallUi.RADIUS_MODULE,
-                        HeimdallUi.STROKE_HAIRLINE));
+                ? HeimdallUi.cncInputFrame(context, HeimdallUi.RADIUS_MODULE, circular)
+                : circular
+                        ? HeimdallUi.glassCircle(context, 0xB20C131D, 0xD2070B11,
+                                0x555F7C9A, 0x33344150, HeimdallUi.STROKE_HAIRLINE)
+                        : HeimdallUi.glass(context, 0xB20C131D, 0xD2070B11,
+                                0x555F7C9A, 0x33344150, HeimdallUi.RADIUS_MODULE,
+                                HeimdallUi.STROKE_HAIRLINE));
         FrameLayout.LayoutParams referenceParams = new FrameLayout.LayoutParams(
                 -2, -2, Gravity.CENTER);
         previewStage.addView(referenceFrame, referenceParams);
@@ -79,6 +83,10 @@ final class CanvasCompositionEditor extends LinearLayout {
         viewport.setOutlineProvider(new ViewOutlineProvider() {
             @Override
             public void getOutline(View view, Outline outline) {
+                if (circular) {
+                    outline.setOval(0, 0, view.getWidth(), view.getHeight());
+                    return;
+                }
                 int insetDp = HeimdallUi.isPearl(getContext()) ? 6 : 1;
                 float radius = HeimdallUi.isPearl(getContext())
                         ? HeimdallUi.concentricInnerRadiusDp(
@@ -228,10 +236,13 @@ final class CanvasCompositionEditor extends LinearLayout {
         private final int targetWidth;
         private final int targetHeight;
 
-        ReferenceFrame(Context context, int targetWidth, int targetHeight) {
+        ReferenceFrame(Context context, int targetWidth, int targetHeight, boolean circular) {
             super(context);
-            this.targetWidth = Math.max(1, targetWidth);
-            this.targetHeight = Math.max(1, targetHeight);
+            int normalizedWidth = Math.max(1, targetWidth);
+            int normalizedHeight = Math.max(1, targetHeight);
+            int diameter = Math.min(normalizedWidth, normalizedHeight);
+            this.targetWidth = circular ? diameter : normalizedWidth;
+            this.targetHeight = circular ? diameter : normalizedHeight;
         }
 
         @Override

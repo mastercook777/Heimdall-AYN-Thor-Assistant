@@ -5,6 +5,7 @@ import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.Outline;
 import android.graphics.drawable.ColorDrawable;
+import android.graphics.drawable.GradientDrawable;
 import android.os.SystemClock;
 import android.view.GestureDetector;
 import android.view.Gravity;
@@ -36,11 +37,13 @@ final class CanvasWidgetView extends FrameLayout {
     private final WidgetLayout.Item item;
     private final Listener listener;
     private final boolean interactionEnabled;
+    private final boolean circular;
+    private final FrameLayout displayFrame;
     private final FrameLayout viewport;
     private final CanvasImageView imageView;
     private final TextView statusView;
     private final GestureDetector gestureDetector;
-    private final Runnable clearPressedEdge = () -> setForeground(null);
+    private final Runnable clearPressedEdge = this::clearPressedEdge;
     private final Runnable triggerOptionsLongPress = this::triggerOptionsLongPress;
     private final int longPressTouchSlop;
     private CanvasImageLoader.Request loadRequest;
@@ -55,15 +58,23 @@ final class CanvasWidgetView extends FrameLayout {
         this.item = item;
         this.listener = listener;
         this.interactionEnabled = interactionEnabled;
+        CanvasConfig config = item.canvasConfig == null
+                ? new CanvasConfig() : item.canvasConfig;
+        circular = config.isCircular();
         setClickable(true);
         setLongClickable(false);
         setFocusable(true);
         longPressTouchSlop = ViewConfiguration.get(context).getScaledTouchSlop();
-        setBackground(HeimdallUi.isPearl(context)
-                ? HeimdallUi.cncInputFrame(context, HeimdallUi.RADIUS_MODULE)
-                : HeimdallUi.glass(context, 0xB20C131D, 0xD2070B11,
-                        0x555F7C9A, 0x33344150, HeimdallUi.RADIUS_MODULE,
-                        HeimdallUi.STROKE_HAIRLINE));
+        displayFrame = new FrameLayout(context);
+        displayFrame.setBackground(HeimdallUi.isPearl(context)
+                ? HeimdallUi.cncInputFrame(context, HeimdallUi.RADIUS_MODULE, circular)
+                : circular
+                        ? HeimdallUi.glassCircle(context, 0xB20C131D, 0xD2070B11,
+                                0x555F7C9A, 0x33344150, HeimdallUi.STROKE_HAIRLINE)
+                        : HeimdallUi.glass(context, 0xB20C131D, 0xD2070B11,
+                                0x555F7C9A, 0x33344150, HeimdallUi.RADIUS_MODULE,
+                                HeimdallUi.STROKE_HAIRLINE));
+        addView(displayFrame, new LayoutParams(-1, -1));
 
         viewport = new FrameLayout(context);
         viewport.setBackground(new ColorDrawable(0xFF020407));
@@ -71,6 +82,10 @@ final class CanvasWidgetView extends FrameLayout {
         viewport.setOutlineProvider(new ViewOutlineProvider() {
             @Override
             public void getOutline(View view, Outline outline) {
+                if (circular) {
+                    outline.setOval(0, 0, view.getWidth(), view.getHeight());
+                    return;
+                }
                 int insetDp = HeimdallUi.isPearl(getContext()) ? 6 : 1;
                 float radius = HeimdallUi.isPearl(getContext())
                         ? HeimdallUi.concentricInnerRadiusDp(
@@ -82,7 +97,7 @@ final class CanvasWidgetView extends FrameLayout {
         int inset = dp(HeimdallUi.isPearl(context) ? 6 : 1);
         LayoutParams viewportParams = new LayoutParams(-1, -1);
         viewportParams.setMargins(inset, inset, inset, inset);
-        addView(viewport, viewportParams);
+        displayFrame.addView(viewport, viewportParams);
 
         imageView = new CanvasImageView(context);
         imageView.setInteractive(false);
@@ -180,6 +195,32 @@ final class CanvasWidgetView extends FrameLayout {
     }
 
     @Override
+    protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+        super.onMeasure(widthMeasureSpec, heightMeasureSpec);
+        if (circular) {
+            int diameter = Math.min(getMeasuredWidth(), getMeasuredHeight());
+            int exactDiameter = MeasureSpec.makeMeasureSpec(diameter, MeasureSpec.EXACTLY);
+            displayFrame.measure(exactDiameter, exactDiameter);
+        }
+    }
+
+    @Override
+    protected void onLayout(boolean changed, int left, int top, int right, int bottom) {
+        int width = right - left;
+        int height = bottom - top;
+        if (circular) {
+            int frameWidth = displayFrame.getMeasuredWidth();
+            int frameHeight = displayFrame.getMeasuredHeight();
+            int frameLeft = (width - frameWidth) / 2;
+            int frameTop = (height - frameHeight) / 2;
+            displayFrame.layout(frameLeft, frameTop,
+                    frameLeft + frameWidth, frameTop + frameHeight);
+        } else {
+            displayFrame.layout(0, 0, width, height);
+        }
+    }
+
+    @Override
     protected void onSizeChanged(int width, int height, int oldWidth, int oldHeight) {
         super.onSizeChanged(width, height, oldWidth, oldHeight);
         viewport.invalidateOutline();
@@ -199,7 +240,7 @@ final class CanvasWidgetView extends FrameLayout {
         removeCallbacks(clearPressedEdge);
         cancelOptionsLongPress();
         optionsLongPressTriggered = false;
-        setForeground(null);
+        clearPressedEdge();
         if (loadRequest != null) {
             loadRequest.cancel();
             loadRequest = null;
@@ -288,8 +329,20 @@ final class CanvasWidgetView extends FrameLayout {
 
     private void showPressedEdge() {
         int color = HeimdallUi.isPearl(getContext()) ? 0xC8F08A2A : 0xAA70B7FF;
-        setForeground(HeimdallUi.rounded(getContext(), 0x00000000, color,
-                HeimdallUi.RADIUS_MODULE, 2));
+        if (circular) {
+            GradientDrawable edge = new GradientDrawable();
+            edge.setShape(GradientDrawable.OVAL);
+            edge.setColor(0x00000000);
+            edge.setStroke(dp(2), color);
+            displayFrame.setForeground(edge);
+        } else {
+            displayFrame.setForeground(HeimdallUi.rounded(getContext(), 0x00000000, color,
+                    HeimdallUi.RADIUS_MODULE, 2));
+        }
+    }
+
+    private void clearPressedEdge() {
+        displayFrame.setForeground(null);
     }
 
     private void triggerOptionsLongPress() {
@@ -300,7 +353,7 @@ final class CanvasWidgetView extends FrameLayout {
         }
         optionsLongPressPending = false;
         optionsLongPressTriggered = true;
-        setForeground(null);
+        clearPressedEdge();
         cancelGestureDetector();
         performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
         listener.onOptions(item, getWidth(), getHeight());

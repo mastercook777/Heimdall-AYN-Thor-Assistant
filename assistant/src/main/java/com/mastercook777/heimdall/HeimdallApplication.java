@@ -6,6 +6,7 @@ public final class HeimdallApplication extends Application {
     @Override
     public void onCreate() {
         super.onCreate();
+        HeimdallStabilityDiagnostics.installCrashHandler(this);
         AppLanguageManager.applyLegacyApplicationLocale(this);
     }
 }

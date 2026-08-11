@@ -54,14 +54,14 @@ public final class ShizukuInputBackend implements InputBackend {
     }
 
     public void dispatchMappedTouchMacro(Context context, Macro macro,
-            InputBridge.Callback callback) {
+            boolean allowControllerSteps, InputBridge.Callback callback) {
         synchronized (touchLock) {
             if (nativeTouchActive) {
                 callback.onError(context.getString(
                         R.string.macro_enhanced_touch_gesture_busy));
                 return;
             }
-            touchMacroReplay.replay(context, macro, callback);
+            touchMacroReplay.replay(context, macro, allowControllerSteps, callback);
         }
     }
 

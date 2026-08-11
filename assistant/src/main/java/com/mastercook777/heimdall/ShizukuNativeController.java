@@ -128,10 +128,13 @@ public final class ShizukuNativeController {
         if (bound == null) {
             return context.getString(R.string.native_controller_replay_failed);
         }
-        if (value != null && value.startsWith("seq:")) {
+        if (value != null && value.startsWith("seq:")
+                && !GamepadSequencePolicy.inspect(value).containsSystemNavigationKey()) {
             return ShizukuGamepadSequenceReplay.replay(value,
                     event -> emitGamepadStep(context, bound, path, event, holdMs));
         }
+        // Keep system-navigation down/up events in one Binder call. Ordinary controller
+        // sequences retain the accepted short-transaction route used with Thor mapping.
         return emitGamepadStep(context, bound, path, value, holdMs);
     }
 
@@ -314,5 +317,9 @@ public final class ShizukuNativeController {
             service = null;
             binding = false;
         }
+    }
+
+    static void invalidateService() {
+        clearService();
     }
 }

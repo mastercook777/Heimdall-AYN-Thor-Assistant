@@ -248,6 +248,13 @@ public final class GamepadSequenceSummary {
             case 316: return "HOME";
             case 317: return "L3";
             case 318: return "R3";
+            case GamepadSequencePolicy.KEY_BACK:
+                return context.getString(R.string.gamepad_system_key_back);
+            case GamepadSequencePolicy.KEY_HOME:
+                return context.getString(R.string.gamepad_system_key_home);
+            case GamepadSequencePolicy.KEY_RECENT_APPS:
+            case GamepadSequencePolicy.KEY_APPSELECT:
+                return context.getString(R.string.gamepad_system_key_recents);
             case 544: return "\u2191";
             case 545: return "\u2193";
             case 546: return "\u2190";

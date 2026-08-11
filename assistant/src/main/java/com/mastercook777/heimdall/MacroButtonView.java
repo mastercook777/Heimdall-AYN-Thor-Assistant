@@ -23,6 +23,7 @@ final class MacroButtonView extends Button {
     private final Paint macroLabelPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint macroPressPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private String macroLabel = "";
+    private boolean macroLabelVisible = true;
     private Drawable macroIcon;
     private boolean macroIconTintable = true;
     private boolean macroPressedVisual;
@@ -56,6 +57,14 @@ final class MacroButtonView extends Button {
     void setMacroLabel(String label) {
         macroLabel = label == null ? "" : label;
         setContentDescription(macroLabel);
+        invalidate();
+    }
+
+    void setMacroLabelVisible(boolean visible) {
+        if (macroLabelVisible == visible) {
+            return;
+        }
+        macroLabelVisible = visible;
         invalidate();
     }
 
@@ -215,20 +224,26 @@ final class MacroButtonView extends Button {
                     macroPressPaint);
         }
 
-        macroLabelPaint.setColor(getCurrentTextColor());
-        macroLabelPaint.setTextSize(getTextSize());
-        macroLabelPaint.setTypeface(getTypeface());
-        macroLabelPaint.setTextAlign(Paint.Align.CENTER);
-        macroLabelPaint.setAlpha(isEnabled() ? 255 : 140);
-        Paint.FontMetrics metrics = macroLabelPaint.getFontMetrics();
-        float labelCenter = height * 0.76f;
-        float baseline = labelCenter - (metrics.ascent + metrics.descent) / 2f + contentYOffset;
-        float labelTop = baseline + metrics.ascent;
-        int iconLabelGap = dp(HeimdallUi.MACRO_ICON_LABEL_GAP);
+        float baseline = 0f;
+        float labelTop = height;
+        if (macroLabelVisible) {
+            macroLabelPaint.setColor(getCurrentTextColor());
+            macroLabelPaint.setTextSize(getTextSize());
+            macroLabelPaint.setTypeface(getTypeface());
+            macroLabelPaint.setTextAlign(Paint.Align.CENTER);
+            macroLabelPaint.setAlpha(isEnabled() ? 255 : 140);
+            Paint.FontMetrics metrics = macroLabelPaint.getFontMetrics();
+            float labelCenter = height * 0.76f;
+            baseline = labelCenter - (metrics.ascent + metrics.descent) / 2f
+                    + contentYOffset;
+            labelTop = baseline + metrics.ascent;
+        }
 
         if (macroIcon != null) {
-            int availableIconHeight = Math.max(dp(18),
-                    Math.round(labelTop - iconLabelGap - dp(8)));
+            int availableIconHeight = macroLabelVisible
+                    ? Math.max(dp(18), Math.round(labelTop
+                            - dp(HeimdallUi.MACRO_ICON_LABEL_GAP) - dp(8)))
+                    : Math.max(dp(18), height - dp(16));
             int size = Math.min(macroIconSize, Math.min(width - dp(18), availableIconHeight));
             int intrinsicW = Math.max(1, macroIcon.getIntrinsicWidth());
             int intrinsicH = Math.max(1, macroIcon.getIntrinsicHeight());
@@ -236,7 +251,10 @@ final class MacroButtonView extends Button {
             int drawW = Math.max(1, Math.round(intrinsicW * scale));
             int drawH = Math.max(1, Math.round(intrinsicH * scale));
             int left = (width - drawW) / 2;
-            int top = Math.max(dp(8), Math.round(labelTop - iconLabelGap - drawH));
+            int top = macroLabelVisible
+                    ? Math.max(dp(8), Math.round(labelTop
+                            - dp(HeimdallUi.MACRO_ICON_LABEL_GAP) - drawH))
+                    : (height - drawH) / 2;
             top += Math.round(contentYOffset);
             if (macroIconTintable) {
                 macroIcon.setTint(macroIconColor);
@@ -247,8 +265,10 @@ final class MacroButtonView extends Button {
             macroIcon.draw(canvas);
         }
 
-        String label = fitTextToWidth(macroLabel, macroLabelPaint, width - dp(18));
-        canvas.drawText(label, width / 2f, baseline, macroLabelPaint);
+        if (macroLabelVisible) {
+            String label = fitTextToWidth(macroLabel, macroLabelPaint, width - dp(18));
+            canvas.drawText(label, width / 2f, baseline, macroLabelPaint);
+        }
     }
 
     private boolean shouldAnimateUi() {

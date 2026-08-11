@@ -36,6 +36,8 @@ final class UpperScreenMagnifierView extends FrameLayout
 
     private final WidgetLayout.Item item;
     private final ActionListener actionListener;
+    private final boolean circular;
+    private final ShapeFrameLayout displayFrame;
     private final FrameLayout viewport;
     private final SourceSurfaceViewport sourceViewport;
     private final TextureView textureView;
@@ -65,17 +67,25 @@ final class UpperScreenMagnifierView extends FrameLayout
         super(context);
         this.item = item;
         this.actionListener = listener;
+        circular = WidgetLayout.isCircularMagnifier(item);
         ViewConfiguration configuration = ViewConfiguration.get(context);
         int touchSlop = configuration.getScaledTouchSlop();
         int multiTapSlop = configuration.getScaledDoubleTapSlop();
         touchSlopSquared = touchSlop * touchSlop;
         multiTapSlopSquared = multiTapSlop * multiTapSlop;
-        setContentDescription(context.getString(R.string.magnifier_live_content_description));
-        setBackground(HeimdallUi.isPearl(context)
-                ? HeimdallUi.cncInputFrame(context, HeimdallUi.RADIUS_MODULE)
-                : HeimdallUi.glass(context,
-                        0xB20C131D, 0xD2070B11, 0x7770B7FF, 0x33445A72,
-                        HeimdallUi.RADIUS_MODULE, HeimdallUi.STROKE_HAIRLINE));
+        displayFrame = new ShapeFrameLayout(context, circular);
+        displayFrame.setContentDescription(
+                context.getString(R.string.magnifier_live_content_description));
+        displayFrame.setBackground(HeimdallUi.isPearl(context)
+                ? HeimdallUi.cncInputFrame(context, HeimdallUi.RADIUS_MODULE, circular)
+                : circular
+                        ? HeimdallUi.glassCircle(context,
+                                0xB20C131D, 0xD2070B11, 0x7770B7FF, 0x33445A72,
+                                HeimdallUi.STROKE_HAIRLINE)
+                        : HeimdallUi.glass(context,
+                                0xB20C131D, 0xD2070B11, 0x7770B7FF, 0x33445A72,
+                                HeimdallUi.RADIUS_MODULE, HeimdallUi.STROKE_HAIRLINE));
+        addView(displayFrame, new LayoutParams(-1, -1));
 
         viewport = new FrameLayout(context);
         viewport.setBackground(new ColorDrawable(0xFF020407));
@@ -83,18 +93,23 @@ final class UpperScreenMagnifierView extends FrameLayout
         viewport.setOutlineProvider(new ViewOutlineProvider() {
             @Override
             public void getOutline(View view, Outline outline) {
-                int insetDp = HeimdallUi.isPearl(getContext())
-                        ? PEARL_CONTENT_INSET_DP : DARK_CONTENT_INSET_DP;
-                float radius = dp(HeimdallUi.isPearl(getContext())
-                        ? HeimdallUi.concentricInnerRadiusDp(HeimdallUi.RADIUS_MODULE, insetDp)
-                        : Math.max(0f, HeimdallUi.RADIUS_MODULE - insetDp));
-                outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), radius);
+                if (circular) {
+                    outline.setOval(0, 0, view.getWidth(), view.getHeight());
+                } else {
+                    int insetDp = HeimdallUi.isPearl(getContext())
+                            ? PEARL_CONTENT_INSET_DP : DARK_CONTENT_INSET_DP;
+                    float radius = dp(HeimdallUi.isPearl(getContext())
+                            ? HeimdallUi.concentricInnerRadiusDp(
+                                    HeimdallUi.RADIUS_MODULE, insetDp)
+                            : Math.max(0f, HeimdallUi.RADIUS_MODULE - insetDp));
+                    outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), radius);
+                }
             }
         });
         int inset = contentInset();
         LayoutParams viewportParams = new LayoutParams(-1, -1);
         viewportParams.setMargins(inset, inset, inset, inset);
-        addView(viewport, viewportParams);
+        displayFrame.addView(viewport, viewportParams);
 
         sourceViewport = new SourceSurfaceViewport(context);
         viewport.addView(sourceViewport, new FrameLayout.LayoutParams(-1, -1));
@@ -126,17 +141,18 @@ final class UpperScreenMagnifierView extends FrameLayout
         frozenParams.setMargins(0, dp(7), dp(7), 0);
         viewport.addView(frozenStopControl, frozenParams);
 
-        setOnClickListener(view -> {
+        displayFrame.setOnClickListener(view -> {
             if (!UpperScreenProjectionService.isActiveOrStarting()) {
                 actionListener.onProjectionRequested(item);
             } else if (UpperScreenProjectionService.isFrozen()) {
                 UpperScreenProjectionService.setFrozen(false);
             }
         });
-        setOnLongClickListener(view -> {
+        displayFrame.setOnLongClickListener(view -> {
             float contentWidth = Math.max(1f, viewport.getWidth());
             float contentHeight = Math.max(1f, viewport.getHeight());
-            actionListener.onRegionRequested(item, contentWidth / contentHeight);
+            actionListener.onRegionRequested(item,
+                    circular ? 1f : contentWidth / contentHeight);
             return true;
         });
         GestureDetector gestures = new GestureDetector(context,
@@ -154,11 +170,14 @@ final class UpperScreenMagnifierView extends FrameLayout
                             removeCallbacks(clearSingleTapSuppressionRunnable);
                             return true;
                         }
-                        return performClick();
+                        return displayFrame.performClick();
                     }
 
                     @Override
                     public boolean onDoubleTap(MotionEvent event) {
+                        if (circular && UpperScreenProjectionService.isActiveOrStarting()) {
+                            return true;
+                        }
                         if (UpperScreenProjectionService.isRunning()
                                 && !UpperScreenProjectionService.isFrozen()) {
                             UpperScreenProjectionService.setFrozen(true);
@@ -172,14 +191,40 @@ final class UpperScreenMagnifierView extends FrameLayout
                         longPressTriggered = true;
                         tapCandidate = false;
                         resetTapSequence();
-                        performLongClick();
+                        displayFrame.performLongClick();
                     }
                 });
-        setOnTouchListener((view, event) -> {
+        displayFrame.setOnTouchListener((view, event) -> {
             boolean gestureHandled = gestures.onTouchEvent(event);
             boolean tripleTapHandled = trackTripleTap(event);
             return gestureHandled || tripleTapHandled;
         });
+    }
+
+    @Override
+    protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+        super.onMeasure(widthMeasureSpec, heightMeasureSpec);
+        if (circular) {
+            int diameter = Math.min(getMeasuredWidth(), getMeasuredHeight());
+            int exactDiameter = MeasureSpec.makeMeasureSpec(diameter, MeasureSpec.EXACTLY);
+            displayFrame.measure(exactDiameter, exactDiameter);
+        }
+    }
+
+    @Override
+    protected void onLayout(boolean changed, int left, int top, int right, int bottom) {
+        int width = right - left;
+        int height = bottom - top;
+        if (circular) {
+            int frameWidth = displayFrame.getMeasuredWidth();
+            int frameHeight = displayFrame.getMeasuredHeight();
+            int frameLeft = (width - frameWidth) / 2;
+            int frameTop = (height - frameHeight) / 2;
+            displayFrame.layout(frameLeft, frameTop,
+                    frameLeft + frameWidth, frameTop + frameHeight);
+        } else {
+            displayFrame.layout(0, 0, width, height);
+        }
     }
 
     @Override
@@ -206,7 +251,8 @@ final class UpperScreenMagnifierView extends FrameLayout
         UpperScreenProjectionService.setRegion(item.magnifierLeft, item.magnifierTop,
                 item.magnifierRight, item.magnifierBottom);
         UpperScreenProjectionService.setTuning(
-                item.magnifierAspectRatio, item.magnifierFps, item.magnifierZoom);
+                WidgetLayout.magnifierTargetAspectRatio(item),
+                item.magnifierFps, item.magnifierZoom);
         if (UpperScreenProjectionService.isRunning()) {
             textureView.setVisibility(VISIBLE);
             statusView.setText(R.string.magnifier_connecting);
@@ -375,7 +421,8 @@ final class UpperScreenMagnifierView extends FrameLayout
                 - UpperScreenProjectionService.regionLeft()) * sourceWidth);
         float cropHeight = Math.max(2f, (UpperScreenProjectionService.regionBottom()
                 - UpperScreenProjectionService.regionTop()) * sourceHeight);
-        float aspect = clamp(UpperScreenProjectionService.targetAspectRatio(), 0.2f, 5f);
+        float aspect = circular ? 1f
+                : clamp(UpperScreenProjectionService.targetAspectRatio(), 0.2f, 5f);
         if (cropWidth / cropHeight > aspect) {
             cropWidth = cropHeight * aspect;
         } else {
@@ -398,15 +445,17 @@ final class UpperScreenMagnifierView extends FrameLayout
 
     private void updateFrozenIndicator() {
         boolean frozen = UpperScreenProjectionService.isFrozen();
-        frozenStopControl.setVisibility(frozen ? VISIBLE : GONE);
+        frozenStopControl.setVisibility(frozen && !circular ? VISIBLE : GONE);
         if (frozen) {
-            setContentDescription(getResources().getString(
-                    R.string.magnifier_paused_content_description));
+            displayFrame.setContentDescription(getResources().getString(circular
+                    ? R.string.magnifier_circle_paused_content_description
+                    : R.string.magnifier_paused_content_description));
         } else if (UpperScreenProjectionService.isActiveOrStarting()) {
-            setContentDescription(getResources().getString(
-                    R.string.magnifier_active_content_description));
+            displayFrame.setContentDescription(getResources().getString(circular
+                    ? R.string.magnifier_circle_active_content_description
+                    : R.string.magnifier_active_content_description));
         } else {
-            setContentDescription(getResources().getString(
+            displayFrame.setContentDescription(getResources().getString(
                     R.string.magnifier_stopped_content_description));
         }
     }
@@ -524,6 +573,28 @@ final class UpperScreenMagnifierView extends FrameLayout
 
     private static float clamp(float value, float min, float max) {
         return Math.max(min, Math.min(max, value));
+    }
+
+    private static final class ShapeFrameLayout extends FrameLayout {
+        private final boolean circular;
+
+        ShapeFrameLayout(Context context, boolean circular) {
+            super(context);
+            this.circular = circular;
+        }
+
+        @Override
+        public boolean dispatchTouchEvent(MotionEvent event) {
+            if (circular && event.getActionMasked() == MotionEvent.ACTION_DOWN) {
+                float radius = Math.min(getWidth(), getHeight()) * 0.5f;
+                float dx = event.getX() - getWidth() * 0.5f;
+                float dy = event.getY() - getHeight() * 0.5f;
+                if (dx * dx + dy * dy > radius * radius) {
+                    return false;
+                }
+            }
+            return super.dispatchTouchEvent(event);
+        }
     }
 
     /**

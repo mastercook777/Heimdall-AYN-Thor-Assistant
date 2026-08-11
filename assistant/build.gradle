@@ -74,6 +74,7 @@ android {
         targetSdk 35
         versionCode heimdallVersionCode
         versionName heimdallVersionName
+        testInstrumentationRunner "com.mastercook777.heimdall.ProfileBundleStoreInstrumentationTest"
 
         externalNativeBuild {
             cmake {

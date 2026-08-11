@@ -20,6 +20,8 @@ public final class WidgetLayout {
     public static final String TYPE_MAGNIFIER = "upper_screen_magnifier";
     public static final String MAGNIFIER_SCALE_FILL = "fill";
     public static final String MAGNIFIER_SCALE_FIT = "fit";
+    public static final String MAGNIFIER_SHAPE_RECTANGLE = "rectangle";
+    public static final String MAGNIFIER_SHAPE_CIRCLE = "circle";
 
     private static final int DEFAULT_COLUMNS = 6;
     private static final int DEFAULT_ROWS = 8;
@@ -166,6 +168,7 @@ public final class WidgetLayout {
                 item.magnifierAspectRatio = clamp(item.magnifierAspectRatio, 0.2f, 5f);
                 item.magnifierFps = normalizeMagnifierFps(item.magnifierFps);
                 item.magnifierScaleMode = normalizeMagnifierScaleMode(item.magnifierScaleMode);
+                item.magnifierShape = normalizeMagnifierShape(item.magnifierShape);
                 item.magnifierZoom = normalizeMagnifierZoom(item.magnifierZoom);
             }
             if (TYPE_CANVAS.equals(item.type)) {
@@ -208,6 +211,23 @@ public final class WidgetLayout {
         return MAGNIFIER_SCALE_FIT.equals(value) ? MAGNIFIER_SCALE_FIT : MAGNIFIER_SCALE_FILL;
     }
 
+    public static String normalizeMagnifierShape(String value) {
+        return MAGNIFIER_SHAPE_CIRCLE.equals(value)
+                ? MAGNIFIER_SHAPE_CIRCLE : MAGNIFIER_SHAPE_RECTANGLE;
+    }
+
+    public static boolean isCircularMagnifier(Item item) {
+        return item != null
+                && MAGNIFIER_SHAPE_CIRCLE.equals(normalizeMagnifierShape(item.magnifierShape));
+    }
+
+    public static float magnifierTargetAspectRatio(Item item) {
+        if (isCircularMagnifier(item)) {
+            return 1f;
+        }
+        return item == null ? 1f : clamp(item.magnifierAspectRatio, 0.2f, 5f);
+    }
+
     public static float normalizeMagnifierZoom(float value) {
         if (value >= 1.75f) {
             return 2f;
@@ -232,6 +252,7 @@ public final class WidgetLayout {
         public int macroColumns = 2;
         public int macroRows = 0;
         public boolean macroRightHandPriority = true;
+        public boolean macroIconOnly = false;
         public boolean hasMacroConfig = true;
         public float magnifierLeft = 0.25f;
         public float magnifierTop = 0.25f;
@@ -240,6 +261,7 @@ public final class WidgetLayout {
         public float magnifierAspectRatio = 1f;
         public int magnifierFps = 30;
         public String magnifierScaleMode = MAGNIFIER_SCALE_FILL;
+        public String magnifierShape = MAGNIFIER_SHAPE_RECTANGLE;
         public float magnifierZoom = 1f;
         public CanvasConfig canvasConfig = new CanvasConfig();
 
@@ -258,6 +280,7 @@ public final class WidgetLayout {
             item.macroColumns = macroColumns;
             item.macroRows = macroRows;
             item.macroRightHandPriority = macroRightHandPriority;
+            item.macroIconOnly = macroIconOnly;
             item.hasMacroConfig = hasMacroConfig;
             item.magnifierLeft = magnifierLeft;
             item.magnifierTop = magnifierTop;
@@ -266,6 +289,7 @@ public final class WidgetLayout {
             item.magnifierAspectRatio = magnifierAspectRatio;
             item.magnifierFps = magnifierFps;
             item.magnifierScaleMode = magnifierScaleMode;
+            item.magnifierShape = magnifierShape;
             item.magnifierZoom = magnifierZoom;
             item.canvasConfig = canvasConfig == null
                     ? new CanvasConfig() : canvasConfig.copy();
@@ -285,6 +309,7 @@ public final class WidgetLayout {
                 object.put("macroColumns", macroColumns);
                 object.put("macroRows", macroRows);
                 object.put("macroRightHandPriority", macroRightHandPriority);
+                object.put("macroIconOnly", macroIconOnly);
             }
             if (TYPE_MAGNIFIER.equals(type)) {
                 object.put("magnifierLeft", magnifierLeft);
@@ -294,6 +319,7 @@ public final class WidgetLayout {
                 object.put("magnifierAspectRatio", magnifierAspectRatio);
                 object.put("magnifierFps", magnifierFps);
                 object.put("magnifierScaleMode", magnifierScaleMode);
+                object.put("magnifierShape", normalizeMagnifierShape(magnifierShape));
                 object.put("magnifierZoom", magnifierZoom);
             }
             if (TYPE_CANVAS.equals(type)) {
@@ -315,11 +341,13 @@ public final class WidgetLayout {
             item.macroColumns = object.optInt("macroColumns", 2);
             item.macroRows = object.optInt("macroRows", 0);
             item.macroRightHandPriority = object.optBoolean("macroRightHandPriority", true);
+            item.macroIconOnly = object.optBoolean("macroIconOnly", false);
             item.hasMacroConfig = object.has("macroStart")
                     || object.has("macroCount")
                     || object.has("macroColumns")
                     || object.has("macroRows")
-                    || object.has("macroRightHandPriority");
+                    || object.has("macroRightHandPriority")
+                    || object.has("macroIconOnly");
             item.magnifierLeft = (float) object.optDouble("magnifierLeft", 0.25d);
             item.magnifierTop = (float) object.optDouble("magnifierTop", 0.25d);
             item.magnifierRight = (float) object.optDouble("magnifierRight", 0.75d);
@@ -328,6 +356,8 @@ public final class WidgetLayout {
             item.magnifierFps = object.optInt("magnifierFps", 30);
             item.magnifierScaleMode = object.optString(
                     "magnifierScaleMode", MAGNIFIER_SCALE_FILL);
+            item.magnifierShape = object.optString(
+                    "magnifierShape", MAGNIFIER_SHAPE_RECTANGLE);
             item.magnifierZoom = (float) object.optDouble("magnifierZoom", 1d);
             item.canvasConfig = CanvasConfig.fromJson(object.optJSONObject("canvas"));
             return item;
