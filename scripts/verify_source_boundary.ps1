@@ -16,11 +16,16 @@ $requiredPaths = @(
     "LICENSE",
     "NOTICE",
     "README.md",
+    "version.properties",
+    "release.properties",
     "settings.gradle",
     "assistant/build.gradle",
     "assistant/src",
     ".github/workflows/android-ci.yml",
-    ".github/workflows/alpha-release.yml"
+    ".github/workflows/alpha-release.yml",
+    ".github/workflows/tester-debug.yml",
+    "scripts/verify_release_readiness.ps1",
+    "scripts/build_alpha_candidate.ps1"
 )
 
 foreach ($relativePath in $requiredPaths) {

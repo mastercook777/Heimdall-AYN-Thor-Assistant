@@ -1,0 +1,93 @@
+name: Bug report / 问题反馈
+description: Report a reproducible Heimdall problem on AYN Thor / 反馈可复现的 Thor 问题
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve Heimdall. Remove personal information from logs and screenshots.
+        感谢帮助改进 Heimdall。请先从日志和截图中移除个人信息。
+  - type: input
+    id: version
+    attributes:
+      label: Heimdall version / Heimdall 版本
+      placeholder: v0.1.0-alpha.1 or Debug commit
+    validations:
+      required: true
+  - type: input
+    id: firmware
+    attributes:
+      label: Thor firmware / Thor 固件版本
+    validations:
+      required: true
+  - type: dropdown
+    id: controller_mode
+    attributes:
+      label: Controller mode / 手柄模式
+      options:
+        - Native / 原生
+        - Xbox-compatible / Xbox 兼容
+        - Not relevant / 不相关
+        - Unknown / 不确定
+    validations:
+      required: true
+  - type: input
+    id: game
+    attributes:
+      label: Game or emulator / 游戏或模拟器
+      placeholder: Include the ROM or game context when relevant
+  - type: dropdown
+    id: route
+    attributes:
+      label: Active input route / 当前输入路径
+      options:
+        - Basic Touch / Accessibility
+        - Controller Enhancement / Shizuku
+        - UI only / 仅界面
+        - MediaProjection
+        - Unknown / 不确定
+    validations:
+      required: true
+  - type: dropdown
+    id: mapper
+    attributes:
+      label: Thor built-in mapper / Thor 内置映射
+      options:
+        - Enabled / 已启用
+        - Disabled / 未启用
+        - Not relevant / 不相关
+        - Unknown / 不确定
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps / 复现步骤
+      description: Include frequency and the smallest reliable sequence.
+      placeholder: "1. ...\n2. ...\n3. ..."
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result / 预期结果
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual result / 实际结果
+    validations:
+      required: true
+  - type: textarea
+    id: recovery
+    attributes:
+      label: Recovery and evidence / 恢复方式与证据
+      description: Say whether restarting Heimdall, Shizuku, or Thor changes the result. Attach safe logs, screenshots, or recordings when possible.
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety check / 安全确认
+      options:
+        - label: I removed personal data, signing material, copyrighted game files, and private Profile exports. / 我已移除个人数据、签名材料、受版权保护的游戏文件和私密 Profile 导出。
+          required: true

@@ -1,0 +1,50 @@
+name: Feature request / 功能建议
+description: Propose a bounded lower-screen gameplay improvement / 提议明确的下屏游戏体验改进
+title: "[Feature] "
+body:
+  - type: textarea
+    id: play_moment
+    attributes:
+      label: Gameplay moment / 游戏场景
+      description: What are you trying to do while keeping attention on the upper-screen game?
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Current problem or workaround / 当前问题或替代方式
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior / 建议行为
+      description: Describe the smallest useful outcome rather than a complete implementation.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Product area / 功能区域
+      options:
+        - Profiles and Grid
+        - Macros and controller input
+        - Touchpad and aiming
+        - Magnifier or recording
+        - Maps, guides, or Canvas
+        - Settings or onboarding
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: Compatibility context / 兼容性背景
+      description: Include firmware, controller mode, game/emulator, mapper, Accessibility, Shizuku, or MediaProjection details when relevant.
+  - type: checkboxes
+    id: boundary
+    attributes:
+      label: Scope check / 范围确认
+      options:
+        - label: This request supports Heimdall as an always-open AYN Thor lower-screen assistant. / 该建议符合 Heimdall 作为 AYN Thor 常驻下屏助手的方向。
+          required: true

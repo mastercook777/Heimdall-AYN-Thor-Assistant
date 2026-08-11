@@ -1,0 +1,152 @@
+name: Build Heimdall Tester Debug
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Commit or ref already contained in main
+        required: true
+        default: main
+        type: string
+
+concurrency:
+  group: tester-debug-${{ inputs.source_ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build stable-signed tester APK
+    if: github.repository_owner == 'mastercook777'
+    runs-on: ubuntu-latest
+    environment: tester-debug
+
+    steps:
+      - name: Checkout approved source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.source_ref }}
+
+      - name: Verify source belongs to main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          SOURCE_COMMIT="$(git rev-parse HEAD)"
+          if ! git merge-base --is-ancestor "$SOURCE_COMMIT" origin/main; then
+            echo "Tester builds are restricted to commits already contained in main." >&2
+            exit 1
+          fi
+          SHORT_SHA="$(git rev-parse --short=12 HEAD)"
+          VERSION_NAME="$(sed -n 's/^VERSION_NAME=//p' version.properties)"
+          APPLICATION_ID="$(sed -n 's/^APPLICATION_ID=//p' release.properties)"
+          echo "HEIMDALL_SOURCE_COMMIT=$SOURCE_COMMIT" >> "$GITHUB_ENV"
+          echo "HEIMDALL_SHORT_SHA=$SHORT_SHA" >> "$GITHUB_ENV"
+          echo "HEIMDALL_VERSION=$VERSION_NAME" >> "$GITHUB_ENV"
+          echo "HEIMDALL_APPLICATION_ID=$APPLICATION_ID" >> "$GITHUB_ENV"
+          echo "HEIMDALL_TEST_ASSET=heimdall-debug-$SHORT_SHA.apk" >> "$GITHUB_ENV"
+
+      - name: Verify release metadata
+        shell: pwsh
+        run: ./scripts/verify_release_readiness.ps1 -AllowDraftNotes
+
+      - name: Verify public source boundary
+        shell: pwsh
+        run: ./scripts/verify_source_boundary.ps1
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Install Android native tools
+        run: |
+          sdkmanager "platforms;android-35" "build-tools;35.0.0" "cmake;3.22.1" "ndk;30.0.14904198"
+
+      - name: Restore tester-only signing key
+        shell: bash
+        env:
+          HEIMDALL_TEST_KEYSTORE_BASE64: ${{ secrets.HEIMDALL_TEST_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          test -n "$HEIMDALL_TEST_KEYSTORE_BASE64"
+          printf '%s' "$HEIMDALL_TEST_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/heimdall-tester.jks"
+          chmod 600 "$RUNNER_TEMP/heimdall-tester.jks"
+
+      - name: Build tester Debug APK
+        env:
+          HEIMDALL_DEBUG_KEYSTORE: ${{ runner.temp }}/heimdall-tester.jks
+          HEIMDALL_DEBUG_STORE_PASSWORD: ${{ secrets.HEIMDALL_TEST_STORE_PASSWORD }}
+          HEIMDALL_DEBUG_KEY_ALIAS: ${{ secrets.HEIMDALL_TEST_KEY_ALIAS }}
+          HEIMDALL_DEBUG_KEY_PASSWORD: ${{ secrets.HEIMDALL_TEST_KEY_PASSWORD }}
+        run: |
+          chmod +x ./gradlew
+          ./gradlew :assistant:assembleDebug :assistant:lintDebug --no-daemon
+
+      - name: Verify tester APK and prepare artifact
+        shell: bash
+        env:
+          EXPECTED_TEST_CERT_SHA256: ${{ secrets.HEIMDALL_TEST_CERT_SHA256 }}
+        run: |
+          set -euo pipefail
+          APK="assistant/build/outputs/apk/debug/heimdall-debug.apk"
+          test -f "$APK"
+          AAPT="$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -n 1)"
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+          ZIPALIGN="$(find "$ANDROID_HOME/build-tools" -type f -name zipalign | sort -V | tail -n 1)"
+          test -x "$AAPT"
+          test -x "$APKSIGNER"
+          test -x "$ZIPALIGN"
+
+          BADGING="$("$AAPT" dump badging "$APK")"
+          ACTUAL_PACKAGE="$(sed -n "s/^package: name='\([^']*\)'.*/\1/p" <<< "$BADGING")"
+          ACTUAL_VERSION="$(sed -n "s/^package: .*versionName='\([^']*\)'.*/\1/p" <<< "$BADGING")"
+          test "$ACTUAL_PACKAGE" = "$HEIMDALL_APPLICATION_ID.debug"
+          test "$ACTUAL_VERSION" = "$HEIMDALL_VERSION-debug"
+
+          "$APKSIGNER" verify --verbose "$APK"
+          CERT_OUTPUT="$("$APKSIGNER" verify --print-certs "$APK")"
+          ACTUAL_CERT="$(awk '/certificate SHA-256 digest:/ {print $NF; exit}' <<< "$CERT_OUTPUT" | tr '[:lower:]' '[:upper:]' | tr -d ':' | tr -d '[:space:]')"
+          EXPECTED_CERT="$(printf '%s' "$EXPECTED_TEST_CERT_SHA256" | tr '[:lower:]' '[:upper:]' | tr -d ':' | tr -d '[:space:]')"
+          if [[ ! "$ACTUAL_CERT" =~ ^[0-9A-F]{64}$ || ! "$EXPECTED_CERT" =~ ^[0-9A-F]{64}$ ]]; then
+            echo "Could not validate the tester signing certificate SHA-256." >&2
+            exit 1
+          fi
+          if [[ "$ACTUAL_CERT" != "$EXPECTED_CERT" ]]; then
+            echo "Tester APK signer does not match the configured tester identity." >&2
+            exit 1
+          fi
+          "$ZIPALIGN" -c -P 16 -v 4 "$APK" >/dev/null
+
+          mkdir -p dist
+          cp "$APK" "dist/$HEIMDALL_TEST_ASSET"
+          (
+            cd dist
+            sha256sum "$HEIMDALL_TEST_ASSET" > SHA256SUMS.txt
+          )
+          {
+            printf 'channel=TESTER_DEBUG_NOT_PUBLIC_RELEASE\n'
+            printf 'sourceCommit=%s\n' "$HEIMDALL_SOURCE_COMMIT"
+            printf 'package=%s.debug\n' "$HEIMDALL_APPLICATION_ID"
+            printf 'versionName=%s-debug\n' "$HEIMDALL_VERSION"
+            printf 'certificateSha256=%s\n' "$ACTUAL_CERT"
+            printf 'apkSha256=%s\n' "$(cut -d ' ' -f 1 dist/SHA256SUMS.txt)"
+          } > dist/BUILD_METADATA.txt
+
+      - name: Upload tester artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: heimdall-debug-${{ env.HEIMDALL_SHORT_SHA }}
+          path: |
+            dist/${{ env.HEIMDALL_TEST_ASSET }}
+            dist/SHA256SUMS.txt
+            dist/BUILD_METADATA.txt
+          if-no-files-found: error
+          retention-days: 14

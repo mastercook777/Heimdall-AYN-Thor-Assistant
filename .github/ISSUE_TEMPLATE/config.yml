@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Download the latest public Alpha / 下载最新公开 Alpha
+    url: https://github.com/mastercook777/Heimdall-AYN-Thor-Assistant/releases
+    about: Install only immutable versioned releases from this repository.
+  - name: Installation and usage guide / 安装与使用指南
+    url: https://github.com/mastercook777/Heimdall-AYN-Thor-Assistant#start-here-choose-only-what-you-need
+    about: Check setup requirements before filing a connection or permission issue.

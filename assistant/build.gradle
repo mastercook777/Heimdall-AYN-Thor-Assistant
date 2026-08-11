@@ -1,5 +1,22 @@
 apply plugin: "com.android.application"
 
+def versionProperties = new Properties()
+def versionPropertiesFile = rootProject.file("version.properties")
+if (!versionPropertiesFile.isFile()) {
+    throw new GradleException("Missing version.properties at the repository root.")
+}
+versionPropertiesFile.withInputStream { versionProperties.load(it) }
+
+def heimdallVersionCodeText = versionProperties.getProperty("VERSION_CODE")?.trim()
+def heimdallVersionName = versionProperties.getProperty("VERSION_NAME")?.trim()
+if (heimdallVersionCodeText == null || !(heimdallVersionCodeText ==~ /[1-9][0-9]*/)) {
+    throw new GradleException("VERSION_CODE must be a positive integer in version.properties.")
+}
+if (heimdallVersionName == null || !(heimdallVersionName ==~ /[0-9]+\.[0-9]+\.[0-9]+-alpha\.[0-9]+/)) {
+    throw new GradleException("VERSION_NAME must match X.Y.Z-alpha.N in version.properties.")
+}
+def heimdallVersionCode = Integer.parseInt(heimdallVersionCodeText)
+
 def privateDebugSigningProperties = new Properties()
 def privateDebugSigningFile = file("signing.properties")
 if (privateDebugSigningFile.isFile()) {
@@ -55,8 +72,8 @@ android {
         applicationId "com.mastercook777.heimdall"
         minSdk 26
         targetSdk 35
-        versionCode 2
-        versionName "0.1.0-alpha.1"
+        versionCode heimdallVersionCode
+        versionName heimdallVersionName
 
         externalNativeBuild {
             cmake {

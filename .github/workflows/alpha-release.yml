@@ -58,6 +58,26 @@ jobs:
             exit 1
           fi
           VERSION="${RELEASE_TAG#v}"
+          VERSION_CODE="$(sed -n 's/^VERSION_CODE=//p' version.properties)"
+          VERSION_NAME="$(sed -n 's/^VERSION_NAME=//p' version.properties)"
+          APPLICATION_ID="$(sed -n 's/^APPLICATION_ID=//p' release.properties)"
+          CONFIGURED_CERT="$(sed -n 's/^RELEASE_CERT_SHA256=//p' release.properties | tr '[:lower:]' '[:upper:]' | tr -d ':' | tr -d '[:space:]')"
+          if [[ ! "$VERSION_CODE" =~ ^[1-9][0-9]*$ ]]; then
+            echo "VERSION_CODE must be a positive integer." >&2
+            exit 1
+          fi
+          if [[ "$VERSION_NAME" != "$VERSION" ]]; then
+            echo "VERSION_NAME does not match $RELEASE_TAG." >&2
+            exit 1
+          fi
+          if [[ "$APPLICATION_ID" != "com.mastercook777.heimdall" ]]; then
+            echo "Unexpected release application ID: $APPLICATION_ID" >&2
+            exit 1
+          fi
+          if [[ ! "$CONFIGURED_CERT" =~ ^[0-9A-F]{64}$ ]]; then
+            echo "The repository release certificate fingerprint is malformed." >&2
+            exit 1
+          fi
           NOTES="docs/releases/${RELEASE_TAG}.md"
           test -f "$NOTES"
           if grep -Eq 'Draft|TBD' "$NOTES"; then
@@ -66,8 +86,15 @@ jobs:
           fi
           echo "HEIMDALL_RELEASE_TAG=$RELEASE_TAG" >> "$GITHUB_ENV"
           echo "HEIMDALL_VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "HEIMDALL_VERSION_CODE=$VERSION_CODE" >> "$GITHUB_ENV"
+          echo "HEIMDALL_APPLICATION_ID=$APPLICATION_ID" >> "$GITHUB_ENV"
+          echo "HEIMDALL_CONFIGURED_CERT_SHA256=$CONFIGURED_CERT" >> "$GITHUB_ENV"
           echo "HEIMDALL_RELEASE_NOTES=$NOTES" >> "$GITHUB_ENV"
           echo "HEIMDALL_SOURCE_COMMIT=$TAG_COMMIT" >> "$GITHUB_ENV"
+
+      - name: Verify release readiness
+        shell: pwsh
+        run: ./scripts/verify_release_readiness.ps1 -ReleaseTag $env:HEIMDALL_RELEASE_TAG -RequireExistingTag
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -121,8 +148,10 @@ jobs:
 
           BADGING="$("$AAPT" dump badging "$APK")"
           ACTUAL_PACKAGE="$(sed -n "s/^package: name='\([^']*\)'.*/\1/p" <<< "$BADGING")"
+          ACTUAL_VERSION_CODE="$(sed -n "s/^package: .*versionCode='\([^']*\)'.*/\1/p" <<< "$BADGING")"
           ACTUAL_VERSION="$(sed -n "s/^package: .*versionName='\([^']*\)'.*/\1/p" <<< "$BADGING")"
-          test "$ACTUAL_PACKAGE" = "com.mastercook777.heimdall"
+          test "$ACTUAL_PACKAGE" = "$HEIMDALL_APPLICATION_ID"
+          test "$ACTUAL_VERSION_CODE" = "$HEIMDALL_VERSION_CODE"
           test "$ACTUAL_VERSION" = "$HEIMDALL_VERSION"
 
           "$APKSIGNER" verify --verbose "$APK"
@@ -137,7 +166,11 @@ jobs:
             echo "The configured certificate SHA-256 is malformed." >&2
             exit 1
           fi
-          if [[ "$ACTUAL_CERT" != "$EXPECTED_CERT" ]]; then
+          if [[ "$EXPECTED_CERT" != "$HEIMDALL_CONFIGURED_CERT_SHA256" ]]; then
+            echo "The protected certificate fingerprint does not match release.properties." >&2
+            exit 1
+          fi
+          if [[ "$ACTUAL_CERT" != "$HEIMDALL_CONFIGURED_CERT_SHA256" ]]; then
             echo "The APK signing certificate does not match the approved Alpha signer: $ACTUAL_CERT" >&2
             exit 1
           fi
@@ -153,7 +186,8 @@ jobs:
             cat "$HEIMDALL_RELEASE_NOTES"
             printf '\n## Build integrity\n\n'
             printf -- '- Source commit: `%s`\n' "$HEIMDALL_SOURCE_COMMIT"
-            printf -- '- Package: `com.mastercook777.heimdall`\n'
+            printf -- '- Package: `%s`\n' "$HEIMDALL_APPLICATION_ID"
+            printf -- '- Version code: `%s`\n' "$HEIMDALL_VERSION_CODE"
             printf -- '- Version: `%s`\n' "$HEIMDALL_VERSION"
             printf -- '- Signing certificate SHA-256: `%s`\n' "$ACTUAL_CERT"
             printf -- '- APK SHA-256: `%s`\n' "$(cut -d ' ' -f 1 dist/SHA256SUMS.txt)"
