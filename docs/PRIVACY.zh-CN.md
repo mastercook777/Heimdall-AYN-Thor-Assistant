@@ -10,7 +10,7 @@ Profile、宏、布局数据、地图、攻略、Canvas 图片、设置、导入
 
 本 Alpha 默认关闭 Android 平台备份。卸载、更换签名通道或迁移到其他设备前，玩家应使用明确的 Profile 导出功能。
 
-Alpha 的 Profile 导出是配置 JSON，不是包含全部资源的归档。卸载或迁移设备后，自定义 Profile 图标、导入的 Macro 图标和 Canvas 图片文件需要重新选择或导入。
+当前 Profile 导出使用自包含的 `.heimdall-profile` 迁移包。除 Profile 配置外，迁移包还可包含受支持的 Profile 图标、地图、文件 Guide、用户导入的 Macro 图标和 Canvas 图片；文件只会写入玩家主动选择的位置。旧版仅配置 JSON 仍可导入，但无法恢复旧版从未打包的源资源。格式与安全边界见 [Profile 迁移包格式](PROFILE_BUNDLE_FORMAT.zh-CN.md)。
 
 ## 无障碍服务
 
@@ -30,4 +30,4 @@ Alpha 的 Profile 导出是配置 JSON，不是包含全部资源的归档。卸
 
 ## 问题报告
 
-分享日志、截图、录屏或 Profile 导出前，请移除不应公开的姓名、路径、URL、令牌、账户信息和游戏数据。
+分享日志、截图、录屏或 Profile 导出前，请移除不应公开的姓名、路径、URL、令牌、账户信息和游戏数据。`.heimdall-profile` 迁移包可能包含玩家导入的地图、Guide、图标和 Canvas 图片；未检查内容前应按私密文件处理。

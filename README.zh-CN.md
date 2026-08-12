@@ -25,14 +25,20 @@ Heimdall 让游戏继续显示在 Thor 上屏，同时把下屏变成常驻控�
 
 <table>
   <tr>
-    <td width="33%"><img src="docs/assets/readme/thor-precision-aim.jpg" alt="AYN Thor 上屏运行射击游戏，下屏显示 Heimdall 放大镜、精准瞄准和宏"></td>
-    <td width="33%"><img src="docs/assets/readme/thor-magnifier-canvas.jpg" alt="AYN Thor 上屏运行游戏，下屏显示 Heimdall 放大镜、Canvas 和宏"></td>
-    <td width="33%"><img src="docs/assets/readme/thor-quick-actions.jpg" alt="AYN Thor 上屏播放视频，下屏运行 Heimdall 快捷操作和触摸控制"></td>
+    <td width="50%"><img src="docs/assets/readme/thor-precision-aim-active.jpg" alt="玩家在 AYN Thor 上屏运行射击游戏时，使用下屏 Heimdall 精准瞄准和圆形放大镜"></td>
+    <td width="50%"><img src="docs/assets/readme/thor-circular-magnifier-profile.jpg" alt="AYN Thor 上屏运行动作角色扮演游戏，下屏显示 Heimdall 圆形放大镜、触摸板和 Profile 宏控制"></td>
   </tr>
   <tr>
-    <td align="center">放大镜、精准瞄准与宏</td>
-    <td align="center">放大镜、Canvas 与宏</td>
-    <td align="center">快捷操作与触摸控制</td>
+    <td align="center"><strong>主动操作：</strong>精准瞄准与圆形放大</td>
+    <td align="center"><strong>Profile 控制：</strong>放大镜、触摸板与宏</td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/assets/readme/thor-guide-reader.jpg" alt="AYN Thor 上屏运行游戏，下屏 Heimdall 打开本地文字 Guide"></td>
+    <td width="50%"><img src="docs/assets/readme/thor-canvas-macro-reference.jpg" alt="玩家在 AYN Thor 上屏运行格斗游戏时，使用下屏 Heimdall Canvas 招式表和宏按钮"></td>
+  </tr>
+  <tr>
+    <td align="center"><strong>资料查阅：</strong>不遮挡游戏的本地 Guide</td>
+    <td align="center"><strong>快速执行：</strong>Canvas 招式表与结构化宏</td>
   </tr>
 </table>
 
@@ -197,7 +203,7 @@ Quick Actions 可以捕获上屏。录屏使用 Android MediaProjection 和 Audi
 
 ## 6. 卸载前先备份
 
-完成重要 Grid 或宏配置后，进入 Profile 管理导出当前或全部 Profile，并在 Heimdall 之外保存副本。`.heimdall-profile` 会自包含受支持的 Profile 资源，并在导入前完成完整校验。Heimdall 会为部分破坏性 Profile 操作保留有限恢复快照，但自动快照不能代替手动导出。格式细节见 [Profile 迁移包格式](docs/PROFILE_BUNDLE_FORMAT.md)。
+完成重要 Grid 或宏配置后，进入 Profile 管理导出当前或全部 Profile，并在 Heimdall 之外保存副本。`.heimdall-profile` 会自包含受支持的 Profile 资源，并在导入前完成完整校验。Heimdall 会为部分破坏性 Profile 操作保留有限恢复快照，但自动快照不能代替手动导出。格式细节见 [Profile 迁移包格式](docs/PROFILE_BUNDLE_FORMAT.zh-CN.md)。
 
 Alpha 默认关闭 Android 平台备份。卸载应用会删除 Heimdall 本地数据。
 
@@ -209,7 +215,7 @@ Alpha 默认关闭 Android 平台备份。卸载应用会删除 Heimdall 本地�
 - 每个 Profile 当前只支持一个实时放大镜；放大镜不能与录屏共享 MediaProjection。
 - 从其他下屏 Tab 返回 Main 后，冻结画面的 Stop 标记偶尔可能不显示；停止后也可能保留最后一帧。这是已知显示状态问题，不代表画面仍在实时更新。
 
-完整测试范围、迁移说明和限制请阅读 [v0.1.0-alpha.1 发行说明](docs/releases/v0.1.0-alpha.1.md)。
+完整测试范围、迁移说明和限制请阅读 [v0.1.1-alpha.1 发行说明](docs/releases/v0.1.1-alpha.1.md)。[v0.1.0-alpha.1 发行说明](docs/releases/v0.1.0-alpha.1.md)仍保留，供查阅上一版公开 Alpha。
 
 ## 如何提供有效反馈
 

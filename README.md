@@ -25,14 +25,20 @@ Heimdall keeps the game on Thor's upper screen while the lower screen becomes a 
 
 <table>
   <tr>
-    <td width="33%"><img src="docs/assets/readme/thor-precision-aim.jpg" alt="AYN Thor running a shooter with Heimdall magnifier, Precision Aim, and Macros on the lower screen"></td>
-    <td width="33%"><img src="docs/assets/readme/thor-magnifier-canvas.jpg" alt="AYN Thor running a game with Heimdall magnifier, Canvas, and Macro controls on the lower screen"></td>
-    <td width="33%"><img src="docs/assets/readme/thor-quick-actions.jpg" alt="AYN Thor running Heimdall Quick Actions while a video plays on the upper screen"></td>
+    <td width="50%"><img src="docs/assets/readme/thor-precision-aim-active.jpg" alt="Player using Heimdall Precision Aim and a circular magnifier on the lower screen while a shooter runs on the AYN Thor upper screen"></td>
+    <td width="50%"><img src="docs/assets/readme/thor-circular-magnifier-profile.jpg" alt="AYN Thor running an action RPG with Heimdall circular magnifier, touchpad, and Profile Macro controls on the lower screen"></td>
   </tr>
   <tr>
-    <td align="center">Magnifier, Precision Aim, and Macros</td>
-    <td align="center">Magnifier, Canvas, and Macros</td>
-    <td align="center">Quick Actions and touch control</td>
+    <td align="center"><strong>Active play:</strong> Precision Aim and circular magnification</td>
+    <td align="center"><strong>Profile controls:</strong> magnifier, touchpad, and Macros</td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/assets/readme/thor-guide-reader.jpg" alt="AYN Thor game on the upper screen with a local text Guide open in Heimdall on the lower screen"></td>
+    <td width="50%"><img src="docs/assets/readme/thor-canvas-macro-reference.jpg" alt="Player using Heimdall Canvas move-list reference and Macro buttons while a fighting game runs on the AYN Thor upper screen"></td>
+  </tr>
+  <tr>
+    <td align="center"><strong>Reference:</strong> a local Guide without covering the game</td>
+    <td align="center"><strong>Execution:</strong> Canvas move list and structured Macros</td>
   </tr>
 </table>
 
@@ -209,7 +215,7 @@ Android platform backup is disabled for this Alpha. Uninstalling the App removes
 - Only one live magnifier is supported per Profile, and magnification cannot share MediaProjection with recording.
 - After a lower-screen Tab round trip, the frozen magnifier's Stop marker can occasionally be missing; stopping can also leave the final retained frame visible. These are known presentation-state issues, not proof that the frame is still live.
 
-Read the [v0.1.0-alpha.1 release notes](docs/releases/v0.1.0-alpha.1.md) for the complete tested scope, migration notes, and known limitations.
+Read the [v0.1.1-alpha.1 release notes](docs/releases/v0.1.1-alpha.1.md) for the complete tested scope, migration notes, and known limitations. The [v0.1.0-alpha.1 notes](docs/releases/v0.1.0-alpha.1.md) remain available for the previous public Alpha.
 
 ## Helpful Bug Reports
 

@@ -14,9 +14,12 @@ Android platform backup is disabled for this Alpha. Players should use the
 explicit Profile export flow before uninstalling, changing signing channels, or
 moving to another device.
 
-The Alpha Profile export is configuration JSON rather than an asset-complete
-archive. Custom Profile icons, imported Macro icons, and Canvas image files must
-be selected or imported again after uninstalling or moving to another device.
+Current Profile exports are self-contained `.heimdall-profile` bundles. In
+addition to Profile configuration, a bundle can contain supported Profile icons,
+maps, file Guides, user-imported Macro icons, and Canvas images. The bundle is
+written only to the location selected by the player. Legacy configuration-only
+JSON remains importable but cannot restore source assets that older builds never
+included. See the [Profile bundle format](PROFILE_BUNDLE_FORMAT.md).
 
 ## Accessibility
 
@@ -49,4 +52,6 @@ compatibility, but Heimdall exposes no JavaScript interface to them.
 
 Before sharing logs, screenshots, recordings, or Profile exports, remove names,
 paths, URLs, tokens, account information, and game data that should remain
-private.
+private. A `.heimdall-profile` bundle may contain the player's imported maps,
+Guides, icons, and Canvas images; treat it as private unless its contents have
+been reviewed.

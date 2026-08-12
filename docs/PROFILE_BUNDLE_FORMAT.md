@@ -1,5 +1,7 @@
 # Heimdall Profile Bundle Format
 
+English | [简体中文](PROFILE_BUNDLE_FORMAT.zh-CN.md)
+
 Heimdall exports Profiles as a self-contained `.heimdall-profile` ZIP bundle. The current format identifier is `heimdall-profile-bundle` and the schema version is `1`.
 
 ## Contents
