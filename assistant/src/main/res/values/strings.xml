@@ -666,6 +666,7 @@
     <string name="macro_icon_custom_number">Custom %1$d</string>
     <string name="touchpad_mode_route_unavailable">%1$s is not available yet. Use Touch Drag instead.</string>
     <string name="shizuku_controller_route_required">Enable the Shizuku native-controller route first</string>
+    <string name="shizuku_controller_preparing">Controller enhancement is getting ready. Try again in a moment.</string>
     <string name="settings_connection_unavailable">This connection method is currently unavailable.</string>
     <string name="settings_connection_using">Using: %1$s</string>
     <string name="settings_reset_touchpad_draft">Touch controls reset. Save to update this Profile.</string>
@@ -727,6 +728,7 @@
     <string name="native_controller_record_failed">Could not record the physical-controller input.</string>
     <string name="native_touch_shizuku_required">Start and authorize Shizuku before using native upper-screen touch.</string>
     <string name="native_touch_missing_dimensions">Native touch is missing the upper-screen dimensions.</string>
+    <string name="native_touch_preparing">Enhanced Touch is getting ready. Try again in a moment.</string>
     <string name="native_touch_connection_failed">Native touch could not connect to the Shizuku UserService.</string>
     <string name="native_touch_not_pressed">Native touch is not currently pressed.</string>
     <string name="native_touch_injection_failed">Could not send the native touch event.</string>

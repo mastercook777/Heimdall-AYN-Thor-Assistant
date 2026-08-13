@@ -11714,6 +11714,37 @@ public class AssistantActivity extends Activity {
                             0x00000000, 0x00000000,
                             HeimdallUi.RADIUS_MODULE, 0));
             applySystemGestureExclusion(this);
+            requestAdvancedInputPreparation();
+        }
+
+        private void requestAdvancedInputPreparation() {
+            String mode = TouchpadSettings.normalizeMode(touchpadSettings.mode);
+            boolean shizukuControllerMode = (TouchpadSettings.MODE_RELATIVE_MOUSE.equals(mode)
+                    || TouchpadSettings.MODE_RIGHT_STICK.equals(mode))
+                    && InputBridge.BACKEND_SHIZUKU.equals(
+                            InputBridge.selectedBackendId(AssistantActivity.this));
+            if ((TouchpadSettings.MODE_SHIZUKU_TOUCH.equals(mode) || shizukuControllerMode)
+                    && ShizukuNativeController.isPermissionGranted()) {
+                ShizukuNativeController.requestServiceBinding(AssistantActivity.this);
+            }
+        }
+
+        private boolean shizukuControllerServicePrepared() {
+            if (!InputBridge.BACKEND_SHIZUKU.equals(
+                    InputBridge.selectedBackendId(AssistantActivity.this))) {
+                return true;
+            }
+            if (ShizukuNativeController.isServiceBound()) {
+                return true;
+            }
+            boolean bindingRequested = ShizukuNativeController.requestServiceBinding(
+                    AssistantActivity.this);
+            if (bindingRequested && ShizukuNativeController.isServiceBinding()) {
+                showAction(getString(R.string.shizuku_controller_preparing));
+            } else if (!ShizukuNativeController.isServiceBound()) {
+                showErrorAction(getString(R.string.shizuku_controller_route_required));
+            }
+            return ShizukuNativeController.isServiceBound();
         }
 
         @Override
@@ -12437,8 +12468,13 @@ public class AssistantActivity extends Activity {
                     showErrorAction(getString(R.string.shizuku_controller_route_required));
                     x = -1f;
                     y = -1f;
-                } else {
-                    ShizukuNativeController.warmUp(AssistantActivity.this, 0);
+                } else if (!shizukuControllerServicePrepared()) {
+                    lastX = -1f;
+                    lastY = -1f;
+                    originX = -1f;
+                    originY = -1f;
+                    x = -1f;
+                    y = -1f;
                 }
                 invalidate();
                 return true;
@@ -12558,6 +12594,12 @@ public class AssistantActivity extends Activity {
             int action = event.getActionMasked();
             if (action == MotionEvent.ACTION_DOWN) {
                 rightStickErrorShown = false;
+                if (!shizukuControllerServicePrepared()) {
+                    rightStickGestureStarted = false;
+                    rightStickGestureActive = false;
+                    clearUnavailableGestureVisual();
+                    return true;
+                }
                 rightStickGestureStarted = true;
                 rightStickGestureActive = true;
                 if (TouchpadSettings.RIGHT_STICK_CENTER_STATIC.equals(

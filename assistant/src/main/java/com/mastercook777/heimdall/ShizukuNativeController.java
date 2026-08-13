@@ -5,10 +5,13 @@ import android.content.Context;
 import android.content.ServiceConnection;
 import android.content.pm.PackageManager;
 import android.os.IBinder;
+import android.os.Looper;
 import android.os.Parcel;
 import android.os.RemoteException;
 
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 import rikka.shizuku.Shizuku;
@@ -16,30 +19,50 @@ import rikka.shizuku.Shizuku;
 public final class ShizukuNativeController {
     static final String THOR_TOUCH_UNSUPPORTED = "THOR_TOUCH_UNSUPPORTED";
     private static final int REQUEST_CODE = 4109;
+    private static final long BIND_TIMEOUT_MS = 10_000L;
     private static final Object LOCK = new Object();
+    private static final ExecutorService BIND_EXECUTOR =
+            Executors.newSingleThreadExecutor(runnable -> {
+                Thread thread = new Thread(runnable, "shizuku-user-service-bind");
+                thread.setDaemon(true);
+                return thread;
+            });
 
     private static IBinder service;
     private static boolean binding;
     private static CountDownLatch bindLatch;
+    private static int bindGeneration;
+
+    private static final IBinder.DeathRecipient SERVICE_DEATH_RECIPIENT =
+            ShizukuNativeController::clearService;
 
     private static final ServiceConnection CONNECTION = new ServiceConnection() {
         @Override
         public void onServiceConnected(ComponentName name, IBinder binder) {
+            if (binder == null || !binder.isBinderAlive()) {
+                clearService();
+                return;
+            }
+            try {
+                binder.linkToDeath(SERVICE_DEATH_RECIPIENT, 0);
+            } catch (RemoteException error) {
+                clearService();
+                return;
+            }
             synchronized (LOCK) {
+                if (service != binder) {
+                    unlinkDeathRecipientLocked(service);
+                }
                 service = binder;
                 binding = false;
-                if (bindLatch != null) {
-                    bindLatch.countDown();
-                }
+                bindGeneration++;
+                releaseBindLatchLocked();
             }
         }
 
         @Override
         public void onServiceDisconnected(ComponentName name) {
-            synchronized (LOCK) {
-                service = null;
-                binding = false;
-            }
+            clearService();
         }
     };
 
@@ -64,6 +87,65 @@ public final class ShizukuNativeController {
 
     public static boolean isReady() {
         return isPermissionGranted();
+    }
+
+    public static boolean isServiceBound() {
+        synchronized (LOCK) {
+            if (service == null) {
+                return false;
+            }
+            if (service.isBinderAlive()) {
+                return true;
+            }
+            unlinkDeathRecipientLocked(service);
+            service = null;
+            binding = false;
+            bindGeneration++;
+            releaseBindLatchLocked();
+            return false;
+        }
+    }
+
+    public static boolean isServiceBinding() {
+        synchronized (LOCK) {
+            return binding;
+        }
+    }
+
+    /**
+     * Starts the UserService connection without executing Shizuku Binder work on the caller.
+     * This method is safe to call from TouchPad and Activity lifecycle callbacks.
+     */
+    public static boolean requestServiceBinding(Context context) {
+        if (context == null || !isPermissionGranted()) {
+            return false;
+        }
+        Context appContext = context.getApplicationContext();
+        int generation;
+        synchronized (LOCK) {
+            if (service != null && service.isBinderAlive()) {
+                return true;
+            }
+            if (service != null) {
+                unlinkDeathRecipientLocked(service);
+                service = null;
+            }
+            if (binding) {
+                return true;
+            }
+            binding = true;
+            bindLatch = new CountDownLatch(1);
+            generation = ++bindGeneration;
+        }
+        try {
+            BIND_EXECUTOR.execute(() -> bindUserService(appContext, generation));
+        } catch (RuntimeException error) {
+            failBinding(generation);
+            return false;
+        }
+        AssistantMainHandler.postDelayed(
+                () -> failBinding(generation), BIND_TIMEOUT_MS);
+        return true;
     }
 
     public static String statusLabel() {
@@ -257,31 +339,16 @@ public final class ShizukuNativeController {
     }
 
     private static IBinder getService(Context context, long waitMs) {
-        if (!isPermissionGranted()) {
+        if (isServiceBound()) {
+            synchronized (LOCK) {
+                return service;
+            }
+        }
+        if (!requestServiceBinding(context)) {
             requestPermission();
             return null;
         }
-        synchronized (LOCK) {
-            if (service != null) {
-                return service;
-            }
-            if (!binding) {
-                binding = true;
-                bindLatch = new CountDownLatch(1);
-                try {
-                    Shizuku.UserServiceArgs args = userServiceArgs(
-                            context, "heimdall_native_controller_v10", 10);
-                    Shizuku.bindUserService(args, CONNECTION);
-                } catch (Throwable t) {
-                    binding = false;
-                    if (bindLatch != null) {
-                        bindLatch.countDown();
-                    }
-                    return null;
-                }
-            }
-        }
-        if (waitMs <= 0) {
+        if (waitMs <= 0 || Looper.myLooper() == Looper.getMainLooper()) {
             synchronized (LOCK) {
                 return service;
             }
@@ -302,6 +369,32 @@ public final class ShizukuNativeController {
         }
     }
 
+    private static void bindUserService(Context context, int generation) {
+        synchronized (LOCK) {
+            if (!binding || generation != bindGeneration) {
+                return;
+            }
+        }
+        try {
+            Shizuku.UserServiceArgs args = userServiceArgs(
+                    context, "heimdall_native_controller_v10", 10);
+            Shizuku.bindUserService(args, CONNECTION);
+        } catch (Throwable error) {
+            failBinding(generation);
+        }
+    }
+
+    private static void failBinding(int generation) {
+        synchronized (LOCK) {
+            if (!binding || generation != bindGeneration) {
+                return;
+            }
+            binding = false;
+            bindGeneration++;
+            releaseBindLatchLocked();
+        }
+    }
+
     private static Shizuku.UserServiceArgs userServiceArgs(Context context, String tag, int version) {
         return new Shizuku.UserServiceArgs(
                 new ComponentName(context.getPackageName(), ShizukuNativeUserService.class.getName()))
@@ -314,8 +407,28 @@ public final class ShizukuNativeController {
 
     private static void clearService() {
         synchronized (LOCK) {
+            unlinkDeathRecipientLocked(service);
             service = null;
             binding = false;
+            bindGeneration++;
+            releaseBindLatchLocked();
+        }
+    }
+
+    private static void releaseBindLatchLocked() {
+        if (bindLatch != null) {
+            bindLatch.countDown();
+            bindLatch = null;
+        }
+    }
+
+    private static void unlinkDeathRecipientLocked(IBinder binder) {
+        if (binder == null) {
+            return;
+        }
+        try {
+            binder.unlinkToDeath(SERVICE_DEATH_RECIPIENT, 0);
+        } catch (Throwable ignored) {
         }
     }
 
