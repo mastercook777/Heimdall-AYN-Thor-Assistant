@@ -158,8 +158,13 @@ public final class ShizukuInputBackend implements InputBackend {
             callback.onError(context.getString(R.string.native_touch_missing_dimensions));
             return false;
         }
-        if (!ShizukuNativeController.warmUp(context, 1500)) {
-            callback.onError(context.getString(R.string.native_touch_connection_failed));
+        if (!ShizukuNativeController.isServiceBound()) {
+            boolean bindingRequested = ShizukuNativeController.requestServiceBinding(context);
+            if (bindingRequested && ShizukuNativeController.isServiceBinding()) {
+                callback.onStatus(context.getString(R.string.native_touch_preparing));
+            } else if (!ShizukuNativeController.isServiceBound()) {
+                callback.onError(context.getString(R.string.native_touch_connection_failed));
+            }
             return false;
         }
         synchronized (touchLock) {

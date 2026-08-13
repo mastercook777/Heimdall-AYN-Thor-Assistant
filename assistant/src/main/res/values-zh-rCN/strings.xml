@@ -661,6 +661,7 @@
     <string name="macro_icon_custom_number">自定义 %1$d</string>
     <string name="touchpad_mode_route_unavailable">%1$s 尚未接入执行路径，请先使用触屏拖动。</string>
     <string name="shizuku_controller_route_required">请先启用 Shizuku 原生手柄通道</string>
+    <string name="shizuku_controller_preparing">手柄增强功能正在准备中，很快即可使用。</string>
     <string name="settings_connection_unavailable">当前连接方式不可用。</string>
     <string name="settings_connection_using">已使用：%1$s</string>
     <string name="settings_reset_touchpad_draft">已重置触控设置草稿，保存后写入此 Profile。</string>
@@ -722,6 +723,7 @@
     <string name="native_controller_record_failed">无法录制实体手柄输入。</string>
     <string name="native_touch_shizuku_required">使用原生上屏触控前，请先启动并授权 Shizuku。</string>
     <string name="native_touch_missing_dimensions">原生触控缺少上屏尺寸。</string>
+    <string name="native_touch_preparing">增强触控正在准备中，很快即可使用。</string>
     <string name="native_touch_connection_failed">原生触控无法连接 Shizuku UserService。</string>
     <string name="native_touch_not_pressed">原生触控当前未按下。</string>
     <string name="native_touch_injection_failed">无法发送原生触控事件。</string>
