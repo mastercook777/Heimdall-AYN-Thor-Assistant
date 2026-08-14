@@ -140,8 +140,6 @@ public class AssistantActivity extends Activity {
     private static final int BORDER = HeimdallUi.COLOR_BORDER;
     private static final int DANGER = HeimdallUi.COLOR_DANGER;
     private static final int DANGER_BG = HeimdallUi.COLOR_DANGER_BG;
-    private static final int GRID_EDITOR_COLUMNS = 6;
-    private static final int GRID_EDITOR_ROWS = 8;
     private static final int SCREEN_MAIN = 0;
     private static final int SCREEN_MAP = 1;
     private static final int SCREEN_GUIDE = 2;
@@ -186,13 +184,8 @@ public class AssistantActivity extends Activity {
     private int settingsContentScrollY;
     private ProfileIconView profileIconView;
     private TextView profileTitle;
-    private TextView systemTimeText;
-    private ImageView systemNetworkIcon;
-    private BatteryStatusView systemBatteryIcon;
-    private TextView systemBatteryText;
-    private String lastSystemTime = "";
-    private String lastNetworkLabel = "";
-    private String lastBatteryLabel = "";
+    private final SystemStatusController systemStatusController =
+            new SystemStatusController(this);
     private TextView statusText;
     private final List<MacroGridBinding> macroGrids = new ArrayList<>();
     private final List<MacroModuleEditorBinding> settingsMacroModuleEditors = new ArrayList<>();
@@ -225,34 +218,6 @@ public class AssistantActivity extends Activity {
     private TouchpadSettings touchpadSettings;
     private String settingsTouchpadMode;
     private TouchpadSettings settingsTouchpadDraft;
-    private SliderInput settingsSensitivityInput;
-    private SliderInput settingsIntervalInput;
-    private SliderInput settingsMinDeltaInput;
-    private SliderInput settingsAnchorXInput;
-    private SliderInput settingsAnchorYInput;
-    private SliderInput settingsStrokeInput;
-    private SliderInput settingsShizukuTouchSensitivityXInput;
-    private SliderInput settingsShizukuTouchSensitivityYInput;
-    private SliderInput settingsShizukuTouchFrameInput;
-    private SliderInput settingsShizukuTouchMinDeltaInput;
-    private SliderInput settingsShizukuTouchCurveInput;
-    private SliderInput settingsShizukuTouchSmoothingInput;
-    private SliderInput settingsRightStickSensitivityInput;
-    private SliderInput settingsRightStickDeadzoneInput;
-    private SliderInput settingsRightStickCurveInput;
-    private SliderInput settingsRightStickMaxInput;
-    private SliderInput settingsRightStickRadiusInput;
-    private SliderInput settingsRightStickRecenterInput;
-    private String settingsRightStickCenterMode;
-    private SliderInput settingsRelativeMouseSensitivityInput;
-    private SliderInput settingsRelativeMouseMaxOutputInput;
-    private SliderInput settingsRelativeMousePulseInput;
-    private CheckBox settingsRelativeMouseInvertYInput;
-    private String settingsRelativeMouseAcceleration;
-    private SliderInput settingsVirtualMouseSensitivityInput;
-    private SliderInput settingsVirtualMouseScrollInput;
-    private CheckBox settingsVirtualMouseInvertYInput;
-    private CheckBox settingsVirtualMouseFullGestureAreaInput;
     private boolean virtualMouseEntryHintPending;
     private EditText settingsProfileNameInput;
     private EditText settingsProfilePackageInput;
@@ -264,6 +229,53 @@ public class AssistantActivity extends Activity {
     private boolean showTouchpadAdvancedSettings;
     private boolean showInputDiagnostics;
     private boolean showProfileDetectionDetails;
+    private final TouchpadSettingsController touchpadSettingsController =
+            new TouchpadSettingsController(this, new TouchpadSettingsController.Host() {
+                @Override
+                public TouchpadSettings draft() {
+                    return ensureSettingsTouchpadDraft();
+                }
+
+                @Override
+                public String mode() {
+                    return settingsTouchpadMode;
+                }
+
+                @Override
+                public void setMode(String mode) {
+                    settingsTouchpadMode = mode;
+                }
+
+                @Override
+                public boolean advancedVisible() {
+                    return showTouchpadAdvancedSettings;
+                }
+
+                @Override
+                public void setAdvancedVisible(boolean visible) {
+                    showTouchpadAdvancedSettings = visible;
+                }
+
+                @Override
+                public boolean modeAvailable(String mode) {
+                    return touchpadModeAvailable(mode);
+                }
+
+                @Override
+                public boolean relativeMouseBackendAvailable() {
+                    return AssistantActivity.this.relativeMouseBackendAvailable();
+                }
+
+                @Override
+                public void refresh() {
+                    refreshSettingsContent();
+                }
+
+                @Override
+                public void showError(String message) {
+                    showErrorAction(message);
+                }
+            });
     private TextView pendingGuideFileSummary;
     private String[] pendingGuideFileUriDraft;
     private EditText pendingGuideFileTitleInput;
@@ -387,13 +399,6 @@ public class AssistantActivity extends Activity {
             setFullscreenGuideControlsVisible(false);
         }
     };
-    private boolean statusReceiverRegistered;
-    private final BroadcastReceiver statusReceiver = new BroadcastReceiver() {
-        @Override
-        public void onReceive(Context context, Intent intent) {
-            updateSystemStatus();
-        }
-    };
     private final BroadcastReceiver captureReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
@@ -464,7 +469,7 @@ public class AssistantActivity extends Activity {
         restoreVisibleProfileDraft(savedInstanceState);
         renderProfiles();
         renderSelectedProfile();
-        startStatusUpdates();
+        systemStatusController.start();
         DebugPerformanceDiagnostics.attachRootObservers(this);
         installTextInputCompatibilityObservers();
         getWindow().getDecorView().post(() -> thorPerformanceCompatibility.apply(
@@ -634,7 +639,7 @@ public class AssistantActivity extends Activity {
         releaseLocalMapThumbnails();
         uiHandler.removeCallbacks(hideFullscreenMapControls);
         uiHandler.removeCallbacks(hideFullscreenGuideControls);
-        stopStatusUpdates();
+        systemStatusController.stop();
         unregisterReceiver(captureReceiver);
         ThorAccessibilityService.setDiagnosticScanningSuspended(false);
         thorTextInputFocusLease.cancel();
@@ -662,7 +667,7 @@ public class AssistantActivity extends Activity {
             return;
         }
         ThorAccessibilityService.setDiagnosticScanningSuspended(false);
-        startStatusUpdates();
+        systemStatusController.start();
         updateProfileAwarenessRegistration();
     }
 
@@ -706,7 +711,7 @@ public class AssistantActivity extends Activity {
         DebugPerformanceDiagnostics.unregisterRepeatingTask(
                 "App-aware upper-window scan");
         ForegroundAppTracker.clearListener(foregroundAppListener);
-        stopStatusUpdates();
+        systemStatusController.stop();
         super.onStop();
     }
 
@@ -1130,7 +1135,7 @@ public class AssistantActivity extends Activity {
             enterImmersiveMode();
             if (!DebugPerformanceDiagnostics.isStaticUi()) {
                 updateBridgeStatus();
-                updateSystemStatus();
+                systemStatusController.update();
                 if (activeScreen == SCREEN_SETTINGS
                         && activeSettingsSection == SETTINGS_INPUT
                         && settingsContentContainer != null) {
@@ -1269,141 +1274,6 @@ public class AssistantActivity extends Activity {
         registerReceiver(captureReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
     }
 
-    private void startStatusUpdates() {
-        updateSystemStatus();
-        if (DebugPerformanceDiagnostics.isStaticUi() || statusReceiverRegistered) {
-            return;
-        }
-        IntentFilter filter = new IntentFilter(Intent.ACTION_TIME_TICK);
-        filter.addAction(Intent.ACTION_TIME_CHANGED);
-        filter.addAction(Intent.ACTION_TIMEZONE_CHANGED);
-        filter.addAction(Intent.ACTION_BATTERY_CHANGED);
-        filter.addAction(ConnectivityManager.CONNECTIVITY_ACTION);
-        registerReceiver(statusReceiver, filter);
-        statusReceiverRegistered = true;
-    }
-
-    private void stopStatusUpdates() {
-        if (!statusReceiverRegistered) {
-            return;
-        }
-        unregisterReceiver(statusReceiver);
-        statusReceiverRegistered = false;
-    }
-
-    private void updateSystemStatus() {
-        if (systemTimeText == null || systemBatteryText == null || systemNetworkIcon == null || systemBatteryIcon == null) {
-            return;
-        }
-        String time = new SimpleDateFormat("h:mm a", Locale.US).format(new Date());
-        if (!time.equals(lastSystemTime)) {
-            systemTimeText.setText(time);
-            lastSystemTime = time;
-        }
-        String network = networkLabel();
-        if (!network.equals(lastNetworkLabel)) {
-            systemNetworkIcon.setImageResource(networkIconForLabel(network));
-            systemNetworkIcon.setAlpha("No net".equals(network) ? 0.55f : 1f);
-            lastNetworkLabel = network;
-        }
-        BatterySnapshot battery = batterySnapshot();
-        systemBatteryIcon.setBattery(battery.percent, battery.charging);
-        String batteryLabel = battery.label();
-        if (!batteryLabel.equals(lastBatteryLabel)) {
-            systemBatteryText.setText(batteryLabel);
-            lastBatteryLabel = batteryLabel;
-        }
-    }
-
-    private String batteryLabel() {
-        return batterySnapshot().label();
-    }
-
-    private BatterySnapshot batterySnapshot() {
-        Intent intent = registerReceiver(null, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
-        if (intent == null) {
-            return new BatterySnapshot(-1, false);
-        }
-        int level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1);
-        int scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, -1);
-        if (level < 0 || scale <= 0) {
-            return new BatterySnapshot(-1, false);
-        }
-        int percent = Math.round(level * 100f / scale);
-        int status = intent.getIntExtra(BatteryManager.EXTRA_STATUS, -1);
-        boolean charging = status == BatteryManager.BATTERY_STATUS_CHARGING
-                || status == BatteryManager.BATTERY_STATUS_FULL;
-        return new BatterySnapshot(percent, charging);
-    }
-
-    private int networkIconForLabel(String label) {
-        if ("Wi-Fi".equals(label)) {
-            return R.drawable.ic_status_wifi;
-        }
-        return R.drawable.ic_status_wifi_off;
-    }
-
-    private int batteryIconFor(int percent, boolean charging) {
-        if (charging) {
-            return R.drawable.ic_status_battery_charging;
-        }
-        if (percent < 0) {
-            return R.drawable.ic_status_battery_25;
-        }
-        if (percent <= 30) {
-            return R.drawable.ic_status_battery_25;
-        }
-        if (percent <= 60) {
-            return R.drawable.ic_status_battery_50;
-        }
-        if (percent <= 85) {
-            return R.drawable.ic_status_battery_75;
-        }
-        return R.drawable.ic_status_battery;
-    }
-
-    private String networkLabel() {
-        ConnectivityManager manager = (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
-        if (manager == null) {
-            return "No net";
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            NetworkCapabilities capabilities = manager.getNetworkCapabilities(manager.getActiveNetwork());
-            if (capabilities == null) {
-                return "No net";
-            }
-            if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
-                return "Wi-Fi";
-            }
-            if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) {
-                return "Cell";
-            }
-            if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)) {
-                return "LAN";
-            }
-            return "Net";
-        }
-        return manager.getActiveNetworkInfo() != null && manager.getActiveNetworkInfo().isConnected()
-                ? "Net" : "No net";
-    }
-
-    private static final class BatterySnapshot {
-        final int percent;
-        final boolean charging;
-
-        BatterySnapshot(int percent, boolean charging) {
-            this.percent = percent;
-            this.charging = charging;
-        }
-
-        String label() {
-            if (percent < 0) {
-                return "--%";
-            }
-            return percent + "%" + (charging ? "+" : "");
-        }
-    }
-
     private void enterImmersiveMode() {
         Window window = getWindow();
         window.setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN);
@@ -1487,25 +1357,28 @@ public class AssistantActivity extends Activity {
         systemStatus.setGravity(Gravity.CENTER_VERTICAL | Gravity.RIGHT);
         header.addView(systemStatus, new LinearLayout.LayoutParams(0, -1, 1));
 
-        systemTimeText = text("", 13, TEXT, true);
+        TextView systemTimeText = text("", 13, TEXT, true);
         systemTimeText.setGravity(Gravity.CENTER_VERTICAL | Gravity.RIGHT);
         systemStatus.addView(systemTimeText, new LinearLayout.LayoutParams(-2, -1));
 
-        systemNetworkIcon = new ImageView(this);
+        ImageView systemNetworkIcon = new ImageView(this);
         systemNetworkIcon.setImageResource(R.drawable.ic_status_wifi);
         systemNetworkIcon.setColorFilter(HeimdallUi.textColor(this));
         LinearLayout.LayoutParams networkParams = new LinearLayout.LayoutParams(dp(18), dp(18));
         networkParams.setMargins(dp(10), 0, dp(6), 0);
         systemStatus.addView(systemNetworkIcon, networkParams);
 
-        systemBatteryIcon = new BatteryStatusView(this);
+        SystemStatusController.BatteryStatusView systemBatteryIcon =
+                systemStatusController.createBatteryView();
         LinearLayout.LayoutParams batteryIconParams = new LinearLayout.LayoutParams(dp(20), dp(20));
         batteryIconParams.setMargins(dp(2), 0, dp(4), 0);
         systemStatus.addView(systemBatteryIcon, batteryIconParams);
 
-        systemBatteryText = text("", 13, TEXT, true);
+        TextView systemBatteryText = text("", 13, TEXT, true);
         systemBatteryText.setGravity(Gravity.CENTER_VERTICAL | Gravity.RIGHT);
         systemStatus.addView(systemBatteryText, new LinearLayout.LayoutParams(-2, -1));
+        systemStatusController.bind(systemTimeText, systemNetworkIcon,
+                systemBatteryIcon, systemBatteryText);
 
         contentHost = new FrameLayout(this);
         currentContentPage = createContentPage(activeScreen);
@@ -3827,188 +3700,7 @@ public class AssistantActivity extends Activity {
     }
 
     private void populateTouchpadSettingsContent(LinearLayout content) {
-        clearSettingsTouchpadInputs();
-        TouchpadSettings draft = ensureSettingsTouchpadDraft();
-        settingsTouchpadMode = TouchpadSettings.normalizeMode(draft.mode);
-        LinearLayout modeRow = settingsActionRow(content);
-        modeRow.addView(touchpadModeButton(getString(R.string.touch_mode_compatible),
-                TouchpadSettings.MODE_TOUCH_DRAG));
-        modeRow.addView(touchpadModeButton(getString(R.string.touch_mode_precision_aim),
-                TouchpadSettings.MODE_RELATIVE_MOUSE));
-
-        LinearLayout modeRow2 = settingsActionRow(content);
-        modeRow2.addView(touchpadModeButton(getString(R.string.touch_mode_virtual_right_stick),
-                TouchpadSettings.MODE_RIGHT_STICK));
-        modeRow2.addView(touchpadModeButton(getString(R.string.touch_mode_enhanced),
-                TouchpadSettings.MODE_SHIZUKU_TOUCH));
-
-        LinearLayout modeRow3 = settingsActionRow(content);
-        modeRow3.addView(touchpadModeButton(getString(R.string.touch_mode_virtual_mouse),
-                TouchpadSettings.MODE_VIRTUAL_MOUSE));
-
-        if (!relativeMouseBackendAvailable()) {
-            addSettingsHelp(content,
-                    getString(R.string.touch_precision_requires_controller));
-        }
-
-        if (TouchpadSettings.MODE_VIRTUAL_MOUSE.equals(settingsTouchpadMode)) {
-            settingsVirtualMouseSensitivityInput = settingsSliderInput(content,
-                    getString(R.string.touch_virtual_mouse_sensitivity), 0.2f, 4f,
-                    draft.virtualMouseSensitivity, 10, "x");
-            settingsVirtualMouseScrollInput = settingsSliderInput(content,
-                    getString(R.string.touch_virtual_mouse_scroll), 16f, 96f,
-                    draft.virtualMouseScrollDistance, 1, "px");
-            settingsVirtualMouseInvertYInput = new CheckBox(this);
-            settingsVirtualMouseInvertYInput.setText(getString(R.string.touch_invert_vertical));
-            settingsVirtualMouseInvertYInput.setTextSize(12);
-            styleCheckBox(settingsVirtualMouseInvertYInput);
-            settingsVirtualMouseInvertYInput.setChecked(draft.virtualMouseInvertY);
-            content.addView(settingsVirtualMouseInvertYInput,
-                    new LinearLayout.LayoutParams(-1, dp(42)));
-            settingsVirtualMouseFullGestureAreaInput = new CheckBox(this);
-            settingsVirtualMouseFullGestureAreaInput.setText(
-                    getString(R.string.touch_virtual_mouse_full_gesture_area));
-            settingsVirtualMouseFullGestureAreaInput.setTextSize(12);
-            styleCheckBox(settingsVirtualMouseFullGestureAreaInput);
-            settingsVirtualMouseFullGestureAreaInput.setChecked(
-                    draft.virtualMouseFullGestureArea);
-            content.addView(settingsVirtualMouseFullGestureAreaInput,
-                    new LinearLayout.LayoutParams(-1, dp(42)));
-            addSettingsHelp(content,
-                    getString(R.string.touch_virtual_mouse_full_gesture_area_help));
-            addSettingsHelp(content, getString(R.string.touch_virtual_mouse_help));
-        } else if (TouchpadSettings.MODE_RELATIVE_MOUSE.equals(settingsTouchpadMode)) {
-            settingsRelativeMouseSensitivityInput = settingsSliderInput(content,
-                    getString(R.string.touch_aim_sensitivity), 0.2f, 4f,
-                    draft.relativeMouseSensitivity, 10, "x");
-            settingsRelativeMouseMaxOutputInput = settingsSliderInput(content,
-                    getString(R.string.touch_max_output), 10f, 100f,
-                    Math.round(draft.relativeMouseMaxOutputPercent * 100f), 1, "%");
-
-            addSettingsLabel(content, getString(R.string.touch_response_curve));
-            settingsRelativeMouseAcceleration =
-                    TouchpadSettings.normalizeRelativeMouseAcceleration(draft.relativeMouseAcceleration);
-            LinearLayout accelerationRow = settingsActionRow(content);
-            accelerationRow.addView(relativeMouseAccelerationButton(
-                    getString(R.string.touch_curve_off),
-                    TouchpadSettings.RELATIVE_MOUSE_ACCELERATION_OFF));
-            accelerationRow.addView(relativeMouseAccelerationButton(
-                    getString(R.string.touch_curve_gentle),
-                    TouchpadSettings.RELATIVE_MOUSE_ACCELERATION_LOW));
-            accelerationRow.addView(relativeMouseAccelerationButton(
-                    getString(R.string.touch_curve_balanced),
-                    TouchpadSettings.RELATIVE_MOUSE_ACCELERATION_MEDIUM));
-            accelerationRow.addView(relativeMouseAccelerationButton(
-                    getString(R.string.touch_curve_fast),
-                    TouchpadSettings.RELATIVE_MOUSE_ACCELERATION_HIGH));
-
-            settingsRelativeMouseInvertYInput = new CheckBox(this);
-            settingsRelativeMouseInvertYInput.setText(
-                    getString(R.string.touch_invert_vertical));
-            settingsRelativeMouseInvertYInput.setTextSize(12);
-            styleCheckBox(settingsRelativeMouseInvertYInput);
-            settingsRelativeMouseInvertYInput.setChecked(draft.relativeMouseInvertY);
-            content.addView(settingsRelativeMouseInvertYInput,
-                    new LinearLayout.LayoutParams(-1, dp(42)));
-
-            addTouchpadAdvancedToggle(content);
-            if (showTouchpadAdvancedSettings) {
-                settingsRelativeMousePulseInput = settingsSliderInput(content,
-                    getString(R.string.touch_response_duration), 8f, 24f,
-                        draft.relativeMousePulseDurationMs, 1, "ms");
-            }
-            addSettingsHelp(content, getString(R.string.touch_precision_help));
-        } else if (TouchpadSettings.MODE_RIGHT_STICK.equals(settingsTouchpadMode)) {
-            settingsRightStickCenterMode = TouchpadSettings.normalizeRightStickCenterMode(draft.rightStickCenterMode);
-            addSettingsLabel(content, getString(R.string.touch_stick_center));
-            LinearLayout centerModeRow = settingsActionRow(content);
-            centerModeRow.addView(rightStickCenterModeButton(
-                    getString(R.string.touch_center_dynamic),
-                    TouchpadSettings.RIGHT_STICK_CENTER_FLOAT));
-            centerModeRow.addView(rightStickCenterModeButton(
-                    getString(R.string.touch_center_fixed),
-                    TouchpadSettings.RIGHT_STICK_CENTER_STATIC));
-            settingsRightStickSensitivityInput = settingsSliderInput(content,
-                    getString(R.string.touch_sensitivity), 0.2f, 4f,
-                    draft.rightStickSensitivity, 10, "x");
-            settingsRightStickDeadzoneInput = settingsSliderInput(content,
-                    getString(R.string.touch_deadzone), 0f, 40f,
-                    Math.round(draft.rightStickDeadzone * 100f), 1, "%");
-            settingsRightStickCurveInput = settingsSliderInput(content,
-                    getString(R.string.touch_feel_curve), 0.5f, 3f,
-                    draft.rightStickCurve, 10, "");
-            settingsRightStickMaxInput = settingsSliderInput(content,
-                    getString(R.string.touch_max_output), 10f, 100f,
-                    Math.round(draft.rightStickMaxOutput * 100f), 1, "%");
-            addTouchpadAdvancedToggle(content);
-            if (showTouchpadAdvancedSettings) {
-            settingsRightStickRadiusInput = settingsSliderInput(content,
-                    getString(R.string.touch_operation_radius), 18f, 80f,
-                    Math.round(draft.rightStickRadius * 100f), 1, "%");
-            settingsRightStickRecenterInput = settingsSliderInput(content,
-                    getString(R.string.touch_recenter_strength), 1f, 8f,
-                    draft.rightStickRecenterBursts, 1, "");
-            settingsIntervalInput = settingsSliderInput(content,
-                    getString(R.string.touch_response_interval), 0f, 80f,
-                    draft.intervalMs, 1, "ms");
-            }
-            addSettingsHelp(content, getString(R.string.touch_right_stick_help));
-        } else if (TouchpadSettings.MODE_SHIZUKU_TOUCH.equals(settingsTouchpadMode)) {
-            settingsShizukuTouchSensitivityXInput = settingsSliderInput(content,
-                    getString(R.string.touch_horizontal_sensitivity), 0.2f, 12f,
-                    draft.shizukuTouchSensitivityX, 10, "x");
-            settingsShizukuTouchSensitivityYInput = settingsSliderInput(content,
-                    getString(R.string.touch_vertical_sensitivity), 0.2f, 12f,
-                    draft.shizukuTouchSensitivityY, 10, "x");
-            settingsShizukuTouchSmoothingInput = settingsSliderInput(content,
-                    getString(R.string.touch_smoothing), 0f, 90f,
-                    Math.round(draft.shizukuTouchSmoothing * 100f), 1, "%");
-            addTouchpadAdvancedToggle(content);
-            if (showTouchpadAdvancedSettings) {
-            settingsShizukuTouchFrameInput = settingsSliderInput(content,
-                    getString(R.string.touch_response_interval), 4f, 33f,
-                    draft.shizukuTouchFrameMs, 1, "ms");
-            settingsShizukuTouchMinDeltaInput = settingsSliderInput(content,
-                    getString(R.string.touch_minimum_movement), 0f, 20f,
-                    draft.shizukuTouchMinDelta, 10, "px");
-            settingsShizukuTouchCurveInput = settingsSliderInput(content,
-                    getString(R.string.touch_feel_curve), 0.5f, 3f,
-                    draft.shizukuTouchCurve, 10, "");
-            settingsAnchorXInput = settingsSliderInput(content,
-                    getString(R.string.touch_start_x), 5f, 95f,
-                    Math.round(draft.anchorX * 100f), 1, "%");
-            settingsAnchorYInput = settingsSliderInput(content,
-                    getString(R.string.touch_start_y), 5f, 95f,
-                    Math.round(draft.anchorY * 100f), 1, "%");
-            }
-            addSettingsHelp(content, getString(R.string.touch_enhanced_help));
-        } else if (TouchpadSettings.MODE_TOUCH_DRAG.equals(settingsTouchpadMode)) {
-            settingsSensitivityInput = settingsSliderInput(content,
-                    getString(R.string.touch_sensitivity), 0.2f, 12f,
-                    draft.sensitivity, 10, "x");
-            addTouchpadAdvancedToggle(content);
-            if (showTouchpadAdvancedSettings) {
-            settingsIntervalInput = settingsSliderInput(content,
-                    getString(R.string.touch_response_interval), 0f, 160f,
-                    draft.intervalMs, 1, "ms");
-            settingsMinDeltaInput = settingsSliderInput(content,
-                    getString(R.string.touch_minimum_movement), 0f, 20f,
-                    draft.minDelta, 10, "px");
-            settingsAnchorXInput = settingsSliderInput(content,
-                    getString(R.string.touch_start_x), 5f, 95f,
-                    Math.round(draft.anchorX * 100f), 1, "%");
-            settingsAnchorYInput = settingsSliderInput(content,
-                    getString(R.string.touch_start_y), 5f, 95f,
-                    Math.round(draft.anchorY * 100f), 1, "%");
-            settingsStrokeInput = settingsSliderInput(content,
-                    getString(R.string.touch_press_duration), 1f, 80f,
-                    draft.strokeMs, 1, "ms");
-            }
-            addSettingsHelp(content, getString(R.string.touch_compatible_help));
-        } else {
-            addSettingsHelp(content, getString(R.string.touch_no_extra_tuning,
-                    localizedTouchpadModeLabel(settingsTouchpadMode)));
-        }
+        touchpadSettingsController.populate(content);
     }
 
     private void populateMacroSettingsContent(LinearLayout content) {
@@ -4837,17 +4529,6 @@ public class AssistantActivity extends Activity {
         content.addView(button, buttonParams);
     }
 
-    private void addTouchpadAdvancedToggle(LinearLayout content) {
-        LinearLayout row = settingsActionRow(content);
-        row.addView(editorButton(showTouchpadAdvancedSettings
-                ? getString(R.string.touch_collapse_advanced_tuning)
-                : getString(R.string.touch_advanced_tuning), () -> {
-            applySettingsTouchpadInputs();
-            showTouchpadAdvancedSettings = !showTouchpadAdvancedSettings;
-            refreshSettingsContent();
-        }));
-    }
-
     private EditText settingsEditText(String value) {
         EditText input = new EditText(this);
         input.setSingleLine(true);
@@ -4860,47 +4541,8 @@ public class AssistantActivity extends Activity {
         return input;
     }
 
-    private Button touchpadModeButton(String label, String mode) {
-        Button button = editorButton(label, () -> selectTouchpadModeDraft(mode));
-        boolean selected = mode.equals(settingsTouchpadMode);
-        HeimdallUi.applyChoiceButton(this, button, selected);
-        if (TouchpadSettings.MODE_RELATIVE_MOUSE.equals(mode)
-                && !relativeMouseBackendAvailable()) {
-            button.setEnabled(false);
-            button.setAlpha(0.45f);
-            button.setContentDescription(getString(
-                    R.string.touch_precision_requires_controller_description));
-        }
-        if (TouchpadSettings.MODE_VIRTUAL_MOUSE.equals(mode)
-                && !ShizukuNativeController.isReady()) {
-            button.setEnabled(false);
-            button.setAlpha(0.45f);
-            button.setContentDescription(getString(R.string.virtual_mouse_unavailable));
-        }
-        return button;
-    }
-
     private String localizedTouchpadModeLabel(String mode) {
-        String normalized = TouchpadSettings.normalizeMode(mode);
-        if (TouchpadSettings.MODE_RELATIVE_MOVE.equals(normalized)) {
-            return getString(R.string.touch_mode_relative_move);
-        }
-        if (TouchpadSettings.MODE_MOUSE_POINTER.equals(normalized)) {
-            return getString(R.string.touch_mode_mouse_pointer);
-        }
-        if (TouchpadSettings.MODE_VIRTUAL_MOUSE.equals(normalized)) {
-            return getString(R.string.touch_mode_virtual_mouse);
-        }
-        if (TouchpadSettings.MODE_RIGHT_STICK.equals(normalized)) {
-            return getString(R.string.touch_mode_virtual_right_stick);
-        }
-        if (TouchpadSettings.MODE_SHIZUKU_TOUCH.equals(normalized)) {
-            return getString(R.string.touch_mode_enhanced);
-        }
-        if (TouchpadSettings.MODE_RELATIVE_MOUSE.equals(normalized)) {
-            return getString(R.string.touch_mode_precision_aim);
-        }
-        return getString(R.string.touch_mode_compatible);
+        return TouchpadSettingsController.localizedModeLabel(this, mode);
     }
 
     private TouchpadSettings ensureSettingsTouchpadDraft() {
@@ -4911,53 +4553,11 @@ public class AssistantActivity extends Activity {
     }
 
     private void selectTouchpadModeDraft(String mode) {
-        if (!touchpadModeAvailable(mode)) {
-            if (TouchpadSettings.MODE_RELATIVE_MOUSE.equals(mode)) {
-                showErrorAction(getString(R.string.action_controller_enhancement_required));
-                return;
-            }
-            if (TouchpadSettings.MODE_VIRTUAL_MOUSE.equals(mode)) {
-                showErrorAction(getString(R.string.virtual_mouse_unavailable));
-                return;
-            }
-            showErrorAction(getString(R.string.action_connection_setup_required));
-            return;
-        }
-        applySettingsTouchpadInputs();
-        ensureSettingsTouchpadDraft().mode = mode;
-        settingsTouchpadMode = TouchpadSettings.normalizeMode(mode);
-        refreshSettingsContent();
+        touchpadSettingsController.selectMode(mode);
     }
 
     private void clearSettingsTouchpadInputs() {
-        settingsSensitivityInput = null;
-        settingsIntervalInput = null;
-        settingsMinDeltaInput = null;
-        settingsAnchorXInput = null;
-        settingsAnchorYInput = null;
-        settingsStrokeInput = null;
-        settingsShizukuTouchSensitivityXInput = null;
-        settingsShizukuTouchSensitivityYInput = null;
-        settingsShizukuTouchFrameInput = null;
-        settingsShizukuTouchMinDeltaInput = null;
-        settingsShizukuTouchCurveInput = null;
-        settingsShizukuTouchSmoothingInput = null;
-        settingsRightStickSensitivityInput = null;
-        settingsRightStickDeadzoneInput = null;
-        settingsRightStickCurveInput = null;
-        settingsRightStickMaxInput = null;
-        settingsRightStickRadiusInput = null;
-        settingsRightStickRecenterInput = null;
-        settingsRightStickCenterMode = null;
-        settingsRelativeMouseSensitivityInput = null;
-        settingsRelativeMouseMaxOutputInput = null;
-        settingsRelativeMousePulseInput = null;
-        settingsRelativeMouseInvertYInput = null;
-        settingsRelativeMouseAcceleration = null;
-        settingsVirtualMouseSensitivityInput = null;
-        settingsVirtualMouseScrollInput = null;
-        settingsVirtualMouseInvertYInput = null;
-        settingsVirtualMouseFullGestureAreaInput = null;
+        touchpadSettingsController.clearInputs();
     }
 
     private void addSettingsHelp(LinearLayout content, String message) {
@@ -5107,129 +4707,8 @@ public class AssistantActivity extends Activity {
         return Math.max(dp(320), Math.min(dp(preferredDp), available));
     }
 
-    private Button rightStickCenterModeButton(String label, String mode) {
-        Button button = editorButton(label, () -> selectRightStickCenterModeDraft(mode));
-        boolean selected = mode.equals(settingsRightStickCenterMode);
-        HeimdallUi.applyChoiceButton(this, button, selected);
-        return button;
-    }
-
-    private void selectRightStickCenterModeDraft(String mode) {
-        applySettingsTouchpadInputs();
-        settingsRightStickCenterMode = TouchpadSettings.normalizeRightStickCenterMode(mode);
-        ensureSettingsTouchpadDraft().rightStickCenterMode = settingsRightStickCenterMode;
-        refreshSettingsContent();
-    }
-
-    private Button relativeMouseAccelerationButton(String label, String acceleration) {
-        Button button = editorButton(label, () -> selectRelativeMouseAccelerationDraft(acceleration));
-        button.setTextSize(HeimdallUi.TYPE_BUTTON_COMPACT);
-        button.setPadding(dp(HeimdallUi.SPACE_1), 0, dp(HeimdallUi.SPACE_1), 0);
-        boolean selected = acceleration.equals(settingsRelativeMouseAcceleration);
-        HeimdallUi.applyChoiceButton(this, button, selected);
-        return button;
-    }
-
-    private void selectRelativeMouseAccelerationDraft(String acceleration) {
-        applySettingsTouchpadInputs();
-        settingsRelativeMouseAcceleration =
-                TouchpadSettings.normalizeRelativeMouseAcceleration(acceleration);
-        ensureSettingsTouchpadDraft().relativeMouseAcceleration = settingsRelativeMouseAcceleration;
-        refreshSettingsContent();
-    }
-
     private void applySettingsTouchpadInputs() {
-        TouchpadSettings draft = ensureSettingsTouchpadDraft();
-        if (settingsTouchpadMode != null) {
-            draft.mode = settingsTouchpadMode;
-        }
-        if (settingsRightStickCenterMode != null) {
-            draft.rightStickCenterMode = settingsRightStickCenterMode;
-        }
-        if (settingsSensitivityInput != null) {
-            draft.sensitivity = settingsSensitivityInput.floatValue();
-        }
-        if (settingsIntervalInput != null) {
-            draft.intervalMs = settingsIntervalInput.intValue();
-        }
-        if (settingsMinDeltaInput != null) {
-            draft.minDelta = settingsMinDeltaInput.floatValue();
-        }
-        if (settingsAnchorXInput != null) {
-            draft.anchorX = settingsAnchorXInput.floatValue() / 100f;
-        }
-        if (settingsAnchorYInput != null) {
-            draft.anchorY = settingsAnchorYInput.floatValue() / 100f;
-        }
-        if (settingsStrokeInput != null) {
-            draft.strokeMs = settingsStrokeInput.intValue();
-        }
-        if (settingsShizukuTouchSensitivityXInput != null) {
-            draft.shizukuTouchSensitivityX = settingsShizukuTouchSensitivityXInput.floatValue();
-        }
-        if (settingsShizukuTouchSensitivityYInput != null) {
-            draft.shizukuTouchSensitivityY = settingsShizukuTouchSensitivityYInput.floatValue();
-        }
-        if (settingsShizukuTouchFrameInput != null) {
-            draft.shizukuTouchFrameMs = settingsShizukuTouchFrameInput.intValue();
-        }
-        if (settingsShizukuTouchMinDeltaInput != null) {
-            draft.shizukuTouchMinDelta = settingsShizukuTouchMinDeltaInput.floatValue();
-        }
-        if (settingsShizukuTouchCurveInput != null) {
-            draft.shizukuTouchCurve = settingsShizukuTouchCurveInput.floatValue();
-        }
-        if (settingsShizukuTouchSmoothingInput != null) {
-            draft.shizukuTouchSmoothing = settingsShizukuTouchSmoothingInput.floatValue() / 100f;
-        }
-        if (settingsRightStickSensitivityInput != null) {
-            draft.rightStickSensitivity = settingsRightStickSensitivityInput.floatValue();
-        }
-        if (settingsRightStickDeadzoneInput != null) {
-            draft.rightStickDeadzone = settingsRightStickDeadzoneInput.floatValue() / 100f;
-        }
-        if (settingsRightStickCurveInput != null) {
-            draft.rightStickCurve = settingsRightStickCurveInput.floatValue();
-        }
-        if (settingsRightStickMaxInput != null) {
-            draft.rightStickMaxOutput = settingsRightStickMaxInput.floatValue() / 100f;
-        }
-        if (settingsRightStickRadiusInput != null) {
-            draft.rightStickRadius = settingsRightStickRadiusInput.floatValue() / 100f;
-        }
-        if (settingsRightStickRecenterInput != null) {
-            draft.rightStickRecenterBursts = settingsRightStickRecenterInput.intValue();
-        }
-        if (settingsRelativeMouseSensitivityInput != null) {
-            draft.relativeMouseSensitivity = settingsRelativeMouseSensitivityInput.floatValue();
-        }
-        if (settingsRelativeMouseMaxOutputInput != null) {
-            draft.relativeMouseMaxOutputPercent =
-                    settingsRelativeMouseMaxOutputInput.floatValue() / 100f;
-        }
-        if (settingsRelativeMousePulseInput != null) {
-            draft.relativeMousePulseDurationMs = settingsRelativeMousePulseInput.intValue();
-        }
-        if (settingsRelativeMouseInvertYInput != null) {
-            draft.relativeMouseInvertY = settingsRelativeMouseInvertYInput.isChecked();
-        }
-        if (settingsRelativeMouseAcceleration != null) {
-            draft.relativeMouseAcceleration =
-                    TouchpadSettings.normalizeRelativeMouseAcceleration(settingsRelativeMouseAcceleration);
-        }
-        if (settingsVirtualMouseSensitivityInput != null) {
-            draft.virtualMouseSensitivity = settingsVirtualMouseSensitivityInput.floatValue();
-        }
-        if (settingsVirtualMouseScrollInput != null) {
-            draft.virtualMouseScrollDistance = settingsVirtualMouseScrollInput.floatValue();
-        }
-        if (settingsVirtualMouseInvertYInput != null) {
-            draft.virtualMouseInvertY = settingsVirtualMouseInvertYInput.isChecked();
-        }
-        if (settingsVirtualMouseFullGestureAreaInput != null) {
-            draft.virtualMouseFullGestureArea =
-                    settingsVirtualMouseFullGestureAreaInput.isChecked();
-        }
+        touchpadSettingsController.applyInputs();
     }
 
     private void applySettingsMacroModuleInputs() {
@@ -5540,7 +5019,7 @@ public class AssistantActivity extends Activity {
         editor.addView(titleRow, new LinearLayout.LayoutParams(-1, dp(32)));
 
         TextView title = text(getString(R.string.grid_editor_title,
-                GRID_EDITOR_COLUMNS, GRID_EDITOR_ROWS), 13, TEXT, true);
+                WidgetGridEditor.COLUMNS, WidgetGridEditor.ROWS), 13, TEXT, true);
         title.setGravity(Gravity.CENTER_VERTICAL | Gravity.LEFT);
         titleRow.addView(title, new LinearLayout.LayoutParams(0, -1, 1));
 
@@ -5559,7 +5038,37 @@ public class AssistantActivity extends Activity {
         help.setPadding(dp(4), 0, 0, 0);
         editor.addView(help, new LinearLayout.LayoutParams(-1, dp(18)));
 
-        GridEditorView gridEditor = new GridEditorView(this);
+        WidgetGridEditor gridEditor = new WidgetGridEditor(this, new WidgetGridEditor.Host() {
+            @Override
+            public WidgetLayout currentLayout() {
+                return currentWidgetLayout();
+            }
+
+            @Override
+            public WidgetLayout editableLayout() {
+                return editableWidgetLayout();
+            }
+
+            @Override
+            public void replaceDraftLayout(WidgetLayout layout) {
+                draftWidgetLayout = layout;
+            }
+
+            @Override
+            public void ensureMacroCapacity(int requiredCount) {
+                AssistantActivity.this.ensureMacroCapacity(requiredCount);
+            }
+
+            @Override
+            public void showDebug(String message) {
+                showDebugAction(message);
+            }
+
+            @Override
+            public void showError(String message) {
+                showErrorAction(message);
+            }
+        });
         applySystemGestureExclusion(gridEditor);
         editor.addView(gridEditor, new LinearLayout.LayoutParams(-1, 0, 1));
 
@@ -5567,28 +5076,25 @@ public class AssistantActivity extends Activity {
         actions.setOrientation(LinearLayout.HORIZONTAL);
         editor.addView(actions, new LinearLayout.LayoutParams(-1, dp(38)));
         actions.addView(editorButton(getString(R.string.grid_editor_add_macro),
-                () -> addWidgetFromEditor(WidgetLayout.TYPE_MACRO_GROUP, gridEditor)));
+                () -> gridEditor.addWidget(WidgetLayout.TYPE_MACRO_GROUP)));
         actions.addView(editorButton(getString(R.string.grid_editor_add_touch),
-                () -> addWidgetFromEditor(WidgetLayout.TYPE_TOUCHPAD, gridEditor)));
+                () -> gridEditor.addWidget(WidgetLayout.TYPE_TOUCHPAD)));
         actions.addView(editorButton(getString(R.string.grid_editor_add_magnifier),
-                () -> addWidgetFromEditor(WidgetLayout.TYPE_MAGNIFIER, gridEditor)));
+                () -> gridEditor.addWidget(WidgetLayout.TYPE_MAGNIFIER)));
         actions.addView(editorButton(getString(R.string.grid_editor_add_canvas),
-                () -> addWidgetFromEditor(WidgetLayout.TYPE_CANVAS, gridEditor)));
+                () -> gridEditor.addWidget(WidgetLayout.TYPE_CANVAS)));
         actions.addView(editorButton(getString(R.string.grid_editor_add_quick_actions),
-                () -> addWidgetFromEditor(WidgetLayout.TYPE_QUICK_ACTIONS, gridEditor)));
+                () -> gridEditor.addWidget(WidgetLayout.TYPE_QUICK_ACTIONS)));
 
         LinearLayout editActions = new LinearLayout(this);
         editActions.setOrientation(LinearLayout.HORIZONTAL);
         editor.addView(editActions, new LinearLayout.LayoutParams(-1, dp(38)));
         editActions.addView(editorButton(getString(R.string.grid_editor_copy),
-                () -> duplicateSelectedWidget(gridEditor)));
+                gridEditor::duplicateSelectedWidget));
         editActions.addView(editorButton(getString(R.string.grid_editor_delete),
-                () -> deleteSelectedWidget(gridEditor)));
-        editActions.addView(editorButton(getString(R.string.grid_editor_reset), () -> {
-            draftWidgetLayout = WidgetLayout.defaultLayout();
-            gridEditor.invalidate();
-            showDebugAction(getString(R.string.grid_editor_reset_preview));
-        }));
+                gridEditor::deleteSelectedWidget));
+        editActions.addView(editorButton(getString(R.string.grid_editor_reset),
+                gridEditor::resetPreview));
 
         widgetGridDialog = new AlertDialog.Builder(this)
                 .setView(editor)
@@ -5612,626 +5118,9 @@ public class AssistantActivity extends Activity {
 
     private void normalizeGridEditorLayout() {
         WidgetLayout layout = editableWidgetLayout();
-        layout.columns = GRID_EDITOR_COLUMNS;
-        layout.rows = GRID_EDITOR_ROWS;
+        layout.columns = WidgetGridEditor.COLUMNS;
+        layout.rows = WidgetGridEditor.ROWS;
         layout.sanitize();
-    }
-
-    private int widgetPreviewColor(String type) {
-        if (HeimdallUi.isPearl(this)) {
-            if (WidgetLayout.TYPE_TOUCHPAD.equals(type)) {
-                return 0xFFD6DEE6;
-            }
-            if (WidgetLayout.TYPE_MACRO_GROUP.equals(type)) {
-                return 0xFFE3DFE8;
-            }
-            if (WidgetLayout.TYPE_QUICK_ACTIONS.equals(type)) {
-                return 0xFFDCE3E9;
-            }
-            if (WidgetLayout.TYPE_MAGNIFIER.equals(type)) {
-                return 0xFFD6E1E3;
-            }
-            if (WidgetLayout.TYPE_CANVAS.equals(type)) {
-                return 0xFFD4D9DE;
-            }
-            return 0xFFDCE5DF;
-        }
-        if (WidgetLayout.TYPE_TOUCHPAD.equals(type)) {
-            return 0xFF15243A;
-        }
-        if (WidgetLayout.TYPE_MACRO_GROUP.equals(type)) {
-            return 0xFF241D3A;
-        }
-        if (WidgetLayout.TYPE_QUICK_ACTIONS.equals(type)) {
-            return 0xFF17263B;
-        }
-        if (WidgetLayout.TYPE_MAGNIFIER.equals(type)) {
-            return 0xFF142A35;
-        }
-        if (WidgetLayout.TYPE_CANVAS.equals(type)) {
-            return 0xFF101820;
-        }
-        return 0xFF142A22;
-    }
-
-    private String widgetTypeLabel(String type) {
-        if (WidgetLayout.TYPE_TOUCHPAD.equals(type)) {
-            return getString(R.string.grid_widget_touch);
-        }
-        if (WidgetLayout.TYPE_MACRO_GROUP.equals(type)) {
-            return getString(R.string.grid_widget_macro);
-        }
-        if (WidgetLayout.TYPE_STATUS.equals(type)) {
-            return getString(R.string.grid_widget_status);
-        }
-        if (WidgetLayout.TYPE_CANVAS.equals(type)) {
-            return getString(R.string.canvas_name);
-        }
-        if (WidgetLayout.TYPE_QUICK_ACTIONS.equals(type)) {
-            return getString(R.string.grid_widget_quick_actions);
-        }
-        if (WidgetLayout.TYPE_MAGNIFIER.equals(type)) {
-            return getString(R.string.grid_widget_magnifier);
-        }
-        return getString(R.string.grid_widget_module);
-    }
-
-    private String widgetEditorMeta(WidgetLayout.Item item) {
-        String size = item.w + " x " + item.h;
-        if (!WidgetLayout.TYPE_MACRO_GROUP.equals(item.type)) {
-            return size;
-        }
-        int first = item.macroStart + 1;
-        int last = item.macroStart + item.macroCount;
-        return size + "  M" + first + "-" + last;
-    }
-
-    private void addWidgetFromEditor(String type, GridEditorView gridEditor) {
-        WidgetLayout layout = editableWidgetLayout();
-        if (WidgetLayout.TYPE_MAGNIFIER.equals(type)
-                && layout.findItem(WidgetLayout.TYPE_MAGNIFIER) != null) {
-            showErrorAction(getString(R.string.grid_editor_magnifier_limit));
-            return;
-        }
-        int[] size = defaultWidgetSize(type);
-        WidgetLayout.Item item = firstAvailableWidgetItem(layout, type, size[0], size[1]);
-        if (item == null) {
-            showErrorAction(getString(R.string.grid_editor_no_space_add));
-            return;
-        }
-        configureNewWidgetItem(layout, item);
-        layout.items.add(item);
-        layout.preset = WidgetLayout.PRESET_CUSTOM;
-        layout.sanitize();
-        gridEditor.selectItem(layout.items.size() - 1);
-        gridEditor.invalidate();
-        showDebugAction(getString(R.string.grid_editor_added, widgetTypeLabel(type)));
-    }
-
-    private void configureNewWidgetItem(WidgetLayout layout, WidgetLayout.Item item) {
-        if (!WidgetLayout.TYPE_MACRO_GROUP.equals(item.type)) {
-            return;
-        }
-        int start = nextMacroStart(layout);
-        item.macroStart = start;
-        item.macroCount = 4;
-        item.macroColumns = 2;
-        item.macroRows = 2;
-        item.macroRightHandPriority = true;
-        ensureMacroCapacity(start + item.macroCount);
-    }
-
-    private int nextMacroStart(WidgetLayout layout) {
-        int next = 0;
-        for (WidgetLayout.Item item : layout.items) {
-            if (WidgetLayout.TYPE_MACRO_GROUP.equals(item.type)) {
-                next = Math.max(next, item.macroStart + item.macroCount);
-            }
-        }
-        return Math.max(0, Math.min(23, next));
-    }
-
-    private void duplicateSelectedWidget(GridEditorView gridEditor) {
-        WidgetLayout layout = editableWidgetLayout();
-        int selected = gridEditor.selectedIndex();
-        if (selected < 0 || selected >= layout.items.size()) {
-            showErrorAction(getString(R.string.grid_editor_select_copy));
-            return;
-        }
-        WidgetLayout.Item source = layout.items.get(selected);
-        if (!WidgetLayout.TYPE_MACRO_GROUP.equals(source.type)) {
-            showErrorAction(getString(R.string.grid_editor_copy_macro_only));
-            return;
-        }
-        WidgetLayout.Item copy = firstAvailableWidgetItem(layout, source.type, source.w, source.h);
-        if (copy == null) {
-            showErrorAction(getString(R.string.grid_editor_no_space_copy));
-            return;
-        }
-        copy.macroStart = source.macroStart;
-        copy.macroCount = source.macroCount;
-        copy.macroColumns = source.macroColumns;
-        copy.macroRows = source.macroRows;
-        copy.macroRightHandPriority = source.macroRightHandPriority;
-        copy.macroIconOnly = source.macroIconOnly;
-        layout.items.add(copy);
-        layout.preset = WidgetLayout.PRESET_CUSTOM;
-        layout.sanitize();
-        gridEditor.selectItem(layout.items.size() - 1);
-        gridEditor.invalidate();
-        showDebugAction(getString(R.string.grid_editor_copied));
-    }
-
-    private void deleteSelectedWidget(GridEditorView gridEditor) {
-        WidgetLayout layout = editableWidgetLayout();
-        int selected = gridEditor.selectedIndex();
-        if (selected < 0 || selected >= layout.items.size()) {
-            showErrorAction(getString(R.string.grid_editor_select_delete));
-            return;
-        }
-        layout.items.remove(selected);
-        layout.preset = WidgetLayout.PRESET_CUSTOM;
-        layout.sanitize();
-        gridEditor.selectItem(-1);
-        gridEditor.invalidate();
-        showDebugAction(getString(R.string.grid_editor_deleted));
-    }
-
-    private void saveWidgetLayoutFromEditor(GridEditorView gridEditor) {
-        WidgetLayout layout = editableWidgetLayout();
-        layout.preset = WidgetLayout.PRESET_CUSTOM;
-        layout.sanitize();
-        gridEditor.invalidate();
-    }
-
-    private int singleOverlapIndex(WidgetLayout layout, WidgetLayout.Item candidate, int ignoreIndex) {
-        int overlap = -1;
-        for (int i = 0; i < layout.items.size(); i++) {
-            if (i == ignoreIndex) {
-                continue;
-            }
-            if (rectsOverlap(candidate, layout.items.get(i))) {
-                if (overlap >= 0) {
-                    return -2;
-                }
-                overlap = i;
-            }
-        }
-        return overlap;
-    }
-
-    private boolean canPlaceWidget(WidgetLayout layout, WidgetLayout.Item candidate, int ignoreA, int ignoreB) {
-        for (int i = 0; i < layout.items.size(); i++) {
-            if (i == ignoreA || i == ignoreB) {
-                continue;
-            }
-            if (rectsOverlap(candidate, layout.items.get(i))) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    private boolean rectsOverlap(WidgetLayout.Item a, WidgetLayout.Item b) {
-        return a.x < b.x + b.w
-                && a.x + a.w > b.x
-                && a.y < b.y + b.h
-                && a.y + a.h > b.y;
-    }
-
-    private final class WidgetHostLayout extends ViewGroup {
-        private final WidgetLayout layout;
-        private final List<WidgetLayout.Item> childItems = new ArrayList<>();
-        private final int gap = dp(6);
-
-        WidgetHostLayout(Context context, WidgetLayout layout) {
-            super(context);
-            this.layout = layout;
-        }
-
-        void addWidget(View child, WidgetLayout.Item item) {
-            childItems.add(item);
-            addView(child, new ViewGroup.LayoutParams(0, 0));
-        }
-
-        @Override
-        protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
-            int width = MeasureSpec.getSize(widthMeasureSpec);
-            int height = MeasureSpec.getSize(heightMeasureSpec);
-            float cellW = width / (float) Math.max(1, layout.columns);
-            float cellH = height / (float) Math.max(1, layout.rows);
-            for (int i = 0; i < getChildCount(); i++) {
-                WidgetLayout.Item item = childItems.get(i);
-                int childW = Math.max(1, Math.round(item.w * cellW) - gap * 2);
-                int childH = Math.max(1, Math.round(item.h * cellH) - gap * 2);
-                int childWSpec = MeasureSpec.makeMeasureSpec(childW, MeasureSpec.EXACTLY);
-                int childHSpec = MeasureSpec.makeMeasureSpec(childH, MeasureSpec.EXACTLY);
-                getChildAt(i).measure(childWSpec, childHSpec);
-            }
-            setMeasuredDimension(width, height);
-        }
-
-        @Override
-        protected void onLayout(boolean changed, int left, int top, int right, int bottom) {
-            int width = right - left;
-            int height = bottom - top;
-            float cellW = width / (float) Math.max(1, layout.columns);
-            float cellH = height / (float) Math.max(1, layout.rows);
-            for (int i = 0; i < getChildCount(); i++) {
-                WidgetLayout.Item item = childItems.get(i);
-                int childLeft = Math.round(item.x * cellW) + gap;
-                int childTop = Math.round(item.y * cellH) + gap;
-                int childRight = Math.round((item.x + item.w) * cellW) - gap;
-                int childBottom = Math.round((item.y + item.h) * cellH) - gap;
-                getChildAt(i).layout(childLeft, childTop, childRight, childBottom);
-            }
-        }
-    }
-
-    private final class GridEditorView extends View {
-        private static final int MODE_NONE = 0;
-        private static final int MODE_MOVE = 1;
-        private static final int MODE_RESIZE = 2;
-
-        private final Paint editorPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final RectF editorRect = new RectF();
-        private int selectedIndex = -1;
-        private int mode = MODE_NONE;
-        private int originalX;
-        private int originalY;
-        private int originalW;
-        private int originalH;
-        private float downX;
-        private float downY;
-        private int grabCellX;
-        private int grabCellY;
-
-        GridEditorView(Context context) {
-            super(context);
-            setBackground(HeimdallUi.insetPanel(AssistantActivity.this, 10));
-            setContentDescription(getString(R.string.grid_editor_canvas_description));
-        }
-
-        @Override
-        protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
-            int availableW = Math.max(1, MeasureSpec.getSize(widthMeasureSpec));
-            int availableH = Math.max(1, MeasureSpec.getSize(heightMeasureSpec));
-            if (MeasureSpec.getMode(heightMeasureSpec) == MeasureSpec.EXACTLY) {
-                setMeasuredDimension(availableW, availableH);
-                return;
-            }
-            int targetH = Math.round(availableW * realGridAspectHeight());
-            int measuredH = Math.min(availableH, targetH);
-            setMeasuredDimension(availableW, measuredH);
-        }
-
-        private float realGridAspectHeight() {
-            DisplayMetrics metrics = getResources().getDisplayMetrics();
-            float width = Math.max(1f, metrics.widthPixels - dp(8));
-            float height = Math.max(1f, metrics.heightPixels
-                    - dp(8)
-                    - dp(44)
-                    - dp(6)
-                    - dp(50)
-                    - dp(6));
-            return height / width;
-        }
-
-        int selectedIndex() {
-            return selectedIndex;
-        }
-
-        void selectItem(int index) {
-            selectedIndex = index;
-        }
-
-        @Override
-        protected void onDraw(Canvas canvas) {
-            super.onDraw(canvas);
-            WidgetLayout layout = currentWidgetLayout();
-            float cellW = getWidth() / (float) layout.columns;
-            float cellH = getHeight() / (float) layout.rows;
-
-            editorPaint.setStyle(Paint.Style.STROKE);
-            editorPaint.setStrokeWidth(dp(1));
-            editorPaint.setColor(HeimdallUi.isPearl(AssistantActivity.this) ? 0x335D6975 : 0x334EA1FF);
-            for (int col = 1; col < layout.columns; col++) {
-                float x = col * cellW;
-                canvas.drawLine(x, 0, x, getHeight(), editorPaint);
-            }
-            for (int row = 1; row < layout.rows; row++) {
-                float y = row * cellH;
-                canvas.drawLine(0, y, getWidth(), y, editorPaint);
-            }
-
-            editorPaint.setStyle(Paint.Style.STROKE);
-            editorPaint.setStrokeWidth(dp(2));
-            editorPaint.setColor(HeimdallUi.isPearl(AssistantActivity.this) ? 0x886D7B88 : 0x664EA1FF);
-            canvas.drawRect(0, 0, getWidth(), getHeight(), editorPaint);
-
-            if (layout.items.isEmpty()) {
-                editorPaint.setStyle(Paint.Style.FILL);
-                editorPaint.setTextAlign(Paint.Align.CENTER);
-                editorPaint.setTextSize(dp(15));
-                editorPaint.setColor(HeimdallUi.mutedTextColor(AssistantActivity.this));
-                canvas.drawText(getString(R.string.grid_editor_empty),
-                        getWidth() * 0.5f, getHeight() * 0.5f, editorPaint);
-                editorPaint.setTextAlign(Paint.Align.LEFT);
-                return;
-            }
-
-            for (int i = 0; i < layout.items.size(); i++) {
-                drawEditorItem(canvas, layout.items.get(i), i, cellW, cellH);
-            }
-        }
-
-        private void drawEditorItem(Canvas canvas, WidgetLayout.Item item, int index, float cellW, float cellH) {
-            float gap = dp(4);
-            editorRect.set(item.x * cellW + gap,
-                    item.y * cellH + gap,
-                    (item.x + item.w) * cellW - gap,
-                    (item.y + item.h) * cellH - gap);
-            boolean selected = index == selectedIndex;
-
-            editorPaint.setStyle(Paint.Style.FILL);
-            editorPaint.setColor(selected ? selectedWidgetColor(item.type) : widgetPreviewColor(item.type));
-            canvas.drawRoundRect(editorRect, dp(10), dp(10), editorPaint);
-
-            editorPaint.setStyle(Paint.Style.STROKE);
-            editorPaint.setStrokeWidth(selected ? dp(3) : dp(1));
-            editorPaint.setColor(selected
-                    ? HeimdallUi.accent(AssistantActivity.this)
-                    : (HeimdallUi.isPearl(AssistantActivity.this) ? 0x886D7B88 : 0x884EA1FF));
-            canvas.drawRoundRect(editorRect, dp(10), dp(10), editorPaint);
-
-            editorPaint.setStyle(Paint.Style.FILL);
-            editorPaint.setColor(HeimdallUi.textColor(AssistantActivity.this));
-            editorPaint.setTextSize(dp(15));
-            editorPaint.setTextAlign(Paint.Align.LEFT);
-            canvas.drawText(widgetTypeLabel(item.type), editorRect.left + dp(10), editorRect.top + dp(24), editorPaint);
-            editorPaint.setColor(HeimdallUi.mutedTextColor(AssistantActivity.this));
-            editorPaint.setTextSize(dp(12));
-            canvas.drawText(widgetEditorMeta(item), editorRect.left + dp(10), editorRect.top + dp(44), editorPaint);
-
-            if (selected) {
-                float handle = dp(24);
-                editorPaint.setStyle(Paint.Style.FILL);
-                editorPaint.setColor(HeimdallUi.isPearl(AssistantActivity.this) ? 0xDDF08A2A : 0xDD4EA1FF);
-                canvas.drawRoundRect(editorRect.right - handle, editorRect.bottom - handle,
-                        editorRect.right, editorRect.bottom, dp(8), dp(8), editorPaint);
-                editorPaint.setColor(0xFFFFFFFF);
-                editorPaint.setStrokeWidth(dp(2));
-                canvas.drawLine(editorRect.right - dp(7), editorRect.bottom - dp(18),
-                        editorRect.right - dp(18), editorRect.bottom - dp(7), editorPaint);
-            }
-        }
-
-        private int selectedWidgetColor(String type) {
-            if (HeimdallUi.isPearl(AssistantActivity.this)) {
-                return 0xFFE7E1D9;
-            }
-            if (WidgetLayout.TYPE_TOUCHPAD.equals(type)) {
-                return 0xCC1F4D78;
-            }
-            if (WidgetLayout.TYPE_MACRO_GROUP.equals(type)) {
-                return 0xCC4A3278;
-            }
-            if (WidgetLayout.TYPE_MAGNIFIER.equals(type)) {
-                return 0xCC20566A;
-            }
-            if (WidgetLayout.TYPE_CANVAS.equals(type)) {
-                return 0xCC283B4C;
-            }
-            return 0xCC1D5A3B;
-        }
-
-        @Override
-        public boolean onTouchEvent(MotionEvent event) {
-            WidgetLayout layout = editableWidgetLayout();
-            if (layout.items.isEmpty()) {
-                return true;
-            }
-            float cellW = getWidth() / (float) layout.columns;
-            float cellH = getHeight() / (float) layout.rows;
-            switch (event.getActionMasked()) {
-                case MotionEvent.ACTION_DOWN:
-                    getParent().requestDisallowInterceptTouchEvent(true);
-                    downX = event.getX();
-                    downY = event.getY();
-                    selectedIndex = hitTest(layout, downX, downY, cellW, cellH);
-                    if (selectedIndex < 0) {
-                        mode = MODE_NONE;
-                        invalidate();
-                        return true;
-                    }
-                    WidgetLayout.Item item = layout.items.get(selectedIndex);
-                    originalX = item.x;
-                    originalY = item.y;
-                    originalW = item.w;
-                    originalH = item.h;
-                    grabCellX = Math.max(0, Math.min(item.w - 1, (int) ((downX - item.x * cellW) / cellW)));
-                    grabCellY = Math.max(0, Math.min(item.h - 1, (int) ((downY - item.y * cellH) / cellH)));
-                    mode = hitResizeHandle(item, downX, downY, cellW, cellH) ? MODE_RESIZE : MODE_MOVE;
-                    invalidate();
-                    return true;
-                case MotionEvent.ACTION_MOVE:
-                    if (selectedIndex < 0 || selectedIndex >= layout.items.size()) {
-                        return true;
-                    }
-                    updateDraggedItem(layout, layout.items.get(selectedIndex), event.getX(), event.getY(), cellW, cellH);
-                    invalidate();
-                    return true;
-                case MotionEvent.ACTION_UP:
-                    getParent().requestDisallowInterceptTouchEvent(false);
-                    finishDrag(layout);
-                    mode = MODE_NONE;
-                    invalidate();
-                    return true;
-                case MotionEvent.ACTION_CANCEL:
-                    getParent().requestDisallowInterceptTouchEvent(false);
-                    restoreOriginal(layout);
-                    mode = MODE_NONE;
-                    invalidate();
-                    return true;
-                default:
-                    return true;
-            }
-        }
-
-        private int hitTest(WidgetLayout layout, float x, float y, float cellW, float cellH) {
-            for (int i = layout.items.size() - 1; i >= 0; i--) {
-                WidgetLayout.Item item = layout.items.get(i);
-                if (x >= item.x * cellW
-                        && x <= (item.x + item.w) * cellW
-                        && y >= item.y * cellH
-                        && y <= (item.y + item.h) * cellH) {
-                    return i;
-                }
-            }
-            return -1;
-        }
-
-        private boolean hitResizeHandle(WidgetLayout.Item item, float x, float y, float cellW, float cellH) {
-            float right = (item.x + item.w) * cellW;
-            float bottom = (item.y + item.h) * cellH;
-            float handle = dp(34);
-            return x >= right - handle && x <= right && y >= bottom - handle && y <= bottom;
-        }
-
-        private void updateDraggedItem(WidgetLayout layout, WidgetLayout.Item item, float x, float y, float cellW, float cellH) {
-            if (mode == MODE_RESIZE) {
-                int right = Math.max(item.x + 1, Math.min(layout.columns, (int) Math.ceil(x / cellW)));
-                int bottom = Math.max(item.y + 1, Math.min(layout.rows, (int) Math.ceil(y / cellH)));
-                item.w = Math.max(1, Math.min(layout.columns - item.x, right - item.x));
-                item.h = Math.max(1, Math.min(layout.rows - item.y, bottom - item.y));
-                return;
-            }
-            if (mode == MODE_MOVE) {
-                int nextX = Math.round(x / cellW) - grabCellX;
-                int nextY = Math.round(y / cellH) - grabCellY;
-                item.x = Math.max(0, Math.min(layout.columns - item.w, nextX));
-                item.y = Math.max(0, Math.min(layout.rows - item.h, nextY));
-            }
-        }
-
-        private void finishDrag(WidgetLayout layout) {
-            if (selectedIndex < 0 || selectedIndex >= layout.items.size()) {
-                return;
-            }
-            WidgetLayout.Item item = layout.items.get(selectedIndex);
-            if (mode == MODE_RESIZE) {
-                if (widgetOverlaps(layout, item, selectedIndex)) {
-                    restoreOriginal(layout);
-            showErrorAction(getString(R.string.grid_editor_resize_overlap));
-                    return;
-                }
-                saveWidgetLayoutFromEditor(this);
-                showDebugAction(getString(R.string.grid_editor_resized));
-                return;
-            }
-
-            int overlap = singleOverlapIndex(layout, item, selectedIndex);
-            if (overlap == -1) {
-                saveWidgetLayoutFromEditor(this);
-                showDebugAction(getString(R.string.grid_editor_moved));
-                return;
-            }
-            if (overlap >= 0 && trySwap(layout, selectedIndex, overlap)) {
-                saveWidgetLayoutFromEditor(this);
-                showDebugAction(getString(R.string.grid_editor_swapped));
-                return;
-            }
-            restoreOriginal(layout);
-            showErrorAction(getString(R.string.grid_editor_position_conflict));
-        }
-
-        private boolean trySwap(WidgetLayout layout, int movingIndex, int targetIndex) {
-            WidgetLayout.Item moving = layout.items.get(movingIndex);
-            WidgetLayout.Item target = layout.items.get(targetIndex);
-            WidgetLayout.Item movingAtTarget = new WidgetLayout.Item(moving.type, target.x, target.y, moving.w, moving.h);
-            WidgetLayout.Item targetAtOriginal = new WidgetLayout.Item(target.type, originalX, originalY, target.w, target.h);
-            clampWidgetItem(layout, movingAtTarget);
-            clampWidgetItem(layout, targetAtOriginal);
-            if (movingAtTarget.x != target.x || movingAtTarget.y != target.y
-                    || targetAtOriginal.x != originalX || targetAtOriginal.y != originalY) {
-                return false;
-            }
-            if (!canPlaceWidget(layout, movingAtTarget, movingIndex, targetIndex)
-                    || !canPlaceWidget(layout, targetAtOriginal, movingIndex, targetIndex)) {
-                return false;
-            }
-            moving.x = movingAtTarget.x;
-            moving.y = movingAtTarget.y;
-            target.x = targetAtOriginal.x;
-            target.y = targetAtOriginal.y;
-            return true;
-        }
-
-        private void restoreOriginal(WidgetLayout layout) {
-            if (selectedIndex < 0 || selectedIndex >= layout.items.size()) {
-                return;
-            }
-            WidgetLayout.Item item = layout.items.get(selectedIndex);
-            item.x = originalX;
-            item.y = originalY;
-            item.w = originalW;
-            item.h = originalH;
-        }
-    }
-
-    private int[] defaultWidgetSize(String type) {
-        if (WidgetLayout.TYPE_TOUCHPAD.equals(type)) {
-            return new int[]{3, 4};
-        }
-        if (WidgetLayout.TYPE_MACRO_GROUP.equals(type)) {
-            return new int[]{2, 4};
-        }
-        if (WidgetLayout.TYPE_QUICK_ACTIONS.equals(type)) {
-            return new int[]{2, 2};
-        }
-        if (WidgetLayout.TYPE_MAGNIFIER.equals(type)) {
-            return new int[]{3, 3};
-        }
-        if (WidgetLayout.TYPE_CANVAS.equals(type)) {
-            return new int[]{3, 3};
-        }
-        return new int[]{2, 1};
-    }
-
-    private WidgetLayout.Item firstAvailableWidgetItem(WidgetLayout layout, String type, int width, int height) {
-        for (int y = 0; y <= layout.rows - height; y++) {
-            for (int x = 0; x <= layout.columns - width; x++) {
-                WidgetLayout.Item candidate = new WidgetLayout.Item(type, x, y, width, height);
-                if (!widgetOverlaps(layout, candidate, -1)) {
-                    return candidate;
-                }
-            }
-        }
-        return null;
-    }
-
-    private void clampWidgetItem(WidgetLayout layout, WidgetLayout.Item item) {
-        item.x = Math.max(0, Math.min(layout.columns - 1, item.x));
-        item.y = Math.max(0, Math.min(layout.rows - 1, item.y));
-        item.w = Math.max(1, Math.min(layout.columns - item.x, item.w));
-        item.h = Math.max(1, Math.min(layout.rows - item.y, item.h));
-    }
-
-    private boolean widgetOverlaps(WidgetLayout layout, WidgetLayout.Item candidate, int ignoreIndex) {
-        for (int i = 0; i < layout.items.size(); i++) {
-            if (i == ignoreIndex) {
-                continue;
-            }
-            WidgetLayout.Item item = layout.items.get(i);
-            boolean separated = candidate.x + candidate.w <= item.x
-                    || item.x + item.w <= candidate.x
-                    || candidate.y + candidate.h <= item.y
-                    || item.y + item.h <= candidate.y;
-            if (!separated) {
-                return true;
-            }
-        }
-        return false;
     }
 
     private String inputDiagnosticText(InputBackendDiagnostics.Snapshot snapshot) {
@@ -6301,10 +5190,7 @@ public class AssistantActivity extends Activity {
     private View createFullscreenMapLayout() {
         profileIconView = null;
         profileTitle = null;
-        systemTimeText = null;
-        systemNetworkIcon = null;
-        systemBatteryIcon = null;
-        systemBatteryText = null;
+        systemStatusController.clearViews();
         statusText = null;
         profileList = null;
         touchPadView = null;
@@ -8085,10 +6971,7 @@ public class AssistantActivity extends Activity {
     private View createFullscreenGuideLayout() {
         profileIconView = null;
         profileTitle = null;
-        systemTimeText = null;
-        systemNetworkIcon = null;
-        systemBatteryIcon = null;
-        systemBatteryText = null;
+        systemStatusController.clearViews();
         statusText = null;
         profileList = null;
         touchPadView = null;
@@ -8885,65 +7768,6 @@ public class AssistantActivity extends Activity {
                 && NativeGamepadPath.resolveDevice() != null;
     }
 
-    private SliderInput sliderInput(LinearLayout parent, String label, float min, float max, float value, int scale, String suffix) {
-        return sliderInput(parent, label, min, max, value, scale, suffix, 0xFF202124, 0xFF5F6368);
-    }
-
-    private SliderInput settingsSliderInput(LinearLayout parent, String label, float min, float max, float value, int scale, String suffix) {
-        return sliderInput(parent, label, min, max, value, scale, suffix, TEXT, MUTED);
-    }
-
-    private SliderInput sliderInput(LinearLayout parent, String label, float min, float max, float value, int scale, String suffix, int titleColor, int valueColor) {
-        SliderInput input = new SliderInput(min, max, value, scale, suffix);
-
-        LinearLayout labelRow = new LinearLayout(this);
-        labelRow.setOrientation(LinearLayout.HORIZONTAL);
-        labelRow.setGravity(Gravity.CENTER_VERTICAL);
-        parent.addView(labelRow, new LinearLayout.LayoutParams(-1, dp(28)));
-
-        TextView title = text(label, 13, titleColor, true);
-        labelRow.addView(title, new LinearLayout.LayoutParams(0, -1, 1));
-
-        input.valueLabel = text("", 13, valueColor, true);
-        input.valueLabel.setGravity(Gravity.CENTER_VERTICAL | Gravity.RIGHT);
-        labelRow.addView(input.valueLabel, new LinearLayout.LayoutParams(dp(88), -1));
-
-        input.seekBar = new SeekBar(this);
-        input.seekBar.setMax(input.maxUnits - input.minUnits);
-        input.seekBar.setProgress(input.currentUnits - input.minUnits);
-        styleSettingsSeekBar(input.seekBar);
-        input.seekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-            @Override
-            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                input.currentUnits = input.minUnits + progress;
-                input.updateLabel();
-            }
-
-            @Override
-            public void onStartTrackingTouch(SeekBar seekBar) {
-            }
-
-            @Override
-            public void onStopTrackingTouch(SeekBar seekBar) {
-            }
-        });
-        input.updateLabel();
-        parent.addView(input.seekBar, new LinearLayout.LayoutParams(-1, dp(42)));
-        return input;
-    }
-
-    private void styleSettingsSeekBar(SeekBar seekBar) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) {
-            return;
-        }
-        int active = HeimdallUi.isPearl(this) ? 0xFFF08A2A : HeimdallUi.accent(this);
-        int track = HeimdallUi.isPearl(this) ? 0xFF909AA2 : 0xFF445A72;
-        seekBar.setProgressTintList(ColorStateList.valueOf(active));
-        seekBar.setProgressBackgroundTintList(ColorStateList.valueOf(track));
-        seekBar.setThumbTintList(ColorStateList.valueOf(active));
-        seekBar.setSplitTrack(false);
-    }
-
     private void rebuildContent() {
         if (releaseTextInputFocusThen(this::rebuildContent)) {
             return;
@@ -8961,12 +7785,10 @@ public class AssistantActivity extends Activity {
         releaseLocalMapBitmap();
         releaseLocalMapThumbnails();
         setContentView(createLayout());
-        lastSystemTime = "";
-        lastNetworkLabel = "";
-        lastBatteryLabel = "";
+        systemStatusController.resetCachedLabels();
         renderProfiles();
         renderSelectedProfile();
-        updateSystemStatus();
+        systemStatusController.update();
         DebugPerformanceDiagnostics.attachRootObservers(this);
         updateGameFocusProtection();
         if (activeScreen == SCREEN_SETTINGS && settingsContentScroll != null) {
@@ -9203,7 +8025,7 @@ public class AssistantActivity extends Activity {
         settingsContentContainer.requestLayout();
         DebugPerformanceDiagnostics.countRequestLayout("Settings content");
         renderSelectedProfile();
-        updateSystemStatus();
+        systemStatusController.update();
         settingsContentScroll.post(() -> settingsContentScroll.scrollTo(0, restoreY));
     }
 
@@ -9523,79 +8345,6 @@ public class AssistantActivity extends Activity {
         }
     }
 
-    private final class BatteryStatusView extends View {
-        private final Paint batteryPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final Path batteryBolt = new Path();
-        private int percent = -1;
-        private boolean charging;
-
-        BatteryStatusView(Context context) {
-            super(context);
-        }
-
-        void setBattery(int value, boolean isCharging) {
-            if (percent == value && charging == isCharging) {
-                return;
-            }
-            percent = value;
-            charging = isCharging;
-            invalidate();
-        }
-
-        @Override
-        public void invalidate() {
-            DebugPerformanceDiagnostics.countInvalidate("Header battery");
-            super.invalidate();
-        }
-
-        @Override
-        protected void onDraw(Canvas canvas) {
-            DebugPerformanceDiagnostics.countDraw("Header battery");
-            super.onDraw(canvas);
-            float width = getWidth();
-            float height = getHeight();
-            if (width <= 0 || height <= 0) {
-                return;
-            }
-            boolean pearl = HeimdallUi.isPearl(AssistantActivity.this);
-            float shellLeft = dp(2);
-            float shellTop = height * 0.27f;
-            float shellRight = width - dp(4);
-            float shellBottom = height * 0.73f;
-            float radius = dp(2);
-            batteryPaint.setShader(null);
-            batteryPaint.setStyle(Paint.Style.STROKE);
-            batteryPaint.setStrokeWidth(dp(1));
-            batteryPaint.setColor(pearl ? 0xFF596774 : 0xFFD9E8F8);
-            canvas.drawRoundRect(shellLeft, shellTop, shellRight, shellBottom,
-                    radius, radius, batteryPaint);
-            batteryPaint.setStyle(Paint.Style.FILL);
-            canvas.drawRoundRect(shellRight + dp(1), height * 0.39f, width - dp(1),
-                    height * 0.61f, dp(1), dp(1), batteryPaint);
-
-            float level = percent < 0 ? 0.25f : Math.max(0.06f, Math.min(1f, percent / 100f));
-            float inset = dp(2);
-            float fillRight = shellLeft + inset + (shellRight - shellLeft - inset * 2f) * level;
-            batteryPaint.setColor(pearl ? 0xFFF08A2A : 0xFF70B7FF);
-            canvas.drawRoundRect(shellLeft + inset, shellTop + inset, fillRight,
-                    shellBottom - inset, dp(1), dp(1), batteryPaint);
-            if (charging) {
-                batteryPaint.setColor(pearl ? 0xFFFEF4E8 : 0xFFF4FAFF);
-                batteryBolt.reset();
-                float cx = (shellLeft + shellRight) / 2f;
-                float cy = height / 2f;
-                batteryBolt.moveTo(cx + dp(1), cy - dp(4));
-                batteryBolt.lineTo(cx - dp(2), cy);
-                batteryBolt.lineTo(cx, cy);
-                batteryBolt.lineTo(cx - dp(1), cy + dp(4));
-                batteryBolt.lineTo(cx + dp(3), cy - dp(1));
-                batteryBolt.lineTo(cx + dp(1), cy - dp(1));
-                batteryBolt.close();
-                canvas.drawPath(batteryBolt, batteryPaint);
-            }
-        }
-    }
-
     private final class QuickActionButtonView extends ImageButton {
         static final int STATE_IDLE = 0;
         static final int STATE_MAGNIFIER_STOP = 1;
@@ -9877,46 +8626,6 @@ public class AssistantActivity extends Activity {
             this.headerSubtitle = headerSubtitle;
             this.body = body;
             this.actions = actions;
-        }
-    }
-
-    private final class SliderInput {
-        private final int minUnits;
-        private final int maxUnits;
-        private final int scale;
-        private final String suffix;
-        private int currentUnits;
-        private SeekBar seekBar;
-        private TextView valueLabel;
-
-        SliderInput(float min, float max, float value, int scale, String suffix) {
-            this.scale = scale;
-            this.suffix = suffix == null ? "" : suffix;
-            this.minUnits = Math.round(min * scale);
-            this.maxUnits = Math.round(max * scale);
-            int units = Math.round(value * scale);
-            this.currentUnits = Math.max(minUnits, Math.min(maxUnits, units));
-        }
-
-        int intValue() {
-            return Math.round(floatValue());
-        }
-
-        float floatValue() {
-            return currentUnits / (float) scale;
-        }
-
-        void updateLabel() {
-            if (valueLabel == null) {
-                return;
-            }
-            String value;
-            if (scale == 1) {
-                value = String.valueOf(currentUnits);
-            } else {
-                value = String.format(Locale.US, "%.1f", floatValue());
-            }
-            valueLabel.setText(value + suffix);
         }
     }
 
