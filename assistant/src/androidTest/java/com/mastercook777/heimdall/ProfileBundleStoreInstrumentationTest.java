@@ -122,6 +122,11 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
         GameProfile profile = new GameProfile("中文 Profile", "通用", "",
                 Collections.singletonList(macro));
         profile.protectThorMappingDuringEnhancedTouch = false;
+        profile.touchpadSettings.mode = TouchpadSettings.MODE_VIRTUAL_MOUSE;
+        profile.touchpadSettings.virtualMouseSensitivity = 1.35f;
+        profile.touchpadSettings.virtualMouseInvertY = true;
+        profile.touchpadSettings.virtualMouseScrollDistance = 48f;
+        profile.touchpadSettings.virtualMouseFullGestureArea = true;
         profile.iconUri = iconSource.toString();
         profile.maps.add(new MapEntry("同名攻略", mapSource.toString()));
         profile.maps.add(new MapEntry("PDF 地图", pdfSource.toString()));
@@ -166,6 +171,14 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
         GameProfile restored = installed.profiles.get(0);
         assertEquals("中文 Profile", restored.name);
         assertFalse(restored.protectThorMappingDuringEnhancedTouch);
+        assertEquals(TouchpadSettings.MODE_VIRTUAL_MOUSE,
+                restored.touchpadSettings.mode);
+        assertEquals(Float.valueOf(1.35f),
+                Float.valueOf(restored.touchpadSettings.virtualMouseSensitivity));
+        assertTrue(restored.touchpadSettings.virtualMouseInvertY);
+        assertEquals(Float.valueOf(48f),
+                Float.valueOf(restored.touchpadSettings.virtualMouseScrollDistance));
+        assertTrue(restored.touchpadSettings.virtualMouseFullGestureArea);
         assertTrue(restored.iconUri.startsWith("content://"
                 + target.getPackageName() + ".profile-assets/"));
         assertReadable(Uri.parse(restored.iconUri));
@@ -218,6 +231,11 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
                 Collections.singletonList(macro));
         JSONObject legacyProfile = profile.toJson();
         legacyProfile.remove("protectThorMappingDuringEnhancedTouch");
+        JSONObject legacyTouchpad = legacyProfile.getJSONObject("touchpadSettings");
+        legacyTouchpad.remove("virtual_mouse_sensitivity");
+        legacyTouchpad.remove("virtual_mouse_invert_y");
+        legacyTouchpad.remove("virtual_mouse_scroll_distance");
+        legacyTouchpad.remove("virtual_mouse_full_gesture_area");
         JSONArray legacy = new JSONArray().put(legacyProfile);
         Uri source = fixture("legacy-json", "旧版.json",
                 legacy.toString().getBytes(StandardCharsets.UTF_8));
@@ -228,6 +246,11 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
         assertEquals("旧版 Profile", result.prepared.profiles.get(0).name);
         assertTrue(result.prepared.profiles.get(0)
                 .protectThorMappingDuringEnhancedTouch);
+        TouchpadSettings restoredTouchpad = result.prepared.profiles.get(0).touchpadSettings;
+        assertEquals(Float.valueOf(1f), Float.valueOf(restoredTouchpad.virtualMouseSensitivity));
+        assertFalse(restoredTouchpad.virtualMouseInvertY);
+        assertEquals(Float.valueOf(36f), Float.valueOf(restoredTouchpad.virtualMouseScrollDistance));
+        assertFalse(restoredTouchpad.virtualMouseFullGestureArea);
         result.prepared.close();
     }
 

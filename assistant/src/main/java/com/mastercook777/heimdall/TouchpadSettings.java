@@ -11,6 +11,7 @@ public final class TouchpadSettings {
     public static final String MODE_SHIZUKU_TOUCH = "shizuku_touch";
     public static final String MODE_RELATIVE_MOVE = "relative_move";
     public static final String MODE_MOUSE_POINTER = "mouse_pointer";
+    public static final String MODE_VIRTUAL_MOUSE = "virtual_mouse";
     public static final String MODE_RIGHT_STICK = "right_stick";
     public static final String MODE_RELATIVE_MOUSE = "relative_mouse_experimental";
     @Deprecated
@@ -52,6 +53,11 @@ public final class TouchpadSettings {
     private static final String KEY_RELATIVE_MOUSE_INVERT_Y = "relative_mouse_invert_y";
     private static final String KEY_RELATIVE_MOUSE_ACCELERATION = "relative_mouse_acceleration";
     private static final String KEY_RELATIVE_MOUSE_PULSE_MS = "relative_mouse_pulse_ms";
+    private static final String KEY_VIRTUAL_MOUSE_SENSITIVITY = "virtual_mouse_sensitivity";
+    private static final String KEY_VIRTUAL_MOUSE_INVERT_Y = "virtual_mouse_invert_y";
+    private static final String KEY_VIRTUAL_MOUSE_SCROLL_DISTANCE = "virtual_mouse_scroll_distance";
+    private static final String KEY_VIRTUAL_MOUSE_FULL_GESTURE_AREA =
+            "virtual_mouse_full_gesture_area";
 
     public String mode = MODE_TOUCH_DRAG;
     public int leftWeight = 5;
@@ -82,6 +88,10 @@ public final class TouchpadSettings {
     public boolean relativeMouseInvertY;
     public String relativeMouseAcceleration = RELATIVE_MOUSE_ACCELERATION_OFF;
     public int relativeMousePulseDurationMs = 10;
+    public float virtualMouseSensitivity = 1.0f;
+    public boolean virtualMouseInvertY;
+    public float virtualMouseScrollDistance = 36f;
+    public boolean virtualMouseFullGestureArea;
 
     public TouchpadSettings copy() {
         TouchpadSettings settings = new TouchpadSettings();
@@ -122,6 +132,10 @@ public final class TouchpadSettings {
         relativeMouseInvertY = source.relativeMouseInvertY;
         relativeMouseAcceleration = normalizeRelativeMouseAcceleration(source.relativeMouseAcceleration);
         relativeMousePulseDurationMs = clampInt(source.relativeMousePulseDurationMs, 8, 30);
+        virtualMouseSensitivity = clampFloat(source.virtualMouseSensitivity, 0.2f, 4f);
+        virtualMouseInvertY = source.virtualMouseInvertY;
+        virtualMouseScrollDistance = clampFloat(source.virtualMouseScrollDistance, 16f, 96f);
+        virtualMouseFullGestureArea = source.virtualMouseFullGestureArea;
     }
 
     public static TouchpadSettings load(Context context) {
@@ -158,6 +172,14 @@ public final class TouchpadSettings {
                 prefs.getString(KEY_RELATIVE_MOUSE_ACCELERATION, settings.relativeMouseAcceleration));
         settings.relativeMousePulseDurationMs = clampInt(
                 prefs.getInt(KEY_RELATIVE_MOUSE_PULSE_MS, settings.relativeMousePulseDurationMs), 8, 30);
+        settings.virtualMouseSensitivity = clampFloat(
+                prefs.getFloat(KEY_VIRTUAL_MOUSE_SENSITIVITY, settings.virtualMouseSensitivity), 0.2f, 4f);
+        settings.virtualMouseInvertY = prefs.getBoolean(
+                KEY_VIRTUAL_MOUSE_INVERT_Y, settings.virtualMouseInvertY);
+        settings.virtualMouseScrollDistance = clampFloat(
+                prefs.getFloat(KEY_VIRTUAL_MOUSE_SCROLL_DISTANCE, settings.virtualMouseScrollDistance), 16f, 96f);
+        settings.virtualMouseFullGestureArea = prefs.getBoolean(
+                KEY_VIRTUAL_MOUSE_FULL_GESTURE_AREA, settings.virtualMouseFullGestureArea);
         return settings;
     }
 
@@ -194,6 +216,10 @@ public final class TouchpadSettings {
                 .putString(KEY_RELATIVE_MOUSE_ACCELERATION,
                         normalizeRelativeMouseAcceleration(relativeMouseAcceleration))
                 .putInt(KEY_RELATIVE_MOUSE_PULSE_MS, relativeMousePulseDurationMs)
+                .putFloat(KEY_VIRTUAL_MOUSE_SENSITIVITY, virtualMouseSensitivity)
+                .putBoolean(KEY_VIRTUAL_MOUSE_INVERT_Y, virtualMouseInvertY)
+                .putFloat(KEY_VIRTUAL_MOUSE_SCROLL_DISTANCE, virtualMouseScrollDistance)
+                .putBoolean(KEY_VIRTUAL_MOUSE_FULL_GESTURE_AREA, virtualMouseFullGestureArea)
                 .apply();
     }
 
@@ -229,6 +255,10 @@ public final class TouchpadSettings {
         object.put(KEY_RELATIVE_MOUSE_ACCELERATION,
                 normalizeRelativeMouseAcceleration(relativeMouseAcceleration));
         object.put(KEY_RELATIVE_MOUSE_PULSE_MS, relativeMousePulseDurationMs);
+        object.put(KEY_VIRTUAL_MOUSE_SENSITIVITY, virtualMouseSensitivity);
+        object.put(KEY_VIRTUAL_MOUSE_INVERT_Y, virtualMouseInvertY);
+        object.put(KEY_VIRTUAL_MOUSE_SCROLL_DISTANCE, virtualMouseScrollDistance);
+        object.put(KEY_VIRTUAL_MOUSE_FULL_GESTURE_AREA, virtualMouseFullGestureArea);
         return object;
     }
 
@@ -271,6 +301,15 @@ public final class TouchpadSettings {
                 object.optString(KEY_RELATIVE_MOUSE_ACCELERATION, settings.relativeMouseAcceleration));
         settings.relativeMousePulseDurationMs = clampInt(
                 object.optInt(KEY_RELATIVE_MOUSE_PULSE_MS, settings.relativeMousePulseDurationMs), 8, 30);
+        settings.virtualMouseSensitivity = clampFloat(
+                (float) object.optDouble(KEY_VIRTUAL_MOUSE_SENSITIVITY, settings.virtualMouseSensitivity), 0.2f, 4f);
+        settings.virtualMouseInvertY = object.optBoolean(
+                KEY_VIRTUAL_MOUSE_INVERT_Y, settings.virtualMouseInvertY);
+        settings.virtualMouseScrollDistance = clampFloat(
+                (float) object.optDouble(KEY_VIRTUAL_MOUSE_SCROLL_DISTANCE,
+                        settings.virtualMouseScrollDistance), 16f, 96f);
+        settings.virtualMouseFullGestureArea = object.optBoolean(
+                KEY_VIRTUAL_MOUSE_FULL_GESTURE_AREA, settings.virtualMouseFullGestureArea);
         return settings;
     }
 
@@ -280,6 +319,9 @@ public final class TouchpadSettings {
         }
         if (MODE_MOUSE_POINTER.equals(value)) {
             return MODE_MOUSE_POINTER;
+        }
+        if (MODE_VIRTUAL_MOUSE.equals(value)) {
+            return MODE_VIRTUAL_MOUSE;
         }
         if (MODE_SHIZUKU_TOUCH.equals(value)) {
             return MODE_SHIZUKU_TOUCH;

@@ -22,6 +22,9 @@ public final class ShizukuNativeUserService extends Binder {
     public static final int TRANSACTION_INJECT_TOUCH_EVENT = IBinder.FIRST_CALL_TRANSACTION + 4;
     public static final int TRANSACTION_INJECT_MAPPED_TOUCH_EVENT = IBinder.FIRST_CALL_TRANSACTION + 5;
     public static final int TRANSACTION_RELEASE_MAPPED_TOUCH = IBinder.FIRST_CALL_TRANSACTION + 6;
+    public static final int TRANSACTION_OPEN_VIRTUAL_MOUSE = IBinder.FIRST_CALL_TRANSACTION + 7;
+    public static final int TRANSACTION_EMIT_VIRTUAL_MOUSE = IBinder.FIRST_CALL_TRANSACTION + 8;
+    public static final int TRANSACTION_RELEASE_VIRTUAL_MOUSE = IBinder.FIRST_CALL_TRANSACTION + 9;
     private long touchDownTime;
     private boolean touchSessionActive;
     private boolean touchUsesThorMappedDevice;
@@ -35,7 +38,7 @@ public final class ShizukuNativeUserService extends Binder {
     }
 
     public String ping() {
-        return "heimdall shizuku native service protocol=9";
+        return "heimdall shizuku native service protocol=10";
     }
 
     public String emitGamepadStep(String path, String value, int holdMs) {
@@ -153,6 +156,33 @@ public final class ShizukuNativeUserService extends Binder {
             touchSessionActive = false;
             touchUsesThorMappedDevice = false;
             return "Thor mapped touch release failed";
+        }
+    }
+
+    private synchronized String openVirtualMouse() {
+        try {
+            return UinputNativeProbe.openVirtualMouse();
+        } catch (Throwable t) {
+            return "Virtual mouse could not open";
+        }
+    }
+
+    private synchronized String emitVirtualMouse(
+            int dx, int dy, int wheel, int button, int buttonValue) {
+        try {
+            return UinputNativeProbe.emitVirtualMouseFrame(
+                    dx, dy, wheel, button, buttonValue);
+        } catch (Throwable t) {
+            UinputNativeProbe.releaseVirtualMouse();
+            return "Virtual mouse input failed";
+        }
+    }
+
+    private synchronized String releaseVirtualMouse() {
+        try {
+            return UinputNativeProbe.releaseVirtualMouse();
+        } catch (Throwable t) {
+            return "Virtual mouse release failed";
         }
     }
 
@@ -274,12 +304,36 @@ public final class ShizukuNativeUserService extends Binder {
             reply.writeString(releaseMappedTouch());
             return true;
         }
+        if (code == TRANSACTION_OPEN_VIRTUAL_MOUSE) {
+            reply.writeNoException();
+            reply.writeString(openVirtualMouse());
+            return true;
+        }
+        if (code == TRANSACTION_EMIT_VIRTUAL_MOUSE) {
+            int dx = data.readInt();
+            int dy = data.readInt();
+            int wheel = data.readInt();
+            int button = data.readInt();
+            int buttonValue = data.readInt();
+            reply.writeNoException();
+            reply.writeString(emitVirtualMouse(dx, dy, wheel, button, buttonValue));
+            return true;
+        }
+        if (code == TRANSACTION_RELEASE_VIRTUAL_MOUSE) {
+            reply.writeNoException();
+            reply.writeString(releaseVirtualMouse());
+            return true;
+        }
         return super.onTransact(code, data, reply, flags);
     }
 
     public void destroy() {
         try {
             UinputNativeProbe.releaseThorMappedTouch();
+        } catch (Throwable ignored) {
+        }
+        try {
+            UinputNativeProbe.releaseVirtualMouse();
         } catch (Throwable ignored) {
         }
         System.exit(0);

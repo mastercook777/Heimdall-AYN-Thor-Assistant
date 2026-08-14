@@ -214,6 +214,10 @@ public class AssistantActivity extends Activity {
     private AlertDialog widgetGridDialog;
     private LinearLayout profileList;
     private TouchPadView touchPadView;
+    private VirtualMouseDispatcher virtualMouseDispatcher;
+    private int virtualMouseSessionGeneration;
+    private boolean virtualMouseReportErrors;
+    private boolean virtualMouseErrorShown;
     private int targetDisplayId = Display.DEFAULT_DISPLAY;
     private int targetDisplayWidth;
     private int targetDisplayHeight;
@@ -245,6 +249,11 @@ public class AssistantActivity extends Activity {
     private SliderInput settingsRelativeMousePulseInput;
     private CheckBox settingsRelativeMouseInvertYInput;
     private String settingsRelativeMouseAcceleration;
+    private SliderInput settingsVirtualMouseSensitivityInput;
+    private SliderInput settingsVirtualMouseScrollInput;
+    private CheckBox settingsVirtualMouseInvertYInput;
+    private CheckBox settingsVirtualMouseFullGestureAreaInput;
+    private boolean virtualMouseEntryHintPending;
     private EditText settingsProfileNameInput;
     private EditText settingsProfilePackageInput;
     private EditText settingsProfileRomInput;
@@ -608,6 +617,7 @@ public class AssistantActivity extends Activity {
     @Override
     protected void onDestroy() {
         flushGuideReadingPosition();
+        parkVirtualMouseDispatcher();
         for (View view : new ArrayList<>(transientAnimatedViews)) {
             view.animate().cancel();
         }
@@ -666,6 +676,9 @@ public class AssistantActivity extends Activity {
         if (activeMapWebView != null) {
             activeMapWebView.onResume();
         }
+        if (touchPadView != null) {
+            touchPadView.requestAdvancedInputPreparation();
+        }
     }
 
     @Override
@@ -675,6 +688,7 @@ public class AssistantActivity extends Activity {
             pauseMagnifierViews();
         }
         resetRightStickIfNeeded();
+        parkVirtualMouseDispatcher();
         InputBridge.cancelShizukuTouchpadDrag(this);
         if (activeMapWebView != null) {
             activeMapWebView.onPause();
@@ -1181,10 +1195,69 @@ public class AssistantActivity extends Activity {
         if (touchPadView != null) {
             String mode = TouchpadSettings.normalizeMode(touchpadSettings.mode);
             if (!TouchpadSettings.MODE_RIGHT_STICK.equals(mode)
-                    && !TouchpadSettings.MODE_RELATIVE_MOUSE.equals(mode)) {
+                    && !TouchpadSettings.MODE_RELATIVE_MOUSE.equals(mode)
+                    && !TouchpadSettings.MODE_VIRTUAL_MOUSE.equals(mode)) {
                 return;
             }
             touchPadView.recenterFromActivity();
+        }
+    }
+
+    private VirtualMouseDispatcher ensureVirtualMouseDispatcher(boolean reportErrors) {
+        if (reportErrors) {
+            virtualMouseReportErrors = true;
+        }
+        if (virtualMouseDispatcher == null) {
+            virtualMouseErrorShown = false;
+            final int generation = ++virtualMouseSessionGeneration;
+            virtualMouseDispatcher = new VirtualMouseDispatcher(
+                    this, () -> handleVirtualMouseUnavailable(generation));
+            virtualMouseDispatcher.start();
+        }
+        return virtualMouseDispatcher;
+    }
+
+    private void handleVirtualMouseUnavailable(int generation) {
+        if (generation != virtualMouseSessionGeneration) {
+            return;
+        }
+        boolean reportError = virtualMouseReportErrors;
+        closeVirtualMouseDispatcher();
+        if (touchPadView != null) {
+            touchPadView.clearVirtualMouseGesture();
+        }
+        if (reportError && !virtualMouseErrorShown) {
+            virtualMouseErrorShown = true;
+            showErrorAction(getString(R.string.virtual_mouse_unavailable));
+        }
+    }
+
+    private void closeVirtualMouseDispatcher() {
+        VirtualMouseDispatcher dispatcher = virtualMouseDispatcher;
+        virtualMouseDispatcher = null;
+        virtualMouseReportErrors = false;
+        virtualMouseSessionGeneration++;
+        if (dispatcher != null) {
+            dispatcher.close();
+        } else {
+            VirtualMouseDispatcher.destroyParkedDevice(this);
+        }
+    }
+
+    private void parkVirtualMouseDispatcher() {
+        VirtualMouseDispatcher dispatcher = virtualMouseDispatcher;
+        virtualMouseDispatcher = null;
+        virtualMouseReportErrors = false;
+        virtualMouseSessionGeneration++;
+        if (dispatcher != null) {
+            dispatcher.park();
+        }
+    }
+
+    private void closeVirtualMouseDispatcherIfUnused() {
+        if (!TouchpadSettings.MODE_VIRTUAL_MOUSE.equals(
+                TouchpadSettings.normalizeMode(touchpadSettings.mode))) {
+            closeVirtualMouseDispatcher();
         }
     }
 
@@ -1523,6 +1596,9 @@ public class AssistantActivity extends Activity {
         }
         WidgetHostLayout widgetGrid = new WidgetHostLayout(this, currentWidgetLayout());
         addWidgetsToGrid(widgetGrid, currentWidgetLayout());
+        if (touchPadView == null) {
+            closeVirtualMouseDispatcher();
+        }
         return widgetGrid;
     }
 
@@ -1566,8 +1642,13 @@ public class AssistantActivity extends Activity {
             return createMacroWidget(item);
         }
         if (WidgetLayout.TYPE_TOUCHPAD.equals(type)) {
+            FrameLayout touchPadHost = new FrameLayout(this);
             touchPadView = new TouchPadView(this);
-            return touchPadView;
+            touchPadHost.addView(touchPadView,
+                    new FrameLayout.LayoutParams(-1, -1));
+            touchPadHost.addView(touchPadView.virtualMouseFeedbackView(),
+                    new FrameLayout.LayoutParams(-1, -1));
+            return touchPadHost;
         }
         if (WidgetLayout.TYPE_STATUS.equals(type)) {
             return createStatusWidget();
@@ -2630,6 +2711,7 @@ public class AssistantActivity extends Activity {
         selectedProfileIndex = index;
         selectedProfile = profiles.get(index);
         touchpadSettings = selectedProfile.safeTouchpadSettings();
+        closeVirtualMouseDispatcherIfUnused();
         ProfileStore.saveSelectedIndex(this, selectedProfileIndex);
         rebuildContent();
     }
@@ -3288,6 +3370,7 @@ public class AssistantActivity extends Activity {
                 || bottomDock == null) {
             activeScreen = SCREEN_MAIN;
             rebuildContent();
+            maybeShowVirtualMouseEntryHint();
             uiHandler.post(() -> maybeAutoSwitchProfile(ForegroundAppTracker.latest()));
             return;
         }
@@ -3374,7 +3457,19 @@ public class AssistantActivity extends Activity {
         settingsTransitionState = SETTINGS_TRANSITION_NONE;
         updateGameFocusProtection();
         setDockNavButtonsEnabled(true);
+        maybeShowVirtualMouseEntryHint();
         uiHandler.post(() -> maybeAutoSwitchProfile(ForegroundAppTracker.latest()));
+    }
+
+    private void maybeShowVirtualMouseEntryHint() {
+        if (!virtualMouseEntryHintPending || activeScreen != SCREEN_MAIN
+                || !TouchpadSettings.MODE_VIRTUAL_MOUSE.equals(
+                        TouchpadSettings.normalizeMode(touchpadSettings.mode))) {
+            return;
+        }
+        virtualMouseEntryHintPending = false;
+        Toast.makeText(this, getString(R.string.virtual_mouse_entry_hint),
+                Toast.LENGTH_LONG).show();
     }
 
     private boolean isSettingsTransitionCurrent(int generation, int state) {
@@ -3747,12 +3842,42 @@ public class AssistantActivity extends Activity {
         modeRow2.addView(touchpadModeButton(getString(R.string.touch_mode_enhanced),
                 TouchpadSettings.MODE_SHIZUKU_TOUCH));
 
+        LinearLayout modeRow3 = settingsActionRow(content);
+        modeRow3.addView(touchpadModeButton(getString(R.string.touch_mode_virtual_mouse),
+                TouchpadSettings.MODE_VIRTUAL_MOUSE));
+
         if (!relativeMouseBackendAvailable()) {
             addSettingsHelp(content,
                     getString(R.string.touch_precision_requires_controller));
         }
 
-        if (TouchpadSettings.MODE_RELATIVE_MOUSE.equals(settingsTouchpadMode)) {
+        if (TouchpadSettings.MODE_VIRTUAL_MOUSE.equals(settingsTouchpadMode)) {
+            settingsVirtualMouseSensitivityInput = settingsSliderInput(content,
+                    getString(R.string.touch_virtual_mouse_sensitivity), 0.2f, 4f,
+                    draft.virtualMouseSensitivity, 10, "x");
+            settingsVirtualMouseScrollInput = settingsSliderInput(content,
+                    getString(R.string.touch_virtual_mouse_scroll), 16f, 96f,
+                    draft.virtualMouseScrollDistance, 1, "px");
+            settingsVirtualMouseInvertYInput = new CheckBox(this);
+            settingsVirtualMouseInvertYInput.setText(getString(R.string.touch_invert_vertical));
+            settingsVirtualMouseInvertYInput.setTextSize(12);
+            styleCheckBox(settingsVirtualMouseInvertYInput);
+            settingsVirtualMouseInvertYInput.setChecked(draft.virtualMouseInvertY);
+            content.addView(settingsVirtualMouseInvertYInput,
+                    new LinearLayout.LayoutParams(-1, dp(42)));
+            settingsVirtualMouseFullGestureAreaInput = new CheckBox(this);
+            settingsVirtualMouseFullGestureAreaInput.setText(
+                    getString(R.string.touch_virtual_mouse_full_gesture_area));
+            settingsVirtualMouseFullGestureAreaInput.setTextSize(12);
+            styleCheckBox(settingsVirtualMouseFullGestureAreaInput);
+            settingsVirtualMouseFullGestureAreaInput.setChecked(
+                    draft.virtualMouseFullGestureArea);
+            content.addView(settingsVirtualMouseFullGestureAreaInput,
+                    new LinearLayout.LayoutParams(-1, dp(42)));
+            addSettingsHelp(content,
+                    getString(R.string.touch_virtual_mouse_full_gesture_area_help));
+            addSettingsHelp(content, getString(R.string.touch_virtual_mouse_help));
+        } else if (TouchpadSettings.MODE_RELATIVE_MOUSE.equals(settingsTouchpadMode)) {
             settingsRelativeMouseSensitivityInput = settingsSliderInput(content,
                     getString(R.string.touch_aim_sensitivity), 0.2f, 4f,
                     draft.relativeMouseSensitivity, 10, "x");
@@ -4746,6 +4871,12 @@ public class AssistantActivity extends Activity {
             button.setContentDescription(getString(
                     R.string.touch_precision_requires_controller_description));
         }
+        if (TouchpadSettings.MODE_VIRTUAL_MOUSE.equals(mode)
+                && !ShizukuNativeController.isReady()) {
+            button.setEnabled(false);
+            button.setAlpha(0.45f);
+            button.setContentDescription(getString(R.string.virtual_mouse_unavailable));
+        }
         return button;
     }
 
@@ -4756,6 +4887,9 @@ public class AssistantActivity extends Activity {
         }
         if (TouchpadSettings.MODE_MOUSE_POINTER.equals(normalized)) {
             return getString(R.string.touch_mode_mouse_pointer);
+        }
+        if (TouchpadSettings.MODE_VIRTUAL_MOUSE.equals(normalized)) {
+            return getString(R.string.touch_mode_virtual_mouse);
         }
         if (TouchpadSettings.MODE_RIGHT_STICK.equals(normalized)) {
             return getString(R.string.touch_mode_virtual_right_stick);
@@ -4780,6 +4914,10 @@ public class AssistantActivity extends Activity {
         if (!touchpadModeAvailable(mode)) {
             if (TouchpadSettings.MODE_RELATIVE_MOUSE.equals(mode)) {
                 showErrorAction(getString(R.string.action_controller_enhancement_required));
+                return;
+            }
+            if (TouchpadSettings.MODE_VIRTUAL_MOUSE.equals(mode)) {
+                showErrorAction(getString(R.string.virtual_mouse_unavailable));
                 return;
             }
             showErrorAction(getString(R.string.action_connection_setup_required));
@@ -4816,6 +4954,10 @@ public class AssistantActivity extends Activity {
         settingsRelativeMousePulseInput = null;
         settingsRelativeMouseInvertYInput = null;
         settingsRelativeMouseAcceleration = null;
+        settingsVirtualMouseSensitivityInput = null;
+        settingsVirtualMouseScrollInput = null;
+        settingsVirtualMouseInvertYInput = null;
+        settingsVirtualMouseFullGestureAreaInput = null;
     }
 
     private void addSettingsHelp(LinearLayout content, String message) {
@@ -5075,6 +5217,19 @@ public class AssistantActivity extends Activity {
             draft.relativeMouseAcceleration =
                     TouchpadSettings.normalizeRelativeMouseAcceleration(settingsRelativeMouseAcceleration);
         }
+        if (settingsVirtualMouseSensitivityInput != null) {
+            draft.virtualMouseSensitivity = settingsVirtualMouseSensitivityInput.floatValue();
+        }
+        if (settingsVirtualMouseScrollInput != null) {
+            draft.virtualMouseScrollDistance = settingsVirtualMouseScrollInput.floatValue();
+        }
+        if (settingsVirtualMouseInvertYInput != null) {
+            draft.virtualMouseInvertY = settingsVirtualMouseInvertYInput.isChecked();
+        }
+        if (settingsVirtualMouseFullGestureAreaInput != null) {
+            draft.virtualMouseFullGestureArea =
+                    settingsVirtualMouseFullGestureAreaInput.isChecked();
+        }
     }
 
     private void applySettingsMacroModuleInputs() {
@@ -5252,8 +5407,15 @@ public class AssistantActivity extends Activity {
         }
         if (activeSettingsSection == SETTINGS_TOUCHPAD) {
             applySettingsTouchpadInputs();
-            selectedProfile.touchpadSettings = ensureSettingsTouchpadDraft().copy();
+            TouchpadSettings savedTouchpadSettings = ensureSettingsTouchpadDraft().copy();
+            boolean wasVirtualMouse = TouchpadSettings.MODE_VIRTUAL_MOUSE.equals(
+                    TouchpadSettings.normalizeMode(touchpadSettings.mode));
+            boolean isVirtualMouse = TouchpadSettings.MODE_VIRTUAL_MOUSE.equals(
+                    TouchpadSettings.normalizeMode(savedTouchpadSettings.mode));
+            virtualMouseEntryHintPending = !wasVirtualMouse && isVirtualMouse;
+            selectedProfile.touchpadSettings = savedTouchpadSettings;
             touchpadSettings = selectedProfile.safeTouchpadSettings();
+            closeVirtualMouseDispatcherIfUnused();
             settingsTouchpadDraft = null;
         }
         if (activeSettingsSection == SETTINGS_MACRO) {
@@ -8648,6 +8810,7 @@ public class AssistantActivity extends Activity {
         settingsMacroMappingProtectionInput = null;
         settingsMacroMappingProtectionDraft = null;
         touchpadSettings = selectedProfile.safeTouchpadSettings();
+        closeVirtualMouseDispatcherIfUnused();
         ProfileStore.saveSelectedIndex(this, selectedProfileIndex);
         ProfileStore.saveProfiles(this, profiles);
         renderProfiles();
@@ -8709,6 +8872,9 @@ public class AssistantActivity extends Activity {
         }
         if (TouchpadSettings.MODE_MOUSE_POINTER.equals(normalized)) {
             return InputBridge.supportsMouseMode(this);
+        }
+        if (TouchpadSettings.MODE_VIRTUAL_MOUSE.equals(normalized)) {
+            return ShizukuNativeController.isReady();
         }
         return false;
     }
@@ -9801,6 +9967,7 @@ public class AssistantActivity extends Activity {
         settingsMacroMappingProtectionInput = null;
         settingsMacroMappingProtectionDraft = null;
         touchpadSettings = selectedProfile.safeTouchpadSettings();
+        closeVirtualMouseDispatcherIfUnused();
         ProfileStore.saveSelectedIndex(this, selectedProfileIndex);
         ProfileStore.saveProfiles(this, profiles);
         renderProfiles();
@@ -9829,6 +9996,7 @@ public class AssistantActivity extends Activity {
         settingsMacroMappingProtectionInput = null;
         settingsMacroMappingProtectionDraft = null;
         touchpadSettings = selectedProfile.safeTouchpadSettings();
+        closeVirtualMouseDispatcherIfUnused();
         ProfileStore.saveSelectedIndex(this, selectedProfileIndex);
         ProfileStore.saveProfiles(this, profiles);
         renderProfiles();
@@ -9861,6 +10029,7 @@ public class AssistantActivity extends Activity {
         settingsMacroMappingProtectionInput = null;
         settingsMacroMappingProtectionDraft = null;
         touchpadSettings = selectedProfile.safeTouchpadSettings();
+        closeVirtualMouseDispatcherIfUnused();
         ProfileStore.saveSelectedIndex(this, selectedProfileIndex);
         ProfileStore.saveProfiles(this, profiles);
         renderProfiles();
@@ -11671,6 +11840,8 @@ public class AssistantActivity extends Activity {
     }
 
     private final class TouchPadView extends View {
+        private static final int LINUX_BTN_LEFT = 272;
+        private static final int LINUX_BTN_RIGHT = 273;
         private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final RectF rect = new RectF();
         private final Path surfaceClip = new Path();
@@ -11697,6 +11868,50 @@ public class AssistantActivity extends Activity {
         private boolean rightStickGestureActive;
         private boolean rightStickErrorShown;
         private ValueAnimator surfacePressAnimator;
+        private int virtualMouseButton;
+        private int virtualMouseButtonPointerId = -1;
+        private int virtualMouseMotionPointerId = -1;
+        private final int virtualMouseTouchSlop;
+        private final int virtualMouseDoubleTapSlop;
+        private final int virtualMouseDoubleTapTimeoutMs;
+        private float virtualMouseLastX;
+        private float virtualMouseLastY;
+        private float virtualMouseGestureDownX;
+        private float virtualMouseGestureDownY;
+        private boolean virtualMouseTapCandidate;
+        private boolean virtualMouseSecondTapCandidate;
+        private boolean virtualMouseGestureLeftButtonDown;
+        private long virtualMouseLastTapUpTime;
+        private float virtualMouseLastTapX;
+        private float virtualMouseLastTapY;
+        private float virtualMouseScrollLastY;
+        private float virtualMouseScrollAccumulator;
+        private boolean virtualMouseScrolling;
+        private boolean virtualMouseTwoFingerTapCandidate;
+        private int virtualMouseTwoFingerPointerIdA = -1;
+        private int virtualMouseTwoFingerPointerIdB = -1;
+        private float virtualMouseTwoFingerStartAX;
+        private float virtualMouseTwoFingerStartAY;
+        private float virtualMouseTwoFingerStartBX;
+        private float virtualMouseTwoFingerStartBY;
+        private float virtualMouseLeftPressProgress;
+        private float virtualMouseRightPressProgress;
+        private float virtualMouseFeedbackLastX = -1f;
+        private float virtualMouseFeedbackLastY = -1f;
+        private boolean virtualMouseFeedbackButtonsVisible;
+        private ValueAnimator virtualMouseLeftPressAnimator;
+        private ValueAnimator virtualMouseRightPressAnimator;
+        private final View virtualMouseFeedbackView = new View(AssistantActivity.this) {
+            @Override
+            protected void onDraw(Canvas canvas) {
+                super.onDraw(canvas);
+                if (TouchpadSettings.MODE_VIRTUAL_MOUSE.equals(
+                        TouchpadSettings.normalizeMode(touchpadSettings.mode))
+                        && !HeimdallUi.isPearl(AssistantActivity.this)) {
+                    drawVirtualMouseFeedback(canvas);
+                }
+            }
+        };
         private final Runnable relativeMouseNeutralReset = new Runnable() {
             @Override
             public void run() {
@@ -11707,14 +11922,26 @@ public class AssistantActivity extends Activity {
 
         TouchPadView(Activity activity) {
             super(activity);
+            ViewConfiguration viewConfiguration = ViewConfiguration.get(activity);
+            virtualMouseTouchSlop = viewConfiguration.getScaledTouchSlop();
+            virtualMouseDoubleTapSlop = viewConfiguration.getScaledDoubleTapSlop();
+            virtualMouseDoubleTapTimeoutMs = ViewConfiguration.getDoubleTapTimeout();
             setBackground(HeimdallUi.isPearl(AssistantActivity.this)
                     ? null
                     : HeimdallUi.glass(AssistantActivity.this,
                             0x550D1420, 0x77070A10,
                             0x00000000, 0x00000000,
                             HeimdallUi.RADIUS_MODULE, 0));
+            virtualMouseFeedbackView.setClickable(false);
+            virtualMouseFeedbackView.setFocusable(false);
+            virtualMouseFeedbackView.setImportantForAccessibility(
+                    View.IMPORTANT_FOR_ACCESSIBILITY_NO);
             applySystemGestureExclusion(this);
             requestAdvancedInputPreparation();
+        }
+
+        View virtualMouseFeedbackView() {
+            return virtualMouseFeedbackView;
         }
 
         private void requestAdvancedInputPreparation() {
@@ -11723,9 +11950,14 @@ public class AssistantActivity extends Activity {
                     || TouchpadSettings.MODE_RIGHT_STICK.equals(mode))
                     && InputBridge.BACKEND_SHIZUKU.equals(
                             InputBridge.selectedBackendId(AssistantActivity.this));
-            if ((TouchpadSettings.MODE_SHIZUKU_TOUCH.equals(mode) || shizukuControllerMode)
+            if ((TouchpadSettings.MODE_SHIZUKU_TOUCH.equals(mode)
+                    || TouchpadSettings.MODE_VIRTUAL_MOUSE.equals(mode)
+                    || shizukuControllerMode)
                     && ShizukuNativeController.isPermissionGranted()) {
                 ShizukuNativeController.requestServiceBinding(AssistantActivity.this);
+                if (TouchpadSettings.MODE_VIRTUAL_MOUSE.equals(mode)) {
+                    ensureVirtualMouseDispatcher(false);
+                }
             }
         }
 
@@ -11763,6 +11995,11 @@ public class AssistantActivity extends Activity {
             String mode = TouchpadSettings.normalizeMode(touchpadSettings.mode);
             if (TouchpadSettings.MODE_RELATIVE_MOUSE.equals(mode)) {
                 cancelRelativeMousePulse(true);
+            } else if (TouchpadSettings.MODE_VIRTUAL_MOUSE.equals(mode)) {
+                if (virtualMouseDispatcher != null) {
+                    releaseAllVirtualMouseButtons(virtualMouseDispatcher);
+                }
+                clearVirtualMouseGesture();
             } else if (TouchpadSettings.MODE_RIGHT_STICK.equals(mode)) {
                 recenterRightStick(false);
             } else {
@@ -11836,16 +12073,23 @@ public class AssistantActivity extends Activity {
             boolean shizukuTouchMode = TouchpadSettings.MODE_SHIZUKU_TOUCH.equals(mode);
             boolean relativeMouseMode =
                     TouchpadSettings.MODE_RELATIVE_MOUSE.equals(mode);
+            boolean virtualMouseMode = TouchpadSettings.MODE_VIRTUAL_MOUSE.equals(mode);
 
             if (DebugPerformanceDiagnostics.isFlatUi()) {
-                drawFlatControlSurface(canvas, rightStickMode);
+                drawFlatControlSurface(canvas, rightStickMode, virtualMouseMode);
+                if (virtualMouseMode) {
+                    drawVirtualMouseControls(canvas);
+                }
                 return;
             }
 
-            drawControlSurface(canvas, rightStickMode, shizukuTouchMode);
+            drawControlSurface(canvas, rightStickMode, shizukuTouchMode,
+                    virtualMouseMode, !virtualMouseMode);
 
             if (rightStickMode) {
                 drawRightStick(canvas);
+            } else if (virtualMouseMode) {
+                drawVirtualMouseControls(canvas);
             } else if (relativeMouseMode) {
                 drawPrecisionAimReticle(canvas);
             } else {
@@ -11853,7 +12097,8 @@ public class AssistantActivity extends Activity {
             }
         }
 
-        private void drawFlatControlSurface(Canvas canvas, boolean rightStickMode) {
+        private void drawFlatControlSurface(Canvas canvas, boolean rightStickMode,
+                boolean virtualMouseMode) {
             paint.setShader(null);
             paint.setStyle(Paint.Style.FILL);
             paint.setColor(0xFF202A34);
@@ -11862,11 +12107,13 @@ public class AssistantActivity extends Activity {
             paint.setStrokeWidth(dp(1));
             paint.setColor(0xFF6E7E8E);
             canvas.drawRect(rect, paint);
-            float centerX = rightStickMode ? stickCenterX() : rect.centerX();
-            float centerY = rightStickMode ? stickCenterY() : rect.centerY();
-            paint.setStyle(Paint.Style.FILL);
-            paint.setColor(0xFF9AA8B8);
-            canvas.drawCircle(centerX, centerY, dp(4), paint);
+            if (!virtualMouseMode) {
+                float centerX = rightStickMode ? stickCenterX() : rect.centerX();
+                float centerY = rightStickMode ? stickCenterY() : rect.centerY();
+                paint.setStyle(Paint.Style.FILL);
+                paint.setColor(0xFF9AA8B8);
+                canvas.drawCircle(centerX, centerY, dp(4), paint);
+            }
             if (x >= 0f && y >= 0f) {
                 paint.setColor(HeimdallUi.accent(AssistantActivity.this));
                 canvas.drawCircle(x, y, dp(rightStickMode ? 22 : 12), paint);
@@ -11911,31 +12158,40 @@ public class AssistantActivity extends Activity {
             paint.setStrokeCap(Paint.Cap.BUTT);
         }
 
-        private void drawControlSurface(Canvas canvas, boolean rightStickMode, boolean shizukuTouchMode) {
-            float pressProgress = clampFloat(surfacePressProgress, 0f, 1f);
+        private void drawControlSurface(Canvas canvas, boolean rightStickMode,
+                boolean shizukuTouchMode, boolean virtualMouseMode,
+                boolean showFocusCorners) {
+            float pressProgress = virtualMouseMode
+                    ? 0f : clampFloat(surfacePressProgress, 0f, 1f);
             boolean pearl = HeimdallUi.isPearl(AssistantActivity.this);
             if (pearl) {
                 drawPearlInputFrame(canvas);
             }
-            int idleTop = pearl ? 0xFF717B81
-                    : (rightStickMode ? 0x34243D5B
-                            : (shizukuTouchMode ? 0x32234640 : 0x34243D5B));
-            int activeTop = pearl ? 0xFF7C868C
-                    : (rightStickMode ? 0x4A265C94 : 0x4A245A78);
-            int idleBottom = pearl ? 0xFF566168 : 0x8A070A10;
-            int activeBottom = pearl ? 0xFF626C72 : 0xA3070A10;
-            int top = blendColor(idleTop, activeTop, pressProgress);
-            int bottom = blendColor(idleBottom, activeBottom, pressProgress);
             float radius = surfaceRadius();
             paint.setStyle(Paint.Style.FILL);
-            paint.setShader(new LinearGradient(0, rect.top, 0, rect.bottom, top, bottom, Shader.TileMode.CLAMP));
+            if (pearl) {
+                int top = blendColor(0xFF717B81, 0xFF7C868C, pressProgress);
+                int bottom = blendColor(0xFF566168, 0xFF626C72, pressProgress);
+                paint.setShader(new LinearGradient(0, rect.top, 0, rect.bottom,
+                        top, bottom, Shader.TileMode.CLAMP));
+            } else {
+                int idleFace = shizukuTouchMode ? 0xFF0D161B : 0xFF0D1520;
+                int activeFace = rightStickMode ? 0xFF0F1E30 : 0xFF0F1E2A;
+                paint.setShader(null);
+                paint.setColor(blendColor(idleFace, activeFace, pressProgress));
+            }
             canvas.drawRoundRect(rect, radius, radius, paint);
             paint.setShader(null);
 
             drawSurfaceDepth(canvas, pressProgress);
-            drawControlTexture(canvas, rightStickMode, shizukuTouchMode);
-            drawSurfaceGlow(canvas, pressProgress);
-            drawFocusCorners(canvas, pressProgress);
+            drawControlTexture(canvas, rightStickMode, shizukuTouchMode,
+                    virtualMouseMode);
+            if (!virtualMouseMode) {
+                drawSurfaceGlow(canvas, pressProgress);
+            }
+            if (showFocusCorners) {
+                drawFocusCorners(canvas, pressProgress);
+            }
         }
 
         private void drawPearlInputFrame(Canvas canvas) {
@@ -12059,6 +12315,18 @@ public class AssistantActivity extends Activity {
             paint.setShader(null);
         }
 
+        private void drawPearlVirtualMouseOuterEdge(Canvas canvas) {
+            paint.setShader(null);
+            paint.setStyle(Paint.Style.STROKE);
+            float hairline = dp(1);
+            RectF edge = new RectF(rect);
+            edge.inset(hairline / 2f, hairline / 2f);
+            paint.setStrokeWidth(hairline);
+            paint.setColor(0x80616B72);
+            float radius = Math.max(0f, surfaceRadius() - hairline / 2f);
+            canvas.drawRoundRect(edge, radius, radius, paint);
+        }
+
         private void drawFocusCorners(Canvas canvas, float pressProgress) {
             float length = lerp(dp(28), dp(36), pressProgress);
             float inset = dp(12);
@@ -12084,23 +12352,33 @@ public class AssistantActivity extends Activity {
             paint.setStrokeCap(Paint.Cap.BUTT);
         }
 
-        private void drawControlTexture(Canvas canvas, boolean rightStickMode, boolean shizukuTouchMode) {
+        private void drawControlTexture(Canvas canvas, boolean rightStickMode,
+                boolean shizukuTouchMode, boolean virtualMouseMode) {
             canvas.save();
             surfaceClip.reset();
             float radius = surfaceRadius();
             surfaceClip.addRoundRect(rect, radius, radius, Path.Direction.CW);
             canvas.clipPath(surfaceClip);
+            boolean pearl = HeimdallUi.isPearl(AssistantActivity.this);
+            if (virtualMouseMode) {
+                canvas.clipRect(rect.left, rect.top, rect.right,
+                        virtualMouseButtonTop());
+            }
             paint.setStyle(Paint.Style.STROKE);
             paint.setStrokeWidth(1f);
-            paint.setColor(HeimdallUi.isPearl(AssistantActivity.this)
-                    ? HeimdallUi.inputTexture(AssistantActivity.this)
+            paint.setColor(pearl
+                    ? (virtualMouseMode ? 0x16818B91
+                            : HeimdallUi.inputTexture(AssistantActivity.this))
                     : (shizukuTouchMode ? 0x244AE0A9
-                            : (rightStickMode ? 0x265A8DFF : HeimdallUi.inputTexture(AssistantActivity.this))));
+                            : (rightStickMode ? 0x265A8DFF
+                                    : HeimdallUi.inputTexture(AssistantActivity.this))));
             int step = dp(14);
             for (int xLine = -getHeight(); xLine < getWidth(); xLine += step) {
                 canvas.drawLine(xLine, rect.bottom, xLine + getHeight(), rect.top, paint);
             }
-            paint.setColor(HeimdallUi.inputTextureAlt(AssistantActivity.this));
+            paint.setColor(virtualMouseMode && pearl
+                    ? 0x106E787E
+                    : HeimdallUi.inputTextureAlt(AssistantActivity.this));
             int offset = dp(7);
             for (int xLine = -getHeight() + offset; xLine < getWidth(); xLine += step) {
                 canvas.drawLine(xLine, rect.top, xLine + getHeight(), rect.bottom, paint);
@@ -12243,15 +12521,23 @@ public class AssistantActivity extends Activity {
             x = event.getX();
             y = event.getY();
             int action = event.getActionMasked();
-            if (action == MotionEvent.ACTION_DOWN) {
+            String mode = TouchpadSettings.normalizeMode(touchpadSettings.mode);
+            boolean virtualMouseMode = TouchpadSettings.MODE_VIRTUAL_MOUSE.equals(mode);
+            if (virtualMouseMode && action == MotionEvent.ACTION_DOWN) {
+                resetSurfacePressFeedback();
+            } else if (!virtualMouseMode && action == MotionEvent.ACTION_DOWN) {
                 setSurfacePressed(true);
-            } else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+            } else if (!virtualMouseMode
+                    && (action == MotionEvent.ACTION_UP
+                            || action == MotionEvent.ACTION_CANCEL)) {
                 setSurfacePressed(false);
             }
-            String mode = TouchpadSettings.normalizeMode(touchpadSettings.mode);
             boolean shizukuTouchMode = TouchpadSettings.MODE_SHIZUKU_TOUCH.equals(mode);
             if (TouchpadSettings.MODE_RIGHT_STICK.equals(mode)) {
                 return handleRightStickTouch(event);
+            }
+            if (virtualMouseMode) {
+                return handleVirtualMouseTouch(event);
             }
             if (TouchpadSettings.MODE_RELATIVE_MOUSE.equals(mode)) {
                 return handleRelativeMouseTouch(event);
@@ -12455,6 +12741,619 @@ public class AssistantActivity extends Activity {
             return sign * curved * sensitivity;
         }
 
+        private void drawVirtualMouseControls(Canvas canvas) {
+            float buttonTop = virtualMouseButtonTop();
+            float middle = rect.centerX();
+            boolean pearl = HeimdallUi.isPearl(AssistantActivity.this);
+
+            if (!virtualMouseUsesButtonStrip()) {
+                if (pearl) {
+                    drawPearlVirtualMouseOuterEdge(canvas);
+                } else {
+                    drawSurfaceGlow(canvas, 0f);
+                }
+                if (pearl && virtualMouseMotionPointerId >= 0 && x >= 0f && y >= 0f
+                        && y < buttonTop) {
+                    drawVirtualMouseTouchPoint(canvas);
+                }
+                return;
+            }
+
+            canvas.save();
+            surfaceClip.reset();
+            float radius = surfaceRadius();
+            surfaceClip.addRoundRect(rect, radius, radius, Path.Direction.CW);
+            canvas.clipPath(surfaceClip);
+
+            paint.setStyle(Paint.Style.FILL);
+            if (pearl) {
+                paint.setShader(new LinearGradient(0f, buttonTop, 0f, rect.bottom,
+                        0xFF59636A, 0xFF485259, Shader.TileMode.CLAMP));
+            } else {
+                paint.setShader(new LinearGradient(0f, buttonTop, 0f, rect.bottom,
+                        new int[]{0xFF1B3247, 0xFF122638, 0xFF09141F},
+                        new float[]{0f, 0.46f, 1f}, Shader.TileMode.CLAMP));
+            }
+            canvas.drawRect(rect.left, buttonTop, rect.right, rect.bottom, paint);
+            paint.setShader(null);
+
+            if (pearl) {
+                drawVirtualMousePressedState(canvas,
+                        new RectF(rect.left, buttonTop, middle, rect.bottom),
+                        virtualMouseLeftPressProgress, true);
+                drawVirtualMousePressedState(canvas,
+                        new RectF(middle, buttonTop, rect.right, rect.bottom),
+                        virtualMouseRightPressProgress, true);
+            }
+
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(dp(1));
+            paint.setColor(pearl ? 0xB04D575E : 0x7044637D);
+            canvas.drawLine(rect.left, buttonTop, rect.right, buttonTop, paint);
+            paint.setColor(pearl ? 0x52343C42 : 0x344D6478);
+            canvas.drawLine(middle, buttonTop + dp(4), middle,
+                    rect.bottom - dp(4), paint);
+            canvas.restore();
+            if (pearl) {
+                drawPearlVirtualMouseOuterEdge(canvas);
+            } else {
+                drawSurfaceGlow(canvas, 0f);
+            }
+            if (pearl && virtualMouseMotionPointerId >= 0 && x >= 0f && y >= 0f
+                    && y < buttonTop) {
+                drawVirtualMouseTouchPoint(canvas);
+            }
+        }
+
+        private void drawVirtualMouseFeedback(Canvas canvas) {
+            float buttonTop = virtualMouseButtonTop();
+            float middle = rect.centerX();
+            boolean pearl = HeimdallUi.isPearl(AssistantActivity.this);
+            if (virtualMouseUsesButtonStrip()) {
+                canvas.save();
+                surfaceClip.reset();
+                RectF feedbackClip = new RectF(rect);
+                float frameGuard = dp(4);
+                feedbackClip.inset(frameGuard, frameGuard);
+                float radius = Math.max(0f, surfaceRadius() - frameGuard);
+                surfaceClip.addRoundRect(feedbackClip, radius, radius, Path.Direction.CW);
+                canvas.clipPath(surfaceClip);
+                drawVirtualMousePressedState(canvas,
+                        new RectF(rect.left, buttonTop, middle, rect.bottom),
+                        virtualMouseLeftPressProgress, pearl);
+                drawVirtualMousePressedState(canvas,
+                        new RectF(middle, buttonTop, rect.right, rect.bottom),
+                        virtualMouseRightPressProgress, pearl);
+                canvas.restore();
+            }
+            if (virtualMouseMotionPointerId >= 0 && x >= 0f && y >= 0f
+                    && y < buttonTop) {
+                drawVirtualMouseTouchPoint(canvas);
+            }
+        }
+
+        private void drawVirtualMousePressedState(Canvas canvas, RectF hotArea,
+                float rawProgress, boolean pearl) {
+            float progress = clampFloat(rawProgress, 0f, 1f);
+            if (progress <= 0.001f) {
+                return;
+            }
+            paint.setShader(null);
+            if (!pearl) {
+                boolean left = hotArea.centerX() <= rect.centerX();
+                Path buttonPath = virtualMouseButtonPath(hotArea, left, 0f);
+                paint.setStyle(Paint.Style.FILL);
+                paint.setShader(new LinearGradient(0f, hotArea.top, 0f, hotArea.bottom,
+                        new int[]{
+                                scaleColorAlpha(0x303E91D6, progress),
+                                scaleColorAlpha(0x1E2D70B8, progress),
+                                scaleColorAlpha(0x0C0C3C68, progress)},
+                        new float[]{0f, 0.48f, 1f}, Shader.TileMode.CLAMP));
+                canvas.drawPath(buttonPath, paint);
+                paint.setShader(null);
+
+                paint.setStyle(Paint.Style.STROKE);
+                float glowInset = dp(4);
+                Path glowPath = virtualMouseButtonPath(hotArea, left, glowInset);
+                paint.setStrokeWidth(dp(2));
+                paint.setColor(scaleColorAlpha(
+                        HeimdallUi.inputGlow(AssistantActivity.this, true),
+                        progress * 0.46f));
+                canvas.drawPath(glowPath, paint);
+
+                paint.setStrokeWidth(dp(1));
+                paint.setColor(scaleColorAlpha(
+                        HeimdallUi.inputEdge(AssistantActivity.this, true),
+                        progress * 0.72f));
+                canvas.drawPath(glowPath, paint);
+                return;
+            }
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(scaleColorAlpha(
+                    0x24F08A2A, progress));
+            canvas.drawRect(hotArea, paint);
+
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(dp(2));
+            paint.setColor(scaleColorAlpha(
+                    0x52000000, progress));
+            canvas.drawLine(hotArea.left, hotArea.top + dp(2),
+                    hotArea.right, hotArea.top + dp(2), paint);
+
+            RectF insetEdge = new RectF(hotArea);
+            insetEdge.inset(dp(2), dp(2));
+            paint.setStrokeWidth(dp(1));
+            paint.setColor(scaleColorAlpha(
+                    0xB8F08A2A, progress));
+            canvas.drawRect(insetEdge, paint);
+        }
+
+        private Path virtualMouseButtonPath(RectF hotArea, boolean left, float inset) {
+            RectF pathRect = new RectF(hotArea);
+            pathRect.inset(inset, inset);
+            float radius = Math.max(0f, surfaceRadius() - inset);
+            float[] radii = left
+                    ? new float[]{0f, 0f, 0f, 0f, 0f, 0f, radius, radius}
+                    : new float[]{0f, 0f, 0f, 0f, radius, radius, 0f, 0f};
+            Path path = new Path();
+            path.addRoundRect(pathRect, radii, Path.Direction.CW);
+            return path;
+        }
+
+        private void invalidateVirtualMouseFeedback() {
+            if (HeimdallUi.isPearl(AssistantActivity.this)) {
+                invalidate();
+            } else {
+                Rect dirty = new Rect();
+                int cursorPadding = dp(22);
+                if (virtualMouseFeedbackLastX >= 0f && virtualMouseFeedbackLastY >= 0f) {
+                    dirty.set(
+                            Math.round(virtualMouseFeedbackLastX) - cursorPadding,
+                            Math.round(virtualMouseFeedbackLastY) - cursorPadding,
+                            Math.round(virtualMouseFeedbackLastX) + cursorPadding,
+                            Math.round(virtualMouseFeedbackLastY) + cursorPadding);
+                }
+                boolean cursorVisible = virtualMouseMotionPointerId >= 0
+                        && x >= 0f && y >= 0f && y < virtualMouseButtonTop();
+                if (cursorVisible) {
+                    Rect currentCursor = new Rect(
+                            Math.round(x) - cursorPadding,
+                            Math.round(y) - cursorPadding,
+                            Math.round(x) + cursorPadding,
+                            Math.round(y) + cursorPadding);
+                    if (dirty.isEmpty()) {
+                        dirty.set(currentCursor);
+                    } else {
+                        dirty.union(currentCursor);
+                    }
+                    virtualMouseFeedbackLastX = x;
+                    virtualMouseFeedbackLastY = y;
+                } else {
+                    virtualMouseFeedbackLastX = -1f;
+                    virtualMouseFeedbackLastY = -1f;
+                }
+                boolean buttonsVisible = virtualMouseUsesButtonStrip()
+                        && (virtualMouseLeftPressAnimator != null
+                                || virtualMouseRightPressAnimator != null
+                                || virtualMouseLeftPressProgress > 0.001f
+                                || virtualMouseRightPressProgress > 0.001f);
+                if (buttonsVisible || virtualMouseFeedbackButtonsVisible) {
+                    Rect buttons = new Rect(
+                            Math.round(rect.left),
+                            Math.round(virtualMouseButtonTop()),
+                            Math.round(rect.right),
+                            Math.round(rect.bottom));
+                    if (dirty.isEmpty()) {
+                        dirty.set(buttons);
+                    } else {
+                        dirty.union(buttons);
+                    }
+                }
+                virtualMouseFeedbackButtonsVisible = buttonsVisible;
+                if (!dirty.isEmpty()) {
+                    virtualMouseFeedbackView.invalidate(dirty);
+                }
+            }
+        }
+
+        private void setVirtualMouseButtonFeedback(int button, boolean pressed) {
+            boolean left = button == LINUX_BTN_LEFT;
+            ValueAnimator current = left
+                    ? virtualMouseLeftPressAnimator : virtualMouseRightPressAnimator;
+            if (current != null) {
+                current.cancel();
+            }
+            float start = left
+                    ? virtualMouseLeftPressProgress : virtualMouseRightPressProgress;
+            float target = pressed ? 1f : 0f;
+            if (!shouldAnimateUi() || Math.abs(start - target) < 0.001f) {
+                if (left) {
+                    virtualMouseLeftPressProgress = target;
+                    virtualMouseLeftPressAnimator = null;
+                } else {
+                    virtualMouseRightPressProgress = target;
+                    virtualMouseRightPressAnimator = null;
+                }
+                invalidateVirtualMouseFeedback();
+                return;
+            }
+            ValueAnimator animator = ValueAnimator.ofFloat(start, target);
+            if (left) {
+                virtualMouseLeftPressAnimator = animator;
+            } else {
+                virtualMouseRightPressAnimator = animator;
+            }
+            animator.setDuration(pressed
+                    ? TOUCH_SURFACE_PRESS_IN_MS : TOUCH_SURFACE_PRESS_OUT_MS);
+            animator.setInterpolator(UI_EASE_OUT);
+            animator.addUpdateListener(valueAnimator -> {
+                float value = (float) valueAnimator.getAnimatedValue();
+                if (left) {
+                    virtualMouseLeftPressProgress = value;
+                } else {
+                    virtualMouseRightPressProgress = value;
+                }
+                invalidateVirtualMouseFeedback();
+            });
+            animator.addListener(new AnimatorListenerAdapter() {
+                @Override
+                public void onAnimationEnd(Animator animation) {
+                    if (left && virtualMouseLeftPressAnimator == animation) {
+                        virtualMouseLeftPressAnimator = null;
+                    } else if (!left && virtualMouseRightPressAnimator == animation) {
+                        virtualMouseRightPressAnimator = null;
+                    }
+                    invalidateVirtualMouseFeedback();
+                }
+            });
+            animator.start();
+        }
+
+        private void resetVirtualMouseButtonFeedback() {
+            if (virtualMouseLeftPressAnimator != null) {
+                virtualMouseLeftPressAnimator.cancel();
+                virtualMouseLeftPressAnimator = null;
+            }
+            if (virtualMouseRightPressAnimator != null) {
+                virtualMouseRightPressAnimator.cancel();
+                virtualMouseRightPressAnimator = null;
+            }
+            virtualMouseLeftPressProgress = 0f;
+            virtualMouseRightPressProgress = 0f;
+        }
+
+        private void drawVirtualMouseTouchPoint(Canvas canvas) {
+            paint.setShader(null);
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(HeimdallUi.isPearl(AssistantActivity.this)
+                    ? 0xCCF08A2A : 0xCC70B7FF);
+            canvas.drawCircle(x, y, dp(18), paint);
+            paint.setColor(HeimdallUi.textColor(AssistantActivity.this));
+            canvas.drawCircle(x, y, dp(3), paint);
+        }
+
+        private float virtualMouseButtonTop() {
+            return virtualMouseUsesButtonStrip()
+                    ? rect.top + rect.height() * 0.76f
+                    : rect.bottom;
+        }
+
+        private boolean virtualMouseUsesButtonStrip() {
+            return !touchpadSettings.virtualMouseFullGestureArea;
+        }
+
+        private boolean handleVirtualMouseTouch(MotionEvent event) {
+            int action = event.getActionMasked();
+            int actionIndex = event.getActionIndex();
+            int actionPointerId = event.getPointerId(actionIndex);
+            if (!ShizukuNativeController.isReady()) {
+                if (action == MotionEvent.ACTION_DOWN && !virtualMouseErrorShown) {
+                    virtualMouseErrorShown = true;
+                    showErrorAction(getString(R.string.virtual_mouse_unavailable));
+                }
+                if (virtualMouseDispatcher != null) {
+                    closeVirtualMouseDispatcher();
+                }
+                clearVirtualMouseGesture();
+                return true;
+            }
+            VirtualMouseDispatcher dispatcher = ensureVirtualMouseDispatcher(
+                    action == MotionEvent.ACTION_DOWN);
+            if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN) {
+                float pointerX = event.getX(actionIndex);
+                float pointerY = event.getY(actionIndex);
+                boolean firstPointerWasTapCandidate = virtualMouseTapCandidate;
+                if (action == MotionEvent.ACTION_POINTER_DOWN) {
+                    cancelVirtualMouseTapCandidate();
+                }
+                if (pointerY >= virtualMouseButtonTop() && virtualMouseButtonPointerId < 0) {
+                    virtualMouseButtonPointerId = actionPointerId;
+                    virtualMouseButton = pointerX < rect.centerX()
+                            ? LINUX_BTN_LEFT : LINUX_BTN_RIGHT;
+                    setVirtualMouseButtonFeedback(virtualMouseButton, true);
+                    dispatcher.button(virtualMouseButton, true);
+                } else if (virtualMouseMotionPointerId < 0) {
+                    virtualMouseMotionPointerId = actionPointerId;
+                    virtualMouseLastX = pointerX;
+                    virtualMouseLastY = pointerY;
+                    x = pointerX;
+                    y = pointerY;
+                    if (action == MotionEvent.ACTION_DOWN) {
+                        beginVirtualMouseTapCandidate(event.getEventTime(), pointerX, pointerY);
+                    }
+                }
+                if (event.getPointerCount() == 2 && virtualMouseButtonPointerId < 0
+                        && startVirtualMouseTwoFingerGesture(event, actionPointerId,
+                                firstPointerWasTapCandidate)) {
+                    virtualMouseScrolling = true;
+                    virtualMouseScrollLastY = averagePointerY(event, -1);
+                    virtualMouseScrollAccumulator = 0f;
+                } else if (event.getPointerCount() > 2) {
+                    clearVirtualMouseTwoFingerTapCandidate();
+                }
+                invalidateVirtualMouseFeedback();
+                return true;
+            }
+            if (action == MotionEvent.ACTION_MOVE) {
+                if (virtualMouseScrolling && event.getPointerCount() >= 2) {
+                    if (virtualMouseTwoFingerTapCandidate
+                            && virtualMouseTwoFingerMovedBeyondTouchSlop(event)) {
+                        virtualMouseTwoFingerTapCandidate = false;
+                    }
+                    float averageY = averagePointerY(event, -1);
+                    virtualMouseScrollAccumulator += averageY - virtualMouseScrollLastY;
+                    virtualMouseScrollLastY = averageY;
+                    float step = Math.max(16f, touchpadSettings.virtualMouseScrollDistance);
+                    int wheel = 0;
+                    while (Math.abs(virtualMouseScrollAccumulator) >= step) {
+                        int direction = virtualMouseScrollAccumulator > 0f ? -1 : 1;
+                        wheel += direction;
+                        virtualMouseScrollAccumulator -= Math.signum(
+                                virtualMouseScrollAccumulator) * step;
+                    }
+                    if (wheel != 0) {
+                        virtualMouseTwoFingerTapCandidate = false;
+                        dispatcher.wheel(wheel);
+                    }
+                } else {
+                    int pointerIndex = event.findPointerIndex(virtualMouseMotionPointerId);
+                    if (pointerIndex >= 0) {
+                        float pointerX = event.getX(pointerIndex);
+                        float pointerY = event.getY(pointerIndex);
+                        if (virtualMouseTapCandidate
+                                && movedBeyondSlop(pointerX, pointerY,
+                                        virtualMouseGestureDownX, virtualMouseGestureDownY,
+                                        virtualMouseTouchSlop)) {
+                            boolean startDoubleTapDrag = virtualMouseSecondTapCandidate;
+                            cancelVirtualMouseTapCandidate();
+                            if (startDoubleTapDrag) {
+                                virtualMouseGestureLeftButtonDown = true;
+                                dispatcher.button(LINUX_BTN_LEFT, true);
+                            }
+                        }
+                        float dx = (pointerX - virtualMouseLastX)
+                                * touchpadSettings.virtualMouseSensitivity;
+                        float dy = (pointerY - virtualMouseLastY)
+                                * touchpadSettings.virtualMouseSensitivity;
+                        if (touchpadSettings.virtualMouseInvertY) {
+                            dy = -dy;
+                        }
+                        virtualMouseLastX = pointerX;
+                        virtualMouseLastY = pointerY;
+                        x = pointerX;
+                        y = pointerY;
+                        dispatcher.move(dx, dy);
+                    }
+                }
+                invalidateVirtualMouseFeedback();
+                return true;
+            }
+            if (action == MotionEvent.ACTION_CANCEL) {
+                releaseAllVirtualMouseButtons(dispatcher);
+                clearVirtualMouseGesture();
+                invalidateVirtualMouseFeedback();
+                return true;
+            }
+            if (action == MotionEvent.ACTION_POINTER_UP || action == MotionEvent.ACTION_UP) {
+                boolean singleTap = action == MotionEvent.ACTION_UP
+                        && actionPointerId == virtualMouseMotionPointerId
+                        && virtualMouseTapCandidate
+                        && !movedBeyondSlop(event.getX(actionIndex), event.getY(actionIndex),
+                                virtualMouseGestureDownX, virtualMouseGestureDownY,
+                                virtualMouseTouchSlop);
+                boolean completedDoubleTap = singleTap && virtualMouseSecondTapCandidate;
+                if (actionPointerId == virtualMouseButtonPointerId
+                        || action == MotionEvent.ACTION_UP) {
+                    if (virtualMouseButton != 0) {
+                        setVirtualMouseButtonFeedback(virtualMouseButton, false);
+                        dispatcher.button(virtualMouseButton, false);
+                    }
+                    virtualMouseButton = 0;
+                    virtualMouseButtonPointerId = -1;
+                }
+                if (virtualMouseGestureLeftButtonDown
+                        && (actionPointerId == virtualMouseMotionPointerId
+                                || action == MotionEvent.ACTION_UP)) {
+                    dispatcher.button(LINUX_BTN_LEFT, false);
+                    virtualMouseGestureLeftButtonDown = false;
+                }
+                if (virtualMouseTwoFingerTapCandidate
+                        && event.getPointerCount() - 1 < 2
+                        && virtualMouseTwoFingerTapStillValid(event)) {
+                    clickVirtualMouseButton(dispatcher, LINUX_BTN_RIGHT);
+                }
+                if (event.getPointerCount() - 1 < 2) {
+                    clearVirtualMouseTwoFingerTapCandidate();
+                }
+                if (actionPointerId == virtualMouseMotionPointerId) {
+                    virtualMouseMotionPointerId = -1;
+                }
+                if (singleTap) {
+                    clickVirtualMouseButton(dispatcher, LINUX_BTN_LEFT);
+                }
+                if (action == MotionEvent.ACTION_UP) {
+                    long tapUpTime = event.getEventTime();
+                    float tapX = event.getX(actionIndex);
+                    float tapY = event.getY(actionIndex);
+                    clearVirtualMouseGesture();
+                    if (singleTap && !completedDoubleTap) {
+                        virtualMouseLastTapUpTime = tapUpTime;
+                        virtualMouseLastTapX = tapX;
+                        virtualMouseLastTapY = tapY;
+                    }
+                } else if (event.getPointerCount() - 1 < 2) {
+                    virtualMouseScrolling = false;
+                    virtualMouseScrollAccumulator = 0f;
+                    selectRemainingMotionPointer(event, actionIndex);
+                } else if (virtualMouseScrolling) {
+                    virtualMouseScrollLastY = averagePointerY(event, actionPointerId);
+                }
+                invalidateVirtualMouseFeedback();
+                return true;
+            }
+            return true;
+        }
+
+        private void beginVirtualMouseTapCandidate(long eventTime, float pointerX, float pointerY) {
+            virtualMouseGestureDownX = pointerX;
+            virtualMouseGestureDownY = pointerY;
+            virtualMouseTapCandidate = true;
+            long sinceLastTap = eventTime - virtualMouseLastTapUpTime;
+            virtualMouseSecondTapCandidate = virtualMouseLastTapUpTime > 0L
+                    && sinceLastTap >= 0L
+                    && sinceLastTap <= virtualMouseDoubleTapTimeoutMs
+                    && !movedBeyondSlop(pointerX, pointerY,
+                            virtualMouseLastTapX, virtualMouseLastTapY,
+                            virtualMouseDoubleTapSlop);
+            if (!virtualMouseSecondTapCandidate
+                    && sinceLastTap > virtualMouseDoubleTapTimeoutMs) {
+                virtualMouseLastTapUpTime = 0L;
+            }
+        }
+
+        private void cancelVirtualMouseTapCandidate() {
+            virtualMouseTapCandidate = false;
+            virtualMouseSecondTapCandidate = false;
+            virtualMouseLastTapUpTime = 0L;
+        }
+
+        private boolean startVirtualMouseTwoFingerGesture(
+                MotionEvent event, int secondPointerId, boolean tapCandidate) {
+            int firstIndex = event.findPointerIndex(virtualMouseMotionPointerId);
+            int secondIndex = event.findPointerIndex(secondPointerId);
+            if (firstIndex < 0 || secondIndex < 0
+                    || event.getY(firstIndex) >= virtualMouseButtonTop()
+                    || event.getY(secondIndex) >= virtualMouseButtonTop()) {
+                clearVirtualMouseTwoFingerTapCandidate();
+                return false;
+            }
+            virtualMouseTwoFingerPointerIdA = virtualMouseMotionPointerId;
+            virtualMouseTwoFingerPointerIdB = secondPointerId;
+            virtualMouseTwoFingerStartAX = event.getX(firstIndex);
+            virtualMouseTwoFingerStartAY = event.getY(firstIndex);
+            virtualMouseTwoFingerStartBX = event.getX(secondIndex);
+            virtualMouseTwoFingerStartBY = event.getY(secondIndex);
+            virtualMouseTwoFingerTapCandidate = tapCandidate;
+            return true;
+        }
+
+        private boolean virtualMouseTwoFingerMovedBeyondTouchSlop(MotionEvent event) {
+            int firstIndex = event.findPointerIndex(virtualMouseTwoFingerPointerIdA);
+            int secondIndex = event.findPointerIndex(virtualMouseTwoFingerPointerIdB);
+            if (firstIndex < 0 || secondIndex < 0
+                    || event.getY(firstIndex) >= virtualMouseButtonTop()
+                    || event.getY(secondIndex) >= virtualMouseButtonTop()) {
+                return true;
+            }
+            return movedBeyondSlop(event.getX(firstIndex), event.getY(firstIndex),
+                    virtualMouseTwoFingerStartAX, virtualMouseTwoFingerStartAY,
+                    virtualMouseTouchSlop)
+                    || movedBeyondSlop(event.getX(secondIndex), event.getY(secondIndex),
+                            virtualMouseTwoFingerStartBX, virtualMouseTwoFingerStartBY,
+                            virtualMouseTouchSlop);
+        }
+
+        private boolean virtualMouseTwoFingerTapStillValid(MotionEvent event) {
+            return !virtualMouseTwoFingerMovedBeyondTouchSlop(event);
+        }
+
+        private void clearVirtualMouseTwoFingerTapCandidate() {
+            virtualMouseTwoFingerTapCandidate = false;
+            virtualMouseTwoFingerPointerIdA = -1;
+            virtualMouseTwoFingerPointerIdB = -1;
+        }
+
+        private boolean movedBeyondSlop(float pointerX, float pointerY,
+                float startX, float startY, int slop) {
+            float dx = pointerX - startX;
+            float dy = pointerY - startY;
+            return dx * dx + dy * dy > (float) slop * slop;
+        }
+
+        private void clickVirtualMouseButton(
+                VirtualMouseDispatcher dispatcher, int linuxButtonCode) {
+            dispatcher.button(linuxButtonCode, true);
+            dispatcher.button(linuxButtonCode, false);
+        }
+
+        private void releaseAllVirtualMouseButtons(VirtualMouseDispatcher dispatcher) {
+            dispatcher.button(LINUX_BTN_LEFT, false);
+            dispatcher.button(LINUX_BTN_RIGHT, false);
+            virtualMouseButton = 0;
+            virtualMouseButtonPointerId = -1;
+            virtualMouseGestureLeftButtonDown = false;
+            resetVirtualMouseButtonFeedback();
+        }
+
+        private float averagePointerY(MotionEvent event, int excludedPointerId) {
+            float total = 0f;
+            int count = 0;
+            for (int i = 0; i < event.getPointerCount(); i++) {
+                if (event.getPointerId(i) == excludedPointerId) {
+                    continue;
+                }
+                total += event.getY(i);
+                count++;
+            }
+            return count == 0 ? 0f : total / count;
+        }
+
+        private void selectRemainingMotionPointer(MotionEvent event, int liftedIndex) {
+            virtualMouseMotionPointerId = -1;
+            for (int i = 0; i < event.getPointerCount(); i++) {
+                if (i == liftedIndex
+                        || event.getPointerId(i) == virtualMouseButtonPointerId) {
+                    continue;
+                }
+                virtualMouseMotionPointerId = event.getPointerId(i);
+                virtualMouseLastX = event.getX(i);
+                virtualMouseLastY = event.getY(i);
+                x = virtualMouseLastX;
+                y = virtualMouseLastY;
+                break;
+            }
+        }
+
+        private void clearVirtualMouseGesture() {
+            if (virtualMouseButton != 0) {
+                setVirtualMouseButtonFeedback(virtualMouseButton, false);
+            }
+            virtualMouseButton = 0;
+            virtualMouseButtonPointerId = -1;
+            virtualMouseMotionPointerId = -1;
+            virtualMouseScrolling = false;
+            virtualMouseScrollAccumulator = 0f;
+            virtualMouseTapCandidate = false;
+            virtualMouseSecondTapCandidate = false;
+            virtualMouseGestureLeftButtonDown = false;
+            virtualMouseLastTapUpTime = 0L;
+            clearVirtualMouseTwoFingerTapCandidate();
+            x = -1f;
+            y = -1f;
+            resetSurfacePressFeedback();
+            invalidateVirtualMouseFeedback();
+        }
+
         private boolean handleRelativeMouseTouch(MotionEvent event) {
             int action = event.getActionMasked();
             if (action == MotionEvent.ACTION_DOWN) {
@@ -12554,6 +13453,11 @@ public class AssistantActivity extends Activity {
             String mode = TouchpadSettings.normalizeMode(touchpadSettings.mode);
             if (TouchpadSettings.MODE_RELATIVE_MOUSE.equals(mode)) {
                 cancelRelativeMousePulse(true);
+            } else if (TouchpadSettings.MODE_VIRTUAL_MOUSE.equals(mode)) {
+                if (virtualMouseDispatcher != null) {
+                    releaseAllVirtualMouseButtons(virtualMouseDispatcher);
+                }
+                clearVirtualMouseGesture();
             } else if (TouchpadSettings.MODE_RIGHT_STICK.equals(mode)) {
                 if (rightStickGestureStarted) {
                     recenterRightStick(false);

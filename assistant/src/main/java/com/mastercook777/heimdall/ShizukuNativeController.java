@@ -270,6 +270,57 @@ public final class ShizukuNativeController {
         }
     }
 
+    public static String openVirtualMouse(Context context) {
+        return virtualMouseTransaction(context,
+                ShizukuNativeUserService.TRANSACTION_OPEN_VIRTUAL_MOUSE,
+                0, 0, 0, 0, 0, 1500);
+    }
+
+    public static String emitVirtualMouse(Context context,
+            int dx, int dy, int wheel, int button, int buttonValue) {
+        return virtualMouseTransaction(context,
+                ShizukuNativeUserService.TRANSACTION_EMIT_VIRTUAL_MOUSE,
+                dx, dy, wheel, button, buttonValue, 0);
+    }
+
+    public static String releaseVirtualMouse(Context context) {
+        return virtualMouseTransaction(context,
+                ShizukuNativeUserService.TRANSACTION_RELEASE_VIRTUAL_MOUSE,
+                0, 0, 0, 0, 0, 0);
+    }
+
+    private static String virtualMouseTransaction(Context context, int transaction,
+            int dx, int dy, int wheel, int button, int buttonValue, long waitMs) {
+        IBinder bound = getService(context, waitMs);
+        if (bound == null) {
+            return context.getString(R.string.virtual_mouse_unavailable);
+        }
+        Parcel data = Parcel.obtain();
+        Parcel reply = Parcel.obtain();
+        try {
+            data.writeInterfaceToken(ShizukuNativeUserService.DESCRIPTOR);
+            if (transaction == ShizukuNativeUserService.TRANSACTION_EMIT_VIRTUAL_MOUSE) {
+                data.writeInt(dx);
+                data.writeInt(dy);
+                data.writeInt(wheel);
+                data.writeInt(button);
+                data.writeInt(buttonValue);
+            }
+            if (!bound.transact(transaction, data, reply, 0)) {
+                clearService();
+                return context.getString(R.string.virtual_mouse_unavailable);
+            }
+            reply.readException();
+            return reply.readString();
+        } catch (RemoteException | RuntimeException e) {
+            clearService();
+            return context.getString(R.string.virtual_mouse_unavailable);
+        } finally {
+            data.recycle();
+            reply.recycle();
+        }
+    }
+
     public static boolean warmUp(Context context, long waitMs) {
         return getService(context, waitMs) != null;
     }
@@ -377,7 +428,7 @@ public final class ShizukuNativeController {
         }
         try {
             Shizuku.UserServiceArgs args = userServiceArgs(
-                    context, "heimdall_native_controller_v10", 10);
+                    context, "heimdall_native_controller_v11", 11);
             Shizuku.bindUserService(args, CONNECTION);
         } catch (Throwable error) {
             failBinding(generation);

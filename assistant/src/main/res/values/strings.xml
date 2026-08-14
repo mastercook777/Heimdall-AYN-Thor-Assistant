@@ -1,4 +1,12 @@
 <resources>
+    <string name="touch_mode_virtual_mouse">Virtual Mouse</string>
+    <string name="touch_virtual_mouse_sensitivity">Pointer sensitivity</string>
+    <string name="touch_virtual_mouse_scroll">Scroll step</string>
+    <string name="touch_virtual_mouse_full_gesture_area">Full gesture area</string>
+    <string name="touch_virtual_mouse_full_gesture_area_help">Hides the lower left/right buttons and uses the entire Touchpad for movement and gestures.</string>
+    <string name="touch_virtual_mouse_help">Tap with one finger for left click; tap twice for double-click; double-tap and drag to hold left; tap with two fingers for right click; swipe vertically with two fingers to scroll. The upper client must keep focus and support relative mouse input.</string>
+    <string name="virtual_mouse_unavailable">Start and authorize Shizuku before using Virtual Mouse.</string>
+    <string name="virtual_mouse_entry_hint">One finger to move \u00b7 Two fingers to scroll</string>
     <string name="app_name">Heimdall</string>
     <string name="accessibility_service_name">Heimdall Input Bridge</string>
     <string name="accessibility_service_description">Allow Heimdall to run configured tap, swipe, and controller macros.</string>
