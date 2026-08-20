@@ -43,6 +43,8 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
             target = getTargetContext();
             assertNotNull(target);
             testControllerSequenceSafetyPolicy();
+            testVirtualKeyboardTransportContract();
+            testKeyboardPadModelContract();
             testSelfContainedRoundTripAfterSourcesAreDeleted();
             testCorruptMissingUnsafeAndOversizedBundlesFailClosed();
             testLegacyProfileJsonRemainsImportable();
@@ -54,6 +56,98 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
             result.putString("stack", android.util.Log.getStackTraceString(failure));
             finish(Activity.RESULT_CANCELED, result);
         }
+    }
+
+    public void testVirtualKeyboardTransportContract() {
+        assertTrue(VirtualKeyboardDispatcher.isSupportedKeyCode(1));
+        assertTrue(VirtualKeyboardDispatcher.isSupportedKeyCode(255));
+        assertFalse(VirtualKeyboardDispatcher.isSupportedKeyCode(0));
+        assertFalse(VirtualKeyboardDispatcher.isSupportedKeyCode(256));
+        assertEquals(ShizukuNativeUserService.TRANSACTION_RELEASE_VIRTUAL_MOUSE + 1,
+                ShizukuNativeUserService.TRANSACTION_OPEN_VIRTUAL_KEYBOARD);
+        assertEquals(ShizukuNativeUserService.TRANSACTION_OPEN_VIRTUAL_KEYBOARD + 1,
+                ShizukuNativeUserService.TRANSACTION_EMIT_VIRTUAL_KEYBOARD);
+        assertEquals(ShizukuNativeUserService.TRANSACTION_EMIT_VIRTUAL_KEYBOARD + 1,
+                ShizukuNativeUserService.TRANSACTION_RELEASE_VIRTUAL_KEYBOARD_KEYS);
+        assertEquals(ShizukuNativeUserService.TRANSACTION_RELEASE_VIRTUAL_KEYBOARD_KEYS + 1,
+                ShizukuNativeUserService.TRANSACTION_RELEASE_VIRTUAL_KEYBOARD);
+    }
+
+    public void testKeyboardPadModelContract() throws Exception {
+        WidgetLayout layout = WidgetLayout.defaultLayout();
+        WidgetLayout.Item item = new WidgetLayout.Item(
+                WidgetLayout.TYPE_KEYBOARD_PAD, 0, 0, 3, 4);
+        KeyboardPad pad = KeyboardPad.defaultPad();
+        pad.columns = 4;
+        pad.rows = 3;
+        KeyboardPad.Key key = pad.keys.get(0);
+        key.binding.linuxKeyCode = KeyboardKeyCatalog.KEY_ENTER;
+        key.binding.ctrl = true;
+        key.behavior = KeyboardPad.BEHAVIOR_PRESS;
+        key.display.label = "ACCEPT";
+        key.display.iconKey = "builtin:interact";
+        key.geometry.x = 2;
+        key.geometry.y = 1;
+        key.geometry.w = 2;
+        key.geometry.h = 1;
+        item.keyboardPad = pad;
+        layout.items.add(item);
+
+        WidgetLayout restored = WidgetLayout.fromJson(layout.toJson());
+        WidgetLayout.Item restoredItem = restored.findItem(WidgetLayout.TYPE_KEYBOARD_PAD);
+        assertNotNull(restoredItem);
+        KeyboardPad.Key restoredKey = restoredItem.safeKeyboardPad().keys.get(0);
+        assertEquals(KeyboardKeyCatalog.KEY_ENTER, restoredKey.binding.linuxKeyCode);
+        assertTrue(restoredKey.binding.ctrl);
+        assertEquals(KeyboardPad.BEHAVIOR_PRESS, restoredKey.behavior);
+        assertEquals("ACCEPT", restoredKey.display.label);
+        assertEquals("builtin:interact", restoredKey.display.iconKey);
+        assertEquals(2, restoredKey.geometry.x);
+        assertEquals(1, restoredKey.geometry.y);
+        assertEquals(2, restoredKey.geometry.w);
+
+        JSONObject legacyPadItem = new JSONObject();
+        legacyPadItem.put("type", WidgetLayout.TYPE_KEYBOARD_PAD);
+        legacyPadItem.put("x", 0);
+        legacyPadItem.put("y", 0);
+        legacyPadItem.put("w", 3);
+        legacyPadItem.put("h", 4);
+        WidgetLayout.Item restoredLegacyItem = WidgetLayout.Item.fromJson(legacyPadItem);
+        assertEquals(4, restoredLegacyItem.safeKeyboardPad().keys.size());
+        assertEquals(KeyboardPad.LAYOUT_HORIZONTAL,
+                restoredLegacyItem.safeKeyboardPad().layoutMode);
+        assertEquals(KeyboardPad.BEHAVIOR_WHILE_HELD,
+                restoredLegacyItem.safeKeyboardPad().keys.get(0).behavior);
+
+        KeyboardPad compact = KeyboardPad.defaultPad();
+        compact.resizeKeyCount(3);
+        assertEquals(3, compact.keys.size());
+        assertEquals(3, compact.columns);
+        assertEquals(1, compact.rows);
+        compact.resizeKeyCount(8);
+        assertEquals(8, compact.keys.size());
+        assertEquals(3, compact.columns);
+        assertEquals(3, compact.rows);
+
+        compact.setLayoutMode(KeyboardPad.LAYOUT_VERTICAL);
+        assertEquals(KeyboardPad.LAYOUT_VERTICAL, compact.layoutMode);
+        assertEquals(1, compact.columns);
+        assertEquals(8, compact.rows);
+        for (int index = 0; index < compact.keys.size(); index++) {
+            assertEquals(0, compact.keys.get(index).geometry.x);
+            assertEquals(index, compact.keys.get(index).geometry.y);
+        }
+        compact.resizeKeyCount(12);
+        assertEquals(1, compact.columns);
+        assertEquals(12, compact.rows);
+
+        KeyboardPad restoredVertical = KeyboardPad.fromJson(compact.toJson());
+        assertEquals(KeyboardPad.LAYOUT_VERTICAL, restoredVertical.layoutMode);
+        assertEquals(1, restoredVertical.columns);
+        assertEquals(12, restoredVertical.rows);
+        restoredVertical.setLayoutMode(KeyboardPad.LAYOUT_HORIZONTAL);
+        assertEquals(4, restoredVertical.columns);
+        assertEquals(3, restoredVertical.rows);
     }
 
     public void testControllerSequenceSafetyPolicy() {

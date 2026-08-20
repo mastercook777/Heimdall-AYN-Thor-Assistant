@@ -13,6 +13,7 @@ public final class WidgetLayout {
     public static final String PRESET_MACRO_FOCUS = "macro_focus";
     public static final String PRESET_CUSTOM = "custom";
     public static final String TYPE_MACRO_GROUP = "macro_group";
+    public static final String TYPE_KEYBOARD_PAD = "keyboard_pad";
     public static final String TYPE_TOUCHPAD = "touchpad";
     public static final String TYPE_STATUS = "status";
     public static final String TYPE_CANVAS = "canvas";
@@ -158,6 +159,9 @@ public final class WidgetLayout {
                 item.macroColumns = clamp(item.macroColumns, 1, 4);
                 item.macroRows = clamp(item.macroRows, 0, 6);
             }
+            if (TYPE_KEYBOARD_PAD.equals(item.type)) {
+                item.safeKeyboardPad().sanitize();
+            }
             if (TYPE_MAGNIFIER.equals(item.type)) {
                 item.magnifierLeft = clamp(item.magnifierLeft, 0f, 0.98f);
                 item.magnifierTop = clamp(item.magnifierTop, 0f, 0.98f);
@@ -182,6 +186,7 @@ public final class WidgetLayout {
 
     private static boolean isKnownType(String type) {
         return TYPE_MACRO_GROUP.equals(type)
+                || TYPE_KEYBOARD_PAD.equals(type)
                 || TYPE_TOUCHPAD.equals(type)
                 || TYPE_STATUS.equals(type)
                 || TYPE_CANVAS.equals(type)
@@ -254,6 +259,7 @@ public final class WidgetLayout {
         public boolean macroRightHandPriority = true;
         public boolean macroIconOnly = false;
         public boolean hasMacroConfig = true;
+        public KeyboardPad keyboardPad = KeyboardPad.defaultPad();
         public float magnifierLeft = 0.25f;
         public float magnifierTop = 0.25f;
         public float magnifierRight = 0.75f;
@@ -282,6 +288,7 @@ public final class WidgetLayout {
             item.macroRightHandPriority = macroRightHandPriority;
             item.macroIconOnly = macroIconOnly;
             item.hasMacroConfig = hasMacroConfig;
+            item.keyboardPad = safeKeyboardPad().copy();
             item.magnifierLeft = magnifierLeft;
             item.magnifierTop = magnifierTop;
             item.magnifierRight = magnifierRight;
@@ -310,6 +317,9 @@ public final class WidgetLayout {
                 object.put("macroRows", macroRows);
                 object.put("macroRightHandPriority", macroRightHandPriority);
                 object.put("macroIconOnly", macroIconOnly);
+            }
+            if (TYPE_KEYBOARD_PAD.equals(type)) {
+                object.put("keyboardPad", safeKeyboardPad().toJson());
             }
             if (TYPE_MAGNIFIER.equals(type)) {
                 object.put("magnifierLeft", magnifierLeft);
@@ -348,6 +358,7 @@ public final class WidgetLayout {
                     || object.has("macroRows")
                     || object.has("macroRightHandPriority")
                     || object.has("macroIconOnly");
+            item.keyboardPad = KeyboardPad.fromJson(object.optJSONObject("keyboardPad"));
             item.magnifierLeft = (float) object.optDouble("magnifierLeft", 0.25d);
             item.magnifierTop = (float) object.optDouble("magnifierTop", 0.25d);
             item.magnifierRight = (float) object.optDouble("magnifierRight", 0.75d);
@@ -361,6 +372,14 @@ public final class WidgetLayout {
             item.magnifierZoom = (float) object.optDouble("magnifierZoom", 1d);
             item.canvasConfig = CanvasConfig.fromJson(object.optJSONObject("canvas"));
             return item;
+        }
+
+        public KeyboardPad safeKeyboardPad() {
+            if (keyboardPad == null) {
+                keyboardPad = KeyboardPad.defaultPad();
+            }
+            keyboardPad.sanitize();
+            return keyboardPad;
         }
     }
 }

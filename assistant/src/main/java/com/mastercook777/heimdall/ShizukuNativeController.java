@@ -289,6 +289,59 @@ public final class ShizukuNativeController {
                 0, 0, 0, 0, 0, 0);
     }
 
+    public static String openVirtualKeyboard(Context context) {
+        return virtualKeyboardTransaction(context,
+                ShizukuNativeUserService.TRANSACTION_OPEN_VIRTUAL_KEYBOARD,
+                0, 0, 1500);
+    }
+
+    public static String emitVirtualKeyboard(Context context, int keyCode, int keyValue) {
+        return virtualKeyboardTransaction(context,
+                ShizukuNativeUserService.TRANSACTION_EMIT_VIRTUAL_KEYBOARD,
+                keyCode, keyValue, 0);
+    }
+
+    public static String releaseVirtualKeyboardKeys(Context context) {
+        return virtualKeyboardTransaction(context,
+                ShizukuNativeUserService.TRANSACTION_RELEASE_VIRTUAL_KEYBOARD_KEYS,
+                0, 0, 0);
+    }
+
+    public static String releaseVirtualKeyboard(Context context) {
+        return virtualKeyboardTransaction(context,
+                ShizukuNativeUserService.TRANSACTION_RELEASE_VIRTUAL_KEYBOARD,
+                0, 0, 0);
+    }
+
+    private static String virtualKeyboardTransaction(Context context, int transaction,
+            int keyCode, int keyValue, long waitMs) {
+        IBinder bound = getService(context, waitMs);
+        if (bound == null) {
+            return context.getString(R.string.virtual_keyboard_unavailable);
+        }
+        Parcel data = Parcel.obtain();
+        Parcel reply = Parcel.obtain();
+        try {
+            data.writeInterfaceToken(ShizukuNativeUserService.DESCRIPTOR);
+            if (transaction == ShizukuNativeUserService.TRANSACTION_EMIT_VIRTUAL_KEYBOARD) {
+                data.writeInt(keyCode);
+                data.writeInt(keyValue);
+            }
+            if (!bound.transact(transaction, data, reply, 0)) {
+                clearService();
+                return context.getString(R.string.virtual_keyboard_unavailable);
+            }
+            reply.readException();
+            return reply.readString();
+        } catch (RemoteException | RuntimeException e) {
+            clearService();
+            return context.getString(R.string.virtual_keyboard_unavailable);
+        } finally {
+            data.recycle();
+            reply.recycle();
+        }
+    }
+
     private static String virtualMouseTransaction(Context context, int transaction,
             int dx, int dy, int wheel, int button, int buttonValue, long waitMs) {
         IBinder bound = getService(context, waitMs);
@@ -428,7 +481,7 @@ public final class ShizukuNativeController {
         }
         try {
             Shizuku.UserServiceArgs args = userServiceArgs(
-                    context, "heimdall_native_controller_v11", 11);
+                    context, "heimdall_native_controller_v12", 12);
             Shizuku.bindUserService(args, CONNECTION);
         } catch (Throwable error) {
             failBinding(generation);

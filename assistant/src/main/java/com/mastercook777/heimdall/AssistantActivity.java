@@ -211,6 +211,9 @@ public class AssistantActivity extends Activity {
     private int virtualMouseSessionGeneration;
     private boolean virtualMouseReportErrors;
     private boolean virtualMouseErrorShown;
+    private KeyboardInputSession keyboardInputSession;
+    private boolean keyboardInputErrorShown;
+    private boolean keyboardPadEditorActive;
     private int targetDisplayId = Display.DEFAULT_DISPLAY;
     private int targetDisplayWidth;
     private int targetDisplayHeight;
@@ -305,8 +308,6 @@ public class AssistantActivity extends Activity {
             new ThorGameFocusProtection();
     private final ThorTextInputFocusLease thorTextInputFocusLease =
             new ThorTextInputFocusLease();
-    private final ThorImeSessionInitializer thorImeSessionInitializer =
-            new ThorImeSessionInitializer();
     private ViewTreeObserver.OnGlobalFocusChangeListener textInputFocusListener;
     private ViewTreeObserver.OnGlobalLayoutListener imeVisibilityListener;
     private boolean textInputFocused;
@@ -349,6 +350,7 @@ public class AssistantActivity extends Activity {
             snapshot -> uiHandler.post(() -> maybeAutoSwitchProfile(snapshot));
     private boolean profileAwarenessActive;
     private boolean activityStarted;
+    private boolean upperDisplayFocusHandoffRequested;
     private final Runnable profileAwarenessTicker = new Runnable() {
         @Override
         public void run() {
@@ -456,6 +458,9 @@ public class AssistantActivity extends Activity {
         DebugPerformanceDiagnostics.initialize(this);
         HeimdallStabilityDiagnostics.reportPreviousExit(this);
         requestWindowFeature(Window.FEATURE_NO_TITLE);
+        // Protect the upper-screen focus before the lower-screen content window is attached.
+        // A normal launch must never acquire lower-display key focus just to release it later.
+        thorGameFocusProtection.apply(this, true);
         enterImmersiveMode();
 
         profiles = ProfileStore.loadProfiles(this);
@@ -478,11 +483,7 @@ public class AssistantActivity extends Activity {
             int restoreY = Math.max(0, settingsContentScrollY);
             settingsContentScroll.post(() -> settingsContentScroll.scrollTo(0, restoreY));
         }
-        if (isWindowFocusRequired()) {
-            updateGameFocusProtection();
-        } else {
-            initializeLowerDisplayImeSession();
-        }
+        updateGameFocusProtection();
     }
 
     @Override
@@ -623,6 +624,7 @@ public class AssistantActivity extends Activity {
     protected void onDestroy() {
         flushGuideReadingPosition();
         parkVirtualMouseDispatcher();
+        parkKeyboardInputSession();
         for (View view : new ArrayList<>(transientAnimatedViews)) {
             view.animate().cancel();
         }
@@ -643,7 +645,6 @@ public class AssistantActivity extends Activity {
         unregisterReceiver(captureReceiver);
         ThorAccessibilityService.setDiagnosticScanningSuspended(false);
         thorTextInputFocusLease.cancel();
-        thorImeSessionInitializer.cancel();
         removeTextInputCompatibilityObservers();
         stabilityDiagnostics.stop();
         thorPerformanceCompatibility.release();
@@ -675,6 +676,7 @@ public class AssistantActivity extends Activity {
     protected void onResume() {
         super.onResume();
         updateGameFocusProtection(true);
+        requestUpperDisplayFocusHandoffOnce();
         if (!DebugPerformanceDiagnostics.isStaticUi()) {
             resumeMagnifierViews();
         }
@@ -694,6 +696,7 @@ public class AssistantActivity extends Activity {
         }
         resetRightStickIfNeeded();
         parkVirtualMouseDispatcher();
+        parkKeyboardInputSession();
         InputBridge.cancelShizukuTouchpadDrag(this);
         if (activeMapWebView != null) {
             activeMapWebView.onPause();
@@ -801,10 +804,6 @@ public class AssistantActivity extends Activity {
     }
 
     private void updateGameFocusProtection(boolean force) {
-        if (thorImeSessionInitializer.isHoldingWindowFocus()) {
-            thorGameFocusProtection.apply(this, false);
-            return;
-        }
         boolean protectGameFocus = !isWindowFocusRequired();
         if (force) {
             thorGameFocusProtection.reapply(this, protectGameFocus);
@@ -905,20 +904,19 @@ public class AssistantActivity extends Activity {
         }
     }
 
-    private void initializeLowerDisplayImeSession() {
-        if (isFinishing() || isDestroyed() || overlayHost == null
-                || isWindowFocusRequired()) {
+    private void requestUpperDisplayFocusHandoffOnce() {
+        if (upperDisplayFocusHandoffRequested
+                || DebugPerformanceDiagnostics.isStaticUi()
+                || isFinishing()
+                || isDestroyed()) {
             return;
         }
-        thorImeSessionInitializer.initialize(
-                this,
-                overlayHost,
-                () -> thorGameFocusProtection.apply(this, false),
-                initialized -> {
-                    if (!isFinishing() && !isDestroyed()) {
-                        updateGameFocusProtection();
-                    }
-                });
+        upperDisplayFocusHandoffRequested = true;
+        getWindow().getDecorView().post(() -> {
+            if (activityStarted && !isFinishing() && !isDestroyed()) {
+                UpperDisplayFocusHandoffActivity.launch(this);
+            }
+        });
     }
 
     private void updateProfileAwarenessRegistration() {
@@ -1193,7 +1191,8 @@ public class AssistantActivity extends Activity {
             rebuildContent();
             return;
         }
-        super.onBackPressed();
+        // Heimdall is an always-open lower-screen assistant. Android Back may close
+        // in-app layers, but it must never finish the base Activity; Settings owns Exit.
     }
 
     private void resetRightStickIfNeeded() {
@@ -1264,6 +1263,51 @@ public class AssistantActivity extends Activity {
                 TouchpadSettings.normalizeMode(touchpadSettings.mode))) {
             closeVirtualMouseDispatcher();
         }
+    }
+
+    private KeyboardInputSession ensureKeyboardInputSession() {
+        if (keyboardInputSession == null) {
+            keyboardInputErrorShown = false;
+            keyboardInputSession = new KeyboardInputSession(this, () -> {
+                keyboardInputSession = null;
+                if (!keyboardInputErrorShown) {
+                    keyboardInputErrorShown = true;
+                    showErrorAction(getString(R.string.virtual_keyboard_unavailable));
+                }
+            });
+        }
+        return keyboardInputSession;
+    }
+
+    private void parkKeyboardInputSession() {
+        KeyboardInputSession session = keyboardInputSession;
+        keyboardInputSession = null;
+        if (session != null) {
+            session.park();
+        }
+    }
+
+    private void closeKeyboardInputSession() {
+        KeyboardInputSession session = keyboardInputSession;
+        keyboardInputSession = null;
+        if (session != null) {
+            session.close();
+        } else {
+            VirtualKeyboardDispatcher.destroyParkedDevice(this);
+        }
+    }
+
+    private void closeKeyboardInputSessionIfUnused() {
+        if (selectedProfile == null) {
+            closeKeyboardInputSession();
+            return;
+        }
+        for (WidgetLayout.Item item : selectedProfile.safeWidgetLayout().items) {
+            if (WidgetLayout.TYPE_KEYBOARD_PAD.equals(item.type)) {
+                return;
+            }
+        }
+        closeKeyboardInputSession();
     }
 
     private void registerCaptureReceiver() {
@@ -1449,6 +1493,9 @@ public class AssistantActivity extends Activity {
     private View createMainContent() {
         releaseMagnifierViews();
         releaseCanvasViews();
+        if (activeScreen != SCREEN_MAIN) {
+            parkKeyboardInputSession();
+        }
         if (activeScreen == SCREEN_SETTINGS) {
             macroGrids.clear();
             touchPadView = null;
@@ -1513,6 +1560,9 @@ public class AssistantActivity extends Activity {
         String type = item.type;
         if (WidgetLayout.TYPE_MACRO_GROUP.equals(type)) {
             return createMacroWidget(item);
+        }
+        if (WidgetLayout.TYPE_KEYBOARD_PAD.equals(type)) {
+            return createKeyboardPadWidget(item);
         }
         if (WidgetLayout.TYPE_TOUCHPAD.equals(type)) {
             FrameLayout touchPadHost = new FrameLayout(this);
@@ -1596,6 +1646,45 @@ public class AssistantActivity extends Activity {
         macroGrid.setOrientation(LinearLayout.VERTICAL);
         macroGrids.add(new MacroGridBinding(macroGrid, item));
         return macroGrid;
+    }
+
+    private View createKeyboardPadWidget(WidgetLayout.Item item) {
+        boolean interactionEnabled = !hasUnsavedWidgetLayout();
+        return new KeyboardPadView(this, item.safeKeyboardPad(), false,
+                interactionEnabled, new KeyboardPadView.Listener() {
+                    @Override
+                    public void onPress(KeyboardPad.Key key) {
+                        ensureKeyboardInputSession().press(key.binding);
+                    }
+
+                    @Override
+                    public void onHoldStart(Object token, KeyboardPad.Key key) {
+                        ensureKeyboardInputSession().hold(token, key.binding);
+                    }
+
+                    @Override
+                    public void onHoldEnd(Object token) {
+                        if (keyboardInputSession != null) {
+                            keyboardInputSession.release(token);
+                        }
+                    }
+
+                    @Override
+                    public void onEditRequested() {
+                        parkKeyboardInputSession();
+                        showKeyboardPadEditor(item);
+                    }
+
+                    @Override
+                    public void onKeyEditRequested(KeyboardPad.Key key) {
+                        // Runtime key surfaces never open per-key editing.
+                    }
+
+                    @Override
+                    public void onInteractionBlocked() {
+                        showErrorAction(getString(R.string.keyboard_pad_save_layout_first));
+                    }
+                });
     }
 
     private View createStatusWidget() {
@@ -2577,6 +2666,7 @@ public class AssistantActivity extends Activity {
         editingInteractiveMapInline = false;
         editingMapMarkerInline = null;
         creatingMapMarkerInline = false;
+        parkKeyboardInputSession();
         mapViewerFullscreen = false;
         guideReaderFullscreen = false;
         mapWebCurrentUrl = null;
@@ -2585,6 +2675,7 @@ public class AssistantActivity extends Activity {
         selectedProfile = profiles.get(index);
         touchpadSettings = selectedProfile.safeTouchpadSettings();
         closeVirtualMouseDispatcherIfUnused();
+        closeKeyboardInputSessionIfUnused();
         ProfileStore.saveSelectedIndex(this, selectedProfileIndex);
         rebuildContent();
     }
@@ -2599,6 +2690,7 @@ public class AssistantActivity extends Activity {
                 || captureInProgress
                 || magnifierRegionCaptureInProgress
                 || canvasOverlayActive
+                || keyboardPadEditorActive
                 || pendingCanvasImportProfile != null
                 || pendingCanvasImportRequest != null
                 || (widgetGridDialog != null && widgetGridDialog.isShowing())) {
@@ -4873,6 +4965,7 @@ public class AssistantActivity extends Activity {
             return;
         }
         ProfileStore.saveProfiles(this, profiles);
+        closeKeyboardInputSessionIfUnused();
         showDebugAction(getString(R.string.settings_section_reset, settingsSectionTitle()));
         refreshSettingsContent();
     }
@@ -4929,6 +5022,7 @@ public class AssistantActivity extends Activity {
             enterImmersiveMode();
         }
         ProfileStore.saveProfiles(this, profiles);
+        closeKeyboardInputSessionIfUnused();
         showDebugAction(savingLayout
                 ? getString(R.string.grid_layout_saved)
                 : getString(R.string.settings_section_saved, settingsSectionTitle()));
@@ -5072,11 +5166,36 @@ public class AssistantActivity extends Activity {
         applySystemGestureExclusion(gridEditor);
         editor.addView(gridEditor, new LinearLayout.LayoutParams(-1, 0, 1));
 
+        LinearLayout controlTypes = new LinearLayout(this);
+        controlTypes.setOrientation(LinearLayout.HORIZONTAL);
+        controlTypes.setVisibility(View.GONE);
+        controlTypes.setPadding(dp(4), dp(2), dp(4), dp(2));
+        controlTypes.setBackground(HeimdallUi.isPearl(this)
+                ? HeimdallUi.cncShallowInset(this, 10)
+                : HeimdallUi.glass(this, 0xD30B121C, 0xE8070B11,
+                        0x665F7C9A, 0x22344150, 10, 1));
+        editor.addView(controlTypes, new LinearLayout.LayoutParams(-1, dp(48)));
+
+        Button addMacro = editorButton(getString(R.string.grid_editor_control_type_macro), () -> {
+            gridEditor.addWidget(WidgetLayout.TYPE_MACRO_GROUP);
+            controlTypes.setVisibility(View.GONE);
+        });
+        HeimdallUi.applyChoiceButton(this, addMacro, false);
+        controlTypes.addView(addMacro);
+        Button addKeyboardPad = editorButton(
+                getString(R.string.grid_editor_control_type_keyboard_pad), () -> {
+                    gridEditor.addWidget(WidgetLayout.TYPE_KEYBOARD_PAD);
+                    controlTypes.setVisibility(View.GONE);
+                });
+        HeimdallUi.applyChoiceButton(this, addKeyboardPad, false);
+        controlTypes.addView(addKeyboardPad);
+
         LinearLayout actions = new LinearLayout(this);
         actions.setOrientation(LinearLayout.HORIZONTAL);
         editor.addView(actions, new LinearLayout.LayoutParams(-1, dp(38)));
-        actions.addView(editorButton(getString(R.string.grid_editor_add_macro),
-                () -> gridEditor.addWidget(WidgetLayout.TYPE_MACRO_GROUP)));
+        actions.addView(editorButton(getString(R.string.grid_editor_add_control), () ->
+                controlTypes.setVisibility(controlTypes.getVisibility() == View.VISIBLE
+                        ? View.GONE : View.VISIBLE)));
         actions.addView(editorButton(getString(R.string.grid_editor_add_touch),
                 () -> gridEditor.addWidget(WidgetLayout.TYPE_TOUCHPAD)));
         actions.addView(editorButton(getString(R.string.grid_editor_add_magnifier),
@@ -8749,6 +8868,556 @@ public class AssistantActivity extends Activity {
     private String nonEmpty(String value, String fallback) {
         String trimmed = value == null ? "" : value.trim();
         return trimmed.length() == 0 ? fallback : trimmed;
+    }
+
+    private void showKeyboardPadEditor(WidgetLayout.Item item) {
+        if (item == null || hasUnsavedWidgetLayout()) {
+            showErrorAction(getString(R.string.keyboard_pad_save_layout_first));
+            return;
+        }
+        if (keyboardPadEditorActive) {
+            return;
+        }
+        parkKeyboardInputSession();
+        keyboardPadEditorActive = true;
+        KeyboardPad draft = item.safeKeyboardPad().copy();
+        final PanelOverlay[] holder = new PanelOverlay[1];
+
+        LinearLayout shell = new LinearLayout(this);
+        shell.setOrientation(LinearLayout.VERTICAL);
+        shell.setPadding(dp(12), dp(8), dp(12), dp(8));
+        shell.setBackground(HeimdallUi.isPearl(this)
+                ? HeimdallUi.cncFlush(this, 14)
+                : HeimdallUi.glass(this, 0xFA0B111B, 0xFF070A10,
+                        0x886A829C, 0x44344150, 14, 2));
+
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        shell.addView(header, new LinearLayout.LayoutParams(-1, dp(50)));
+        TextView title = text(getString(R.string.keyboard_pad_editor_title),
+                HeimdallUi.TYPE_EDITOR_TITLE, TEXT, true);
+        header.addView(title, new LinearLayout.LayoutParams(0, -1, 1));
+        Button close = gridCloseButton(() -> {
+            if (holder[0] != null) dismissPanelAnimated(holder[0]);
+        });
+        close.setContentDescription(getString(R.string.common_close));
+        header.addView(close, new LinearLayout.LayoutParams(dp(42), dp(38)));
+
+        View divider = new View(this);
+        divider.setBackgroundColor(HeimdallUi.isPearl(this) ? 0x287B8792 : 0x445F7C9A);
+        shell.addView(divider, new LinearLayout.LayoutParams(-1, dp(1)));
+
+        TextView help = text(getString(R.string.keyboard_pad_editor_help),
+                HeimdallUi.TYPE_META, MUTED, false);
+        help.setGravity(Gravity.CENTER_VERTICAL);
+        help.setPadding(dp(2), 0, dp(2), 0);
+        shell.addView(help, new LinearLayout.LayoutParams(-1, dp(30)));
+
+        final KeyboardPadView[] previewHolder = new KeyboardPadView[1];
+        final Runnable[] refreshEditor = new Runnable[1];
+        LinearLayout toolsRow = new LinearLayout(this);
+        toolsRow.setOrientation(LinearLayout.HORIZONTAL);
+        toolsRow.setGravity(Gravity.CENTER_VERTICAL);
+        toolsRow.setPadding(dp(2), dp(2), dp(2), dp(2));
+        shell.addView(toolsRow, new LinearLayout.LayoutParams(-1, dp(54)));
+
+        LinearLayout countRow = new LinearLayout(this);
+        countRow.setOrientation(LinearLayout.HORIZONTAL);
+        countRow.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout.LayoutParams countRowParams = new LinearLayout.LayoutParams(0, -1, 0.44f);
+        countRowParams.setMargins(0, 0, dp(8), 0);
+        toolsRow.addView(countRow, countRowParams);
+        TextView countLabel = text(getString(R.string.keyboard_pad_key_count),
+                HeimdallUi.TYPE_LABEL, TEXT, true);
+        countLabel.setGravity(Gravity.CENTER_VERTICAL);
+        countRow.addView(countLabel, new LinearLayout.LayoutParams(0, -1, 1));
+        Button removeKey = editorButton("\u2212", () -> {
+            draft.resizeKeyCount(draft.keys.size() - 1);
+            if (refreshEditor[0] != null) refreshEditor[0].run();
+        });
+        countRow.addView(removeKey, new LinearLayout.LayoutParams(dp(44), -1));
+        TextView countValue = text(String.valueOf(draft.keys.size()),
+                HeimdallUi.TYPE_SECTION_TITLE, TEXT, true);
+        countValue.setGravity(Gravity.CENTER);
+        countRow.addView(countValue, new LinearLayout.LayoutParams(dp(42), -1));
+        Button addKey = editorButton("+", () -> {
+            draft.resizeKeyCount(draft.keys.size() + 1);
+            if (refreshEditor[0] != null) refreshEditor[0].run();
+        });
+        countRow.addView(addKey, new LinearLayout.LayoutParams(dp(44), -1));
+
+        LinearLayout layoutRow = new LinearLayout(this);
+        layoutRow.setOrientation(LinearLayout.HORIZONTAL);
+        layoutRow.setGravity(Gravity.CENTER_VERTICAL);
+        toolsRow.addView(layoutRow, new LinearLayout.LayoutParams(0, -1, 0.56f));
+        TextView layoutLabel = text(getString(R.string.keyboard_pad_layout),
+                HeimdallUi.TYPE_LABEL, TEXT, true);
+        layoutLabel.setGravity(Gravity.CENTER_VERTICAL);
+        layoutRow.addView(layoutLabel, new LinearLayout.LayoutParams(0, -1, 1));
+        Button horizontalLayout = editorButton(
+                getString(R.string.keyboard_pad_layout_horizontal), () -> {
+                    draft.setLayoutMode(KeyboardPad.LAYOUT_HORIZONTAL);
+                    if (refreshEditor[0] != null) refreshEditor[0].run();
+                });
+        layoutRow.addView(horizontalLayout, new LinearLayout.LayoutParams(dp(104), -1));
+        Button verticalLayout = editorButton(
+                getString(R.string.keyboard_pad_layout_vertical), () -> {
+                    draft.setLayoutMode(KeyboardPad.LAYOUT_VERTICAL);
+                    if (refreshEditor[0] != null) refreshEditor[0].run();
+                });
+        LinearLayout.LayoutParams verticalLayoutParams =
+                new LinearLayout.LayoutParams(dp(104), -1);
+        verticalLayoutParams.setMargins(dp(4), 0, 0, 0);
+        layoutRow.addView(verticalLayout, verticalLayoutParams);
+
+        KeyboardPadView preview = new KeyboardPadView(this, draft, true, true,
+                new KeyboardPadView.Listener() {
+                    @Override public void onPress(KeyboardPad.Key key) {}
+                    @Override public void onHoldStart(Object token, KeyboardPad.Key key) {}
+                    @Override public void onHoldEnd(Object token) {}
+                    @Override public void onEditRequested() {}
+
+                    @Override
+                    public void onKeyEditRequested(KeyboardPad.Key key) {
+                        showKeyboardPadKeyEditor(key, () -> {
+                            if (refreshEditor[0] != null) refreshEditor[0].run();
+                        }, draft.keys.size() <= KeyboardPad.MIN_KEY_COUNT ? null : () -> {
+                            draft.keys.remove(key);
+                            draft.applyCompactLayout();
+                            if (refreshEditor[0] != null) refreshEditor[0].run();
+                        });
+                    }
+
+                    @Override public void onInteractionBlocked() {}
+                });
+        previewHolder[0] = preview;
+        refreshEditor[0] = () -> {
+            int keyCount = draft.keys.size();
+            countValue.setText(String.valueOf(keyCount));
+            removeKey.setEnabled(keyCount > KeyboardPad.MIN_KEY_COUNT);
+            addKey.setEnabled(keyCount < KeyboardPad.MAX_KEY_COUNT);
+            HeimdallUi.applyChoiceButton(this, horizontalLayout,
+                    KeyboardPad.LAYOUT_HORIZONTAL.equals(draft.layoutMode));
+            HeimdallUi.applyChoiceButton(this, verticalLayout,
+                    KeyboardPad.LAYOUT_VERTICAL.equals(draft.layoutMode));
+            if (previewHolder[0] != null) previewHolder[0].refresh();
+        };
+        refreshEditor[0].run();
+        LinearLayout.LayoutParams previewParams = new LinearLayout.LayoutParams(-1, 0, 1);
+        previewParams.setMargins(dp(2), dp(4), dp(2), dp(6));
+        shell.addView(preview, previewParams);
+
+        View footerDivider = new View(this);
+        footerDivider.setBackgroundColor(HeimdallUi.isPearl(this) ? 0x287B8792 : 0x445F7C9A);
+        shell.addView(footerDivider, new LinearLayout.LayoutParams(-1, dp(1)));
+
+        LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        actions.setPadding(0, dp(5), 0, 0);
+        shell.addView(actions, new LinearLayout.LayoutParams(-1, dp(58)));
+        actions.addView(editorButton(getString(R.string.common_cancel), () -> {
+            if (holder[0] != null) dismissPanelAnimated(holder[0]);
+        }));
+        Button save = editorButton(getString(R.string.common_save), () -> {
+            item.keyboardPad = draft.copy();
+            ProfileStore.saveProfiles(this, profiles);
+            showAction(getString(R.string.keyboard_pad_saved));
+            if (holder[0] != null) {
+                dismissPanelAnimated(holder[0], this::rebuildContent);
+            } else {
+                rebuildContent();
+            }
+        });
+        HeimdallUi.applyPrimaryActionButton(this, save);
+        actions.addView(save);
+
+        DisplayMetrics metrics = getResources().getDisplayMetrics();
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
+                Math.min(dp(760), metrics.widthPixels - dp(40)),
+                Math.min(dp(780), metrics.heightPixels - dp(72)), Gravity.CENTER);
+        holder[0] = showPanelOverlay(shell, params, () -> {
+            keyboardPadEditorActive = false;
+            preview.release();
+        });
+        if (holder[0] == null) {
+            keyboardPadEditorActive = false;
+        }
+    }
+
+    private void showKeyboardPadKeyEditor(KeyboardPad.Key key, Runnable onSaved,
+            Runnable onDeleted) {
+        int[] draftKeyCode = {key.binding.linuxKeyCode};
+        boolean[] draftModifiers = {key.binding.ctrl, key.binding.shift,
+                key.binding.alt, key.binding.win};
+        String[] draftBehavior = {KeyboardPad.normalizeBehavior(key.behavior)};
+        String[] draftIconKey = {key.display.iconKey};
+        final PanelOverlay[] holder = new PanelOverlay[1];
+
+        LinearLayout shell = new LinearLayout(this);
+        shell.setOrientation(LinearLayout.VERTICAL);
+        shell.setPadding(dp(14), dp(10), dp(14), dp(10));
+        shell.setBackground(HeimdallUi.isPearl(this)
+                ? HeimdallUi.cncRaised(this, 14, false, false)
+                : HeimdallUi.glass(this, 0xFA0B111B, 0xFF070A10,
+                        0x886A829C, 0x44344150, 14, 2));
+
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        shell.addView(header, new LinearLayout.LayoutParams(-1, dp(50)));
+        TextView title = text(getString(R.string.keyboard_pad_key_editor_title),
+                HeimdallUi.TYPE_EDITOR_TITLE, TEXT, true);
+        header.addView(title, new LinearLayout.LayoutParams(0, -1, 1));
+        Button close = gridCloseButton(() -> {
+            if (holder[0] != null) dismissPanelAnimated(holder[0]);
+        });
+        close.setContentDescription(getString(R.string.common_close));
+        header.addView(close, new LinearLayout.LayoutParams(dp(42), dp(38)));
+
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(false);
+        scroll.setScrollbarFadingEnabled(false);
+        shell.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+        LinearLayout body = new LinearLayout(this);
+        body.setOrientation(LinearLayout.VERTICAL);
+        body.setPadding(dp(2), dp(4), dp(2), dp(10));
+        scroll.addView(body, new ScrollView.LayoutParams(-1, -2));
+
+        body.addView(text(getString(R.string.keyboard_pad_keyboard_key),
+                HeimdallUi.TYPE_LABEL, MUTED, true),
+                new LinearLayout.LayoutParams(-1, dp(28)));
+        Button keyButton = editorButton(KeyboardKeyCatalog.labelForCode(draftKeyCode[0]),
+                () -> showKeyboardKeyPicker(draftKeyCode, null));
+        keyButton.setOnClickListener(v -> showKeyboardKeyPicker(draftKeyCode, keyButton));
+        HeimdallUi.applyChoiceButton(this, keyButton, true);
+        body.addView(keyButton, new LinearLayout.LayoutParams(-1, dp(50)));
+
+        body.addView(text(getString(R.string.keyboard_pad_modifiers),
+                HeimdallUi.TYPE_LABEL, MUTED, true),
+                new LinearLayout.LayoutParams(-1, dp(32)));
+        LinearLayout modifierRow = new LinearLayout(this);
+        modifierRow.setOrientation(LinearLayout.HORIZONTAL);
+        body.addView(modifierRow, new LinearLayout.LayoutParams(-1, dp(48)));
+        String[] modifierLabels = {"Ctrl", "Shift", "Alt", "Win"};
+        CheckBox[] modifierInputs = new CheckBox[modifierLabels.length];
+        for (int i = 0; i < modifierLabels.length; i++) {
+            CheckBox input = new CheckBox(this);
+            input.setText(modifierLabels[i]);
+            input.setChecked(draftModifiers[i]);
+            input.setTextSize(12);
+            styleCheckBox(input);
+            final int index = i;
+            input.setOnCheckedChangeListener((button, checked) -> draftModifiers[index] = checked);
+            modifierInputs[i] = input;
+            modifierRow.addView(input, new LinearLayout.LayoutParams(0, -1, 1));
+        }
+
+        body.addView(text(getString(R.string.keyboard_pad_behavior),
+                HeimdallUi.TYPE_LABEL, MUTED, true),
+                new LinearLayout.LayoutParams(-1, dp(32)));
+        LinearLayout behaviorRow = new LinearLayout(this);
+        behaviorRow.setOrientation(LinearLayout.HORIZONTAL);
+        body.addView(behaviorRow, new LinearLayout.LayoutParams(-1, dp(48)));
+        String[] behaviorValues = {KeyboardPad.BEHAVIOR_PRESS,
+                KeyboardPad.BEHAVIOR_WHILE_HELD};
+        String[] behaviorLabels = {getString(R.string.keyboard_pad_behavior_press),
+                getString(R.string.keyboard_pad_behavior_while_held)};
+        Button[] behaviorButtons = new Button[behaviorValues.length];
+        for (int i = 0; i < behaviorValues.length; i++) {
+            final String value = behaviorValues[i];
+            Button button = editorButton(behaviorLabels[i], () -> {
+                draftBehavior[0] = value;
+                for (int j = 0; j < behaviorButtons.length; j++) {
+                    HeimdallUi.applyChoiceButton(this, behaviorButtons[j],
+                            behaviorValues[j].equals(draftBehavior[0]));
+                }
+            });
+            HeimdallUi.applyChoiceButton(this, button, value.equals(draftBehavior[0]));
+            behaviorButtons[i] = button;
+            LinearLayout.LayoutParams buttonParams = new LinearLayout.LayoutParams(0, -1, 1);
+            buttonParams.setMargins(i == 0 ? 0 : dp(4), 0, 0, 0);
+            behaviorRow.addView(button, buttonParams);
+        }
+        TextView behaviorHelp = text(getString(R.string.keyboard_pad_behavior_help),
+                HeimdallUi.TYPE_META, MUTED, false);
+        behaviorHelp.setPadding(dp(2), dp(2), dp(2), dp(6));
+        body.addView(behaviorHelp, new LinearLayout.LayoutParams(-1, dp(54)));
+
+        body.addView(text(getString(R.string.keyboard_pad_display_label),
+                HeimdallUi.TYPE_LABEL, MUTED, true),
+                new LinearLayout.LayoutParams(-1, dp(28)));
+        EditText labelInput = new EditText(this);
+        labelInput.setSingleLine(true);
+        labelInput.setText(key.display.label);
+        labelInput.setHint(KeyboardKeyCatalog.bindingSummary(key.binding));
+        styleDarkEditText(labelInput);
+        body.addView(labelInput, new LinearLayout.LayoutParams(-1, dp(50)));
+
+        body.addView(text(getString(R.string.keyboard_pad_display_icon),
+                HeimdallUi.TYPE_LABEL, MUTED, true),
+                new LinearLayout.LayoutParams(-1, dp(32)));
+        Button iconButton = editorButton(keyboardPadIconLabel(draftIconKey[0]),
+                () -> showKeyboardPadIconPicker(draftIconKey, null));
+        iconButton.setOnClickListener(v -> showKeyboardPadIconPicker(draftIconKey, iconButton));
+        body.addView(iconButton, new LinearLayout.LayoutParams(-1, dp(50)));
+        TextView displayHelp = text(getString(R.string.keyboard_pad_display_hint),
+                HeimdallUi.TYPE_META, MUTED, false);
+        displayHelp.setPadding(dp(2), dp(4), dp(2), dp(4));
+        body.addView(displayHelp, new LinearLayout.LayoutParams(-1, dp(44)));
+
+        View footerDivider = new View(this);
+        footerDivider.setBackgroundColor(HeimdallUi.isPearl(this) ? 0x287B8792 : 0x445F7C9A);
+        shell.addView(footerDivider, new LinearLayout.LayoutParams(-1, dp(1)));
+
+        LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        actions.setPadding(0, dp(5), 0, 0);
+        shell.addView(actions, new LinearLayout.LayoutParams(-1, dp(58)));
+        if (onDeleted != null) {
+            actions.addView(editorButton(getString(R.string.keyboard_pad_delete_key), () -> {
+                if (holder[0] != null) {
+                    dismissPanelAnimated(holder[0], onDeleted);
+                } else {
+                    onDeleted.run();
+                }
+            }));
+        }
+        actions.addView(editorButton(getString(R.string.common_cancel), () -> {
+            if (holder[0] != null) dismissPanelAnimated(holder[0]);
+        }));
+        Button save = editorButton(getString(R.string.common_save), () -> {
+            key.binding.linuxKeyCode = draftKeyCode[0];
+            key.binding.ctrl = draftModifiers[0];
+            key.binding.shift = draftModifiers[1];
+            key.binding.alt = draftModifiers[2];
+            key.binding.win = draftModifiers[3];
+            key.display.label = labelInput.getText().toString().trim();
+            key.display.iconKey = draftIconKey[0] == null ? "" : draftIconKey[0].trim();
+            key.behavior = KeyboardPad.normalizeBehavior(draftBehavior[0]);
+            if (holder[0] != null) {
+                dismissPanelAnimated(holder[0], onSaved);
+            } else if (onSaved != null) {
+                onSaved.run();
+            }
+        });
+        HeimdallUi.applyPrimaryActionButton(this, save);
+        actions.addView(save);
+
+        DisplayMetrics metrics = getResources().getDisplayMetrics();
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
+                Math.min(dp(620), metrics.widthPixels - dp(56)),
+                Math.min(dp(820), metrics.heightPixels - dp(72)), Gravity.CENTER);
+        holder[0] = showPanelOverlay(shell, params, null);
+    }
+
+    private void showKeyboardKeyPicker(int[] draftKeyCode, Button valueButton) {
+        final PanelOverlay[] holder = new PanelOverlay[1];
+        LinearLayout shell = new LinearLayout(this);
+        shell.setOrientation(LinearLayout.VERTICAL);
+        shell.setPadding(dp(12), dp(10), dp(12), dp(10));
+        shell.setBackground(HeimdallUi.isPearl(this)
+                ? HeimdallUi.cncRaised(this, 12, false, false)
+                : HeimdallUi.glass(this, 0xF00B111B, 0xFA070A10,
+                        0x884EA1FF, 0x44344150, 12, 1));
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        shell.addView(header, new LinearLayout.LayoutParams(-1, dp(48)));
+        header.addView(text(getString(R.string.keyboard_pad_keyboard_key),
+                HeimdallUi.TYPE_PAGE_TITLE, TEXT, true),
+                new LinearLayout.LayoutParams(0, -1, 1));
+        Button close = gridCloseButton(() -> {
+            if (holder[0] != null) dismissPanelAnimated(holder[0]);
+        });
+        close.setContentDescription(getString(R.string.common_close));
+        header.addView(close, new LinearLayout.LayoutParams(dp(42), dp(38)));
+
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(false);
+        scroll.setScrollbarFadingEnabled(false);
+        shell.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+        LinearLayout list = new LinearLayout(this);
+        list.setOrientation(LinearLayout.VERTICAL);
+        scroll.addView(list, new ScrollView.LayoutParams(-1, -2));
+
+        List<KeyboardKeyCatalog.Option> options = KeyboardKeyCatalog.options();
+        final int columns = 5;
+        for (int start = 0; start < options.size(); start += columns) {
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            list.addView(row, new LinearLayout.LayoutParams(-1, dp(54)));
+            for (int column = 0; column < columns; column++) {
+                int index = start + column;
+                if (index >= options.size()) {
+                    row.addView(new View(this), new LinearLayout.LayoutParams(0, -1, 1));
+                    continue;
+                }
+                KeyboardKeyCatalog.Option option = options.get(index);
+                Button button = editorButton(option.label, () -> {
+                    draftKeyCode[0] = option.linuxKeyCode;
+                    if (valueButton != null) valueButton.setText(option.label);
+                    if (holder[0] != null) dismissPanelAnimated(holder[0]);
+                });
+                button.setTextSize(option.label.length() > 7 ? 9 : 11);
+                HeimdallUi.applyChoiceButton(this, button,
+                        option.linuxKeyCode == draftKeyCode[0]);
+                LinearLayout.LayoutParams buttonParams =
+                        new LinearLayout.LayoutParams(0, -1, 1);
+                buttonParams.setMargins(column == 0 ? 0 : dp(3), dp(2), 0, dp(2));
+                row.addView(button, buttonParams);
+            }
+        }
+
+        DisplayMetrics metrics = getResources().getDisplayMetrics();
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
+                Math.min(dp(720), metrics.widthPixels - dp(48)),
+                Math.min(dp(760), metrics.heightPixels - dp(88)), Gravity.CENTER);
+        holder[0] = showPanelOverlay(shell, params, null);
+    }
+
+    private void showKeyboardPadIconPicker(String[] draftIconKey, Button valueButton) {
+        final PanelOverlay[] holder = new PanelOverlay[1];
+        LinearLayout shell = new LinearLayout(this);
+        shell.setOrientation(LinearLayout.VERTICAL);
+        shell.setPadding(dp(12), dp(10), dp(12), dp(10));
+        shell.setBackground(HeimdallUi.isPearl(this)
+                ? HeimdallUi.cncRaised(this, 12, false, false)
+                : HeimdallUi.glass(this, 0xF00B111B, 0xFA070A10,
+                        0x884EA1FF, 0x44344150, 12, 1));
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        shell.addView(header, new LinearLayout.LayoutParams(-1, dp(48)));
+        header.addView(text(getString(R.string.keyboard_pad_icon_picker_title),
+                HeimdallUi.TYPE_PAGE_TITLE, TEXT, true),
+                new LinearLayout.LayoutParams(0, -1, 1));
+        Button close = gridCloseButton(() -> {
+            if (holder[0] != null) dismissPanelAnimated(holder[0]);
+        });
+        close.setContentDescription(getString(R.string.common_close));
+        header.addView(close, new LinearLayout.LayoutParams(dp(42), dp(38)));
+
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(false);
+        scroll.setScrollbarFadingEnabled(false);
+        shell.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+        LinearLayout list = new LinearLayout(this);
+        list.setOrientation(LinearLayout.VERTICAL);
+        scroll.addView(list, new ScrollView.LayoutParams(-1, -2));
+
+        Button noIcon = editorButton(getString(R.string.keyboard_pad_display_no_icon), () -> {
+            draftIconKey[0] = "";
+            if (valueButton != null) {
+                valueButton.setText(getString(R.string.keyboard_pad_display_no_icon));
+            }
+            if (holder[0] != null) dismissPanelAnimated(holder[0]);
+        });
+        HeimdallUi.applyChoiceButton(this, noIcon,
+                draftIconKey[0] == null || draftIconKey[0].trim().isEmpty());
+        LinearLayout.LayoutParams noIconParams = new LinearLayout.LayoutParams(-1, dp(48));
+        noIconParams.setMargins(0, 0, 0, dp(4));
+        list.addView(noIcon, noIconParams);
+
+        List<MacroIconRepository.MacroIconOption> options =
+                MacroIconRepository.builtInOptions(this);
+        final int columns = 4;
+        for (int start = 0; start < options.size(); start += columns) {
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            list.addView(row, new LinearLayout.LayoutParams(-1, dp(108)));
+            for (int column = 0; column < columns; column++) {
+                int index = start + column;
+                if (index >= options.size()) {
+                    row.addView(new View(this), new LinearLayout.LayoutParams(0, -1, 1));
+                    continue;
+                }
+                MacroIconRepository.MacroIconOption option = options.get(index);
+                View cell = keyboardPadIconPickerCell(option,
+                        option.key.equals(draftIconKey[0]), () -> {
+                    draftIconKey[0] = option.key;
+                    if (valueButton != null) valueButton.setText(option.displayName);
+                    if (holder[0] != null) dismissPanelAnimated(holder[0]);
+                });
+                LinearLayout.LayoutParams buttonParams =
+                        new LinearLayout.LayoutParams(0, -1, 1);
+                buttonParams.setMargins(dp(3), dp(3), dp(3), dp(3));
+                row.addView(cell, buttonParams);
+            }
+        }
+
+        DisplayMetrics metrics = getResources().getDisplayMetrics();
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
+                Math.min(dp(680), metrics.widthPixels - dp(48)),
+                Math.min(dp(760), metrics.heightPixels - dp(88)), Gravity.CENTER);
+        holder[0] = showPanelOverlay(shell, params, null);
+    }
+
+    private View keyboardPadIconPickerCell(MacroIconRepository.MacroIconOption option,
+            boolean selected, Runnable action) {
+        FrameLayout frame = new FrameLayout(this);
+        frame.setBackground(HeimdallUi.isPearl(this)
+                ? HeimdallUi.cncRaised(this, 10, selected, false)
+                : HeimdallUi.glass(this,
+                        selected ? 0xE0182636 : 0xC00E1620,
+                        selected ? 0xED09121D : 0xD0070B11,
+                        selected ? 0xCC70B7FF : 0x665F7184,
+                        selected ? 0x664EA1FF : 0x22344150,
+                        10, selected ? 2 : 1));
+        frame.setPadding(dp(8), dp(7), dp(8), dp(7));
+        frame.setClickable(true);
+        frame.setFocusable(true);
+        frame.setOnClickListener(v -> action.run());
+        frame.setContentDescription(option.displayName);
+
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setGravity(Gravity.CENTER);
+        frame.addView(content, new FrameLayout.LayoutParams(-1, -1));
+
+        ImageView image = new ImageView(this);
+        image.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        Drawable drawable = option.load(this);
+        if (drawable != null) {
+            drawable = drawable.mutate();
+            if (option.tintable) {
+                drawable.setTint(HeimdallUi.textColor(this));
+            } else {
+                drawable.clearColorFilter();
+            }
+        }
+        image.setImageDrawable(drawable);
+        content.addView(image, new LinearLayout.LayoutParams(dp(42), dp(42)));
+
+        TextView label = text(option.displayName, HeimdallUi.TYPE_META,
+                selected ? TEXT : MUTED, selected);
+        label.setGravity(Gravity.CENTER);
+        label.setSingleLine(true);
+        content.addView(label, new LinearLayout.LayoutParams(-1, dp(26)));
+
+        if (selected) {
+            TextView check = text("\u2713", 12, TEXT, true);
+            check.setGravity(Gravity.CENTER);
+            check.setBackground(HeimdallUi.isPearl(this)
+                    ? HeimdallUi.cncRaised(this, 8, true, false)
+                    : HeimdallUi.glass(this, 0xD0142740, 0xE609111D,
+                            0xCC70B7FF, 0x664EA1FF, 8, 1));
+            FrameLayout.LayoutParams checkParams = new FrameLayout.LayoutParams(
+                    dp(20), dp(20), Gravity.TOP | Gravity.RIGHT);
+            frame.addView(check, checkParams);
+        }
+        return frame;
+    }
+
+    private String keyboardPadIconLabel(String iconKey) {
+        if (iconKey == null || iconKey.trim().isEmpty()) {
+            return getString(R.string.keyboard_pad_display_no_icon);
+        }
+        MacroIconRepository.MacroIconOption option =
+                MacroIconRepository.findByKey(this, iconKey.trim());
+        return option == null
+                ? getString(R.string.keyboard_pad_display_no_icon)
+                : option.displayName;
     }
 
     private void showMacroEditor(Macro macro) {

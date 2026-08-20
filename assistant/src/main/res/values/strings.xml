@@ -6,6 +6,7 @@
     <string name="touch_virtual_mouse_full_gesture_area_help">Hides the lower left/right buttons and uses the entire Touchpad for movement and gestures.</string>
     <string name="touch_virtual_mouse_help">Tap with one finger for left click; tap twice for double-click; double-tap and drag to hold left; tap with two fingers for right click; swipe vertically with two fingers to scroll. The upper client must keep focus and support relative mouse input.</string>
     <string name="virtual_mouse_unavailable">Start and authorize Shizuku before using Virtual Mouse.</string>
+    <string name="virtual_keyboard_unavailable">Start and authorize Shizuku before using keyboard mapping.</string>
     <string name="virtual_mouse_entry_hint">One finger to move \u00b7 Two fingers to scroll</string>
     <string name="app_name">Heimdall</string>
     <string name="accessibility_service_name">Heimdall Input Bridge</string>
@@ -143,7 +144,7 @@
     <string name="grid_editor_no_space_add">No room for another module.</string>
     <string name="grid_editor_added">Added to preview: %1$s</string>
     <string name="grid_editor_select_copy">Select a module to copy.</string>
-    <string name="grid_editor_copy_macro_only">Only Macros can be copied.</string>
+    <string name="grid_editor_copy_macro_only">Only Macro and Keypad modules can be copied.</string>
     <string name="grid_editor_no_space_copy">No room for a copy.</string>
     <string name="grid_editor_copied">Macro copied in preview.</string>
     <string name="grid_editor_select_delete">Select a module to delete.</string>
@@ -826,4 +827,36 @@
     <string name="native_controller_replay_too_large">Controller replay was blocked because the recorded sequence exceeds the safe event or duration limit. Rerecord this step.</string>
     <string name="native_controller_replay_missing_release">Controller replay was blocked because a system-navigation key has no recorded release. Rerecord this step.</string>
     <string name="native_controller_replay_timed_out">Controller replay timed out and was stopped. Replay controls are available again.</string>
+    <string name="grid_editor_add_control">+ Control</string>
+    <string name="grid_editor_control_type_title">Add control module</string>
+    <string name="grid_editor_control_type_macro">Macro</string>
+    <string name="grid_editor_control_type_keyboard_pad">Keypad</string>
+    <string name="grid_widget_keyboard_pad">Keypad</string>
+    <string name="keyboard_pad_keys_short">keys</string>
+    <string name="keyboard_pad_edit_control_description">Keypad module options. Hold to edit.</string>
+    <string name="keyboard_pad_save_layout_first">Save the Grid layout before editing this Keypad.</string>
+    <string name="keyboard_pad_editor_title">Keypad Editor</string>
+    <plurals name="keyboard_pad_editor_subtitle">
+        <item quantity="one">%1$d key · tap it to configure</item>
+        <item quantity="other">%1$d keys · tap a key to configure it</item>
+    </plurals>
+    <string name="keyboard_pad_editor_help">Tap a key to configure it. Count and layout repack only this draft.</string>
+    <string name="keyboard_pad_key_count">Key count</string>
+    <string name="keyboard_pad_layout">Layout</string>
+    <string name="keyboard_pad_layout_horizontal">Horizontal</string>
+    <string name="keyboard_pad_layout_vertical">Vertical</string>
+    <string name="keyboard_pad_delete_key">Delete key</string>
+    <string name="keyboard_pad_key_editor_title">Configure Key</string>
+    <string name="keyboard_pad_keyboard_key">Keyboard key</string>
+    <string name="keyboard_pad_modifiers">Modifiers</string>
+    <string name="keyboard_pad_behavior">Behavior</string>
+    <string name="keyboard_pad_behavior_press">Press</string>
+    <string name="keyboard_pad_behavior_while_held">While held</string>
+    <string name="keyboard_pad_behavior_help">Press sends one down/up pulse. While held keeps the binding down until the finger lifts or the gesture is cancelled.</string>
+    <string name="keyboard_pad_display_label">Display label</string>
+    <string name="keyboard_pad_display_hint">Leave label and icon empty to show the actual binding.</string>
+    <string name="keyboard_pad_display_icon">Display icon</string>
+    <string name="keyboard_pad_display_no_icon">No icon</string>
+    <string name="keyboard_pad_icon_picker_title">Choose keycap icon</string>
+    <string name="keyboard_pad_saved">Keypad saved.</string>
 </resources>

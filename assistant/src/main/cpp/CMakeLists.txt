@@ -4,6 +4,7 @@ project(thor_uinput_probe)
 
 add_library(thor_uinput_probe SHARED
         uinput_probe.cpp
+        virtual_keyboard.cpp
         virtual_mouse.cpp)
 
 find_library(log-lib log)

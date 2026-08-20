@@ -26,4 +26,12 @@ public final class UinputNativeProbe {
             int dx, int dy, int wheel, int button, int buttonValue);
 
     public static native String releaseVirtualMouse();
+
+    public static native String openVirtualKeyboard();
+
+    public static native String emitVirtualKeyboardKey(int keyCode, int keyValue);
+
+    public static native String releaseVirtualKeyboardKeys();
+
+    public static native String releaseVirtualKeyboard();
 }

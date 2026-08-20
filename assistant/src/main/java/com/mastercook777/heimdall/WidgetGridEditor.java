@@ -75,7 +75,8 @@ final class WidgetGridEditor extends View {
             return;
         }
         WidgetLayout.Item source = layout.items.get(selectedIndex);
-        if (!WidgetLayout.TYPE_MACRO_GROUP.equals(source.type)) {
+        if (!WidgetLayout.TYPE_MACRO_GROUP.equals(source.type)
+                && !WidgetLayout.TYPE_KEYBOARD_PAD.equals(source.type)) {
             host.showError(getContext().getString(R.string.grid_editor_copy_macro_only));
             return;
         }
@@ -91,6 +92,9 @@ final class WidgetGridEditor extends View {
         copy.macroRows = source.macroRows;
         copy.macroRightHandPriority = source.macroRightHandPriority;
         copy.macroIconOnly = source.macroIconOnly;
+        if (WidgetLayout.TYPE_KEYBOARD_PAD.equals(source.type)) {
+            copy.keyboardPad = source.safeKeyboardPad().copy();
+        }
         layout.items.add(copy);
         layout.preset = WidgetLayout.PRESET_CUSTOM;
         layout.sanitize();
@@ -372,6 +376,10 @@ final class WidgetGridEditor extends View {
     }
 
     private void configureNewWidgetItem(WidgetLayout layout, WidgetLayout.Item item) {
+        if (WidgetLayout.TYPE_KEYBOARD_PAD.equals(item.type)) {
+            item.keyboardPad = KeyboardPad.defaultPad();
+            return;
+        }
         if (!WidgetLayout.TYPE_MACRO_GROUP.equals(item.type)) {
             return;
         }
@@ -430,6 +438,7 @@ final class WidgetGridEditor extends View {
     private int[] defaultWidgetSize(String type) {
         if (WidgetLayout.TYPE_TOUCHPAD.equals(type)) return new int[]{3, 4};
         if (WidgetLayout.TYPE_MACRO_GROUP.equals(type)) return new int[]{2, 4};
+        if (WidgetLayout.TYPE_KEYBOARD_PAD.equals(type)) return new int[]{3, 4};
         if (WidgetLayout.TYPE_QUICK_ACTIONS.equals(type)) return new int[]{2, 2};
         if (WidgetLayout.TYPE_MAGNIFIER.equals(type)) return new int[]{3, 3};
         if (WidgetLayout.TYPE_CANVAS.equals(type)) return new int[]{3, 3};
@@ -474,6 +483,7 @@ final class WidgetGridEditor extends View {
         if (HeimdallUi.isPearl(getContext())) {
             if (WidgetLayout.TYPE_TOUCHPAD.equals(type)) return 0xFFD6DEE6;
             if (WidgetLayout.TYPE_MACRO_GROUP.equals(type)) return 0xFFE3DFE8;
+            if (WidgetLayout.TYPE_KEYBOARD_PAD.equals(type)) return 0xFFD9DEE4;
             if (WidgetLayout.TYPE_QUICK_ACTIONS.equals(type)) return 0xFFDCE3E9;
             if (WidgetLayout.TYPE_MAGNIFIER.equals(type)) return 0xFFD6E1E3;
             if (WidgetLayout.TYPE_CANVAS.equals(type)) return 0xFFD4D9DE;
@@ -481,6 +491,7 @@ final class WidgetGridEditor extends View {
         }
         if (WidgetLayout.TYPE_TOUCHPAD.equals(type)) return 0xFF15243A;
         if (WidgetLayout.TYPE_MACRO_GROUP.equals(type)) return 0xFF241D3A;
+        if (WidgetLayout.TYPE_KEYBOARD_PAD.equals(type)) return 0xFF192331;
         if (WidgetLayout.TYPE_QUICK_ACTIONS.equals(type)) return 0xFF17263B;
         if (WidgetLayout.TYPE_MAGNIFIER.equals(type)) return 0xFF142A35;
         if (WidgetLayout.TYPE_CANVAS.equals(type)) return 0xFF101820;
@@ -491,6 +502,7 @@ final class WidgetGridEditor extends View {
         if (HeimdallUi.isPearl(getContext())) return 0xFFE7E1D9;
         if (WidgetLayout.TYPE_TOUCHPAD.equals(type)) return 0xCC1F4D78;
         if (WidgetLayout.TYPE_MACRO_GROUP.equals(type)) return 0xCC4A3278;
+        if (WidgetLayout.TYPE_KEYBOARD_PAD.equals(type)) return 0xCC2C4B68;
         if (WidgetLayout.TYPE_MAGNIFIER.equals(type)) return 0xCC20566A;
         if (WidgetLayout.TYPE_CANVAS.equals(type)) return 0xCC283B4C;
         return 0xCC1D5A3B;
@@ -499,6 +511,7 @@ final class WidgetGridEditor extends View {
     private String widgetTypeLabel(String type) {
         if (WidgetLayout.TYPE_TOUCHPAD.equals(type)) return getContext().getString(R.string.grid_widget_touch);
         if (WidgetLayout.TYPE_MACRO_GROUP.equals(type)) return getContext().getString(R.string.grid_widget_macro);
+        if (WidgetLayout.TYPE_KEYBOARD_PAD.equals(type)) return getContext().getString(R.string.grid_widget_keyboard_pad);
         if (WidgetLayout.TYPE_STATUS.equals(type)) return getContext().getString(R.string.grid_widget_status);
         if (WidgetLayout.TYPE_CANVAS.equals(type)) return getContext().getString(R.string.canvas_name);
         if (WidgetLayout.TYPE_QUICK_ACTIONS.equals(type)) return getContext().getString(R.string.grid_widget_quick_actions);
@@ -508,6 +521,10 @@ final class WidgetGridEditor extends View {
 
     private String widgetEditorMeta(WidgetLayout.Item item) {
         String size = item.w + " x " + item.h;
+        if (WidgetLayout.TYPE_KEYBOARD_PAD.equals(item.type)) {
+            return size + "  " + item.safeKeyboardPad().keys.size()
+                    + " " + getContext().getString(R.string.keyboard_pad_keys_short);
+        }
         if (!WidgetLayout.TYPE_MACRO_GROUP.equals(item.type)) return size;
         return size + "  M" + (item.macroStart + 1) + "-"
                 + (item.macroStart + item.macroCount);

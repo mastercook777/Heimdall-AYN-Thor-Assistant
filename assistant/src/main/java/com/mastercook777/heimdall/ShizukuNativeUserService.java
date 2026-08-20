@@ -25,6 +25,12 @@ public final class ShizukuNativeUserService extends Binder {
     public static final int TRANSACTION_OPEN_VIRTUAL_MOUSE = IBinder.FIRST_CALL_TRANSACTION + 7;
     public static final int TRANSACTION_EMIT_VIRTUAL_MOUSE = IBinder.FIRST_CALL_TRANSACTION + 8;
     public static final int TRANSACTION_RELEASE_VIRTUAL_MOUSE = IBinder.FIRST_CALL_TRANSACTION + 9;
+    public static final int TRANSACTION_OPEN_VIRTUAL_KEYBOARD = IBinder.FIRST_CALL_TRANSACTION + 10;
+    public static final int TRANSACTION_EMIT_VIRTUAL_KEYBOARD = IBinder.FIRST_CALL_TRANSACTION + 11;
+    public static final int TRANSACTION_RELEASE_VIRTUAL_KEYBOARD_KEYS =
+            IBinder.FIRST_CALL_TRANSACTION + 12;
+    public static final int TRANSACTION_RELEASE_VIRTUAL_KEYBOARD =
+            IBinder.FIRST_CALL_TRANSACTION + 13;
     private long touchDownTime;
     private boolean touchSessionActive;
     private boolean touchUsesThorMappedDevice;
@@ -38,7 +44,7 @@ public final class ShizukuNativeUserService extends Binder {
     }
 
     public String ping() {
-        return "heimdall shizuku native service protocol=10";
+        return "heimdall shizuku native service protocol=14";
     }
 
     public String emitGamepadStep(String path, String value, int holdMs) {
@@ -186,6 +192,46 @@ public final class ShizukuNativeUserService extends Binder {
         }
     }
 
+    private synchronized String openVirtualKeyboard() {
+        try {
+            return UinputNativeProbe.openVirtualKeyboard();
+        } catch (Throwable t) {
+            return "Virtual keyboard could not open";
+        }
+    }
+
+    private synchronized String emitVirtualKeyboard(int keyCode, int keyValue) {
+        try {
+            return UinputNativeProbe.emitVirtualKeyboardKey(keyCode, keyValue);
+        } catch (Throwable t) {
+            try {
+                UinputNativeProbe.releaseVirtualKeyboard();
+            } catch (Throwable ignored) {
+            }
+            return "Virtual keyboard input failed";
+        }
+    }
+
+    private synchronized String releaseVirtualKeyboardKeys() {
+        try {
+            return UinputNativeProbe.releaseVirtualKeyboardKeys();
+        } catch (Throwable t) {
+            try {
+                UinputNativeProbe.releaseVirtualKeyboard();
+            } catch (Throwable ignored) {
+            }
+            return "Virtual keyboard all-up failed";
+        }
+    }
+
+    private synchronized String releaseVirtualKeyboard() {
+        try {
+            return UinputNativeProbe.releaseVirtualKeyboard();
+        } catch (Throwable t) {
+            return "Virtual keyboard release failed";
+        }
+    }
+
     private String injectLegacyTouchEvent(int displayId, int action, int x, int y) {
         try {
             long now = SystemClock.uptimeMillis();
@@ -324,6 +370,28 @@ public final class ShizukuNativeUserService extends Binder {
             reply.writeString(releaseVirtualMouse());
             return true;
         }
+        if (code == TRANSACTION_OPEN_VIRTUAL_KEYBOARD) {
+            reply.writeNoException();
+            reply.writeString(openVirtualKeyboard());
+            return true;
+        }
+        if (code == TRANSACTION_EMIT_VIRTUAL_KEYBOARD) {
+            int keyCode = data.readInt();
+            int keyValue = data.readInt();
+            reply.writeNoException();
+            reply.writeString(emitVirtualKeyboard(keyCode, keyValue));
+            return true;
+        }
+        if (code == TRANSACTION_RELEASE_VIRTUAL_KEYBOARD_KEYS) {
+            reply.writeNoException();
+            reply.writeString(releaseVirtualKeyboardKeys());
+            return true;
+        }
+        if (code == TRANSACTION_RELEASE_VIRTUAL_KEYBOARD) {
+            reply.writeNoException();
+            reply.writeString(releaseVirtualKeyboard());
+            return true;
+        }
         return super.onTransact(code, data, reply, flags);
     }
 
@@ -334,6 +402,10 @@ public final class ShizukuNativeUserService extends Binder {
         }
         try {
             UinputNativeProbe.releaseVirtualMouse();
+        } catch (Throwable ignored) {
+        }
+        try {
+            UinputNativeProbe.releaseVirtualKeyboard();
         } catch (Throwable ignored) {
         }
         System.exit(0);
