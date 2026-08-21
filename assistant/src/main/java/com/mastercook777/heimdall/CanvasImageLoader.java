@@ -17,6 +17,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 @SuppressLint("ExifInterface")
 final class CanvasImageLoader {
+    private static final int RUNTIME_MIN_DECODE_SIDE = 256;
+    private static final int RUNTIME_MAX_DECODE_SIDE = 2048;
+    private static final float RUNTIME_SAMPLE_HEADROOM = 2f;
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
     private static final ExecutorService DECODE_EXECUTOR = Executors.newSingleThreadExecutor(
             runnable -> {
@@ -48,6 +51,23 @@ final class CanvasImageLoader {
     }
 
     private CanvasImageLoader() {
+    }
+
+    static int runtimeDecodeMaxSide(int viewportWidth, int viewportHeight, float savedZoom) {
+        int viewportSide = Math.max(1, Math.max(viewportWidth, viewportHeight));
+        float normalizedZoom = savedZoom;
+        if (Float.isNaN(normalizedZoom) || Float.isInfinite(normalizedZoom)) {
+            normalizedZoom = CanvasConfig.MIN_ZOOM;
+        }
+        normalizedZoom = Math.max(CanvasConfig.MIN_ZOOM,
+                Math.min(CanvasConfig.MAX_ZOOM, normalizedZoom));
+        // BitmapFactory samples in coarse steps. Preserve the existing 2x headroom and
+        // apply the saved crop zoom on top so the retained Bitmap can cover the visible
+        // source region without being enlarged again by CanvasImageView.
+        double requested = Math.ceil(viewportSide
+                * normalizedZoom * RUNTIME_SAMPLE_HEADROOM);
+        return (int) Math.max(RUNTIME_MIN_DECODE_SIDE,
+                Math.min(RUNTIME_MAX_DECODE_SIDE, requested));
     }
 
     static Request load(Context context, String assetId, int maxSide, Callback callback) {

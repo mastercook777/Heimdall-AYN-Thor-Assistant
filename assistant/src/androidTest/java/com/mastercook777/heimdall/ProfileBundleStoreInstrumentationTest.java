@@ -45,6 +45,7 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
             testControllerSequenceSafetyPolicy();
             testVirtualKeyboardTransportContract();
             testKeyboardPadModelContract();
+            testCanvasRuntimeDecodePolicy();
             testSelfContainedRoundTripAfterSourcesAreDeleted();
             testCorruptMissingUnsafeAndOversizedBundlesFailClosed();
             testLegacyProfileJsonRemainsImportable();
@@ -148,6 +149,17 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
         restoredVertical.setLayoutMode(KeyboardPad.LAYOUT_HORIZONTAL);
         assertEquals(4, restoredVertical.columns);
         assertEquals(3, restoredVertical.rows);
+    }
+
+    public void testCanvasRuntimeDecodePolicy() {
+        assertEquals(256, CanvasImageLoader.runtimeDecodeMaxSide(0, 0, 1f));
+        assertEquals(1200, CanvasImageLoader.runtimeDecodeMaxSide(600, 400, 1f));
+        assertEquals(1500, CanvasImageLoader.runtimeDecodeMaxSide(250, 200, 3f));
+        assertEquals(2000, CanvasImageLoader.runtimeDecodeMaxSide(250, 200, 4f));
+        assertEquals(2048, CanvasImageLoader.runtimeDecodeMaxSide(600, 400, 2f));
+        assertEquals(2048, CanvasImageLoader.runtimeDecodeMaxSide(250, 200, 8f));
+        assertEquals(1200, CanvasImageLoader.runtimeDecodeMaxSide(
+                600, 400, Float.NaN));
     }
 
     public void testControllerSequenceSafetyPolicy() {

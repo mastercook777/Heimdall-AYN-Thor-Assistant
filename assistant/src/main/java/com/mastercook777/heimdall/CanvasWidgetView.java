@@ -267,7 +267,8 @@ final class CanvasWidgetView extends FrameLayout {
         if (!config.hasAsset() || loadRequest != null || getWidth() <= 0 || getHeight() <= 0) {
             return;
         }
-        int maxSide = Math.max(256, Math.min(2048, Math.max(getWidth(), getHeight()) * 2));
+        int maxSide = CanvasImageLoader.runtimeDecodeMaxSide(
+                getWidth(), getHeight(), config.zoom);
         loadRequest = CanvasImageLoader.load(getContext(), config.assetId, maxSide,
                 new CanvasImageLoader.Callback() {
                     @Override
