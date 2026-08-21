@@ -46,7 +46,9 @@
     <string name="action_recording_permission_cancelled">已取消上屏录屏授权。</string>
     <string name="action_profile_icon_updated">已更新 Profile 图标。</string>
     <string name="action_macro_icon_imported">已导入自定义宏图标。</string>
+    <string name="action_macro_icon_deleted">已删除自定义宏图标。</string>
     <string name="error_macro_icon_import">无法导入图标，请使用 4096px 以内的 PNG 或 WebP。</string>
+    <string name="error_macro_icon_delete">无法删除这个自定义图标。</string>
     <string name="action_guide_file_selected">已选择攻略文件。</string>
     <string name="action_note_file_imported">已导入笔记文件。</string>
     <string name="error_note_file_read">无法读取该笔记文件。</string>
@@ -508,6 +510,12 @@
     <string name="macro_icon_builtin">内置</string>
     <string name="macro_icon_custom">自定义</string>
     <string name="macro_icon_empty">未找到可用图标</string>
+    <string name="macro_icon_delete_title">删除自定义图标？</string>
+    <string name="macro_icon_delete_message">要从自定义图标中删除“%1$s”吗？对应的应用内图片文件将被删除，且无法恢复。</string>
+    <string name="macro_icon_delete_accessibility">删除自定义图标“%1$s”</string>
+    <plurals name="macro_icon_in_use">
+        <item quantity="other">这个图标仍被 %1$d 个控件使用。请先为相关控件选择其他图标，再删除它。</item>
+    </plurals>
 
     <string name="capture_upper_display">将在上屏采集坐标：display %1$d。</string>
     <string name="capture_current_display_fallback">未找到第二屏，将在当前屏采集。</string>

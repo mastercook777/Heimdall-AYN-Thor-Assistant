@@ -5,6 +5,7 @@ import android.app.Instrumentation;
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.Color;
+import android.graphics.Rect;
 import android.net.Uri;
 import android.os.Bundle;
 
@@ -46,6 +47,8 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
             testVirtualKeyboardTransportContract();
             testKeyboardPadModelContract();
             testCanvasRuntimeDecodePolicy();
+            testProfileIconDecodePolicy();
+            testUserMacroIconDeletionContract();
             testSelfContainedRoundTripAfterSourcesAreDeleted();
             testCorruptMissingUnsafeAndOversizedBundlesFailClosed();
             testLegacyProfileJsonRemainsImportable();
@@ -149,6 +152,46 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
         restoredVertical.setLayoutMode(KeyboardPad.LAYOUT_HORIZONTAL);
         assertEquals(4, restoredVertical.columns);
         assertEquals(3, restoredVertical.rows);
+    }
+
+    public void testProfileIconDecodePolicy() {
+        Rect landscape = ProfileIconView.centeredSquareBounds(4096, 512);
+        assertEquals(512, landscape.width());
+        assertEquals(512, landscape.height());
+        assertEquals(1792, landscape.left);
+        assertEquals(0, landscape.top);
+        assertEquals(2, ProfileIconView.sampleSizeForTarget(
+                landscape.width(), 256));
+
+        Rect portrait = ProfileIconView.centeredSquareBounds(512, 4096);
+        assertEquals(512, portrait.width());
+        assertEquals(512, portrait.height());
+        assertEquals(0, portrait.left);
+        assertEquals(1792, portrait.top);
+        assertEquals(1, ProfileIconView.sampleSizeForTarget(240, 256));
+        assertTrue(ProfileIconView.centeredSquareBounds(0, 512).isEmpty());
+    }
+
+    public void testUserMacroIconDeletionContract() throws Exception {
+        assertEquals(4, MacroIconRepository.importSampleSize(4096, 4096));
+        assertEquals(2, MacroIconRepository.importSampleSize(4096, 512));
+        assertEquals(1, MacroIconRepository.importSampleSize(4096, 64));
+
+        File directory = new File(target.getFilesDir(), "macro_icons");
+        assertTrue(directory.exists() || directory.mkdirs());
+        File icon = new File(directory, "delete_contract_" + System.nanoTime() + ".png");
+        writeFile(icon, pngFixture());
+        String key = "user:" + icon.getName();
+
+        assertTrue(MacroIconRepository.isUserIconKey(key));
+        assertFalse(MacroIconRepository.isUserIconKey("asset:" + icon.getName()));
+        assertFalse(MacroIconRepository.isUserIconKey("user:../" + icon.getName()));
+        assertFalse(MacroIconRepository.deleteUserIcon(
+                target, "user:../" + icon.getName()));
+        assertTrue(icon.isFile());
+        assertTrue(MacroIconRepository.deleteUserIcon(target, key));
+        assertFalse(icon.exists());
+        assertFalse(MacroIconRepository.deleteUserIcon(target, key));
     }
 
     public void testCanvasRuntimeDecodePolicy() {

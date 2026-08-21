@@ -3,6 +3,7 @@ package com.mastercook777.heimdall;
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.BitmapRegionDecoder;
 import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.Path;
@@ -11,10 +12,12 @@ import android.graphics.RectF;
 import android.net.Uri;
 import android.view.View;
 
+import java.io.IOException;
 import java.io.InputStream;
 import java.util.Locale;
 
 public final class ProfileIconView extends View {
+    private static final int DECODE_TARGET_SIDE = 256;
     private final Paint imagePaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
     private final Paint textPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint edgePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -116,30 +119,83 @@ public final class ProfileIconView extends View {
             invalidate();
             return;
         }
+        Uri uri = Uri.parse(uriString.trim());
         try {
-            Uri uri = Uri.parse(uriString.trim());
-            BitmapFactory.Options bounds = new BitmapFactory.Options();
-            bounds.inJustDecodeBounds = true;
-            InputStream boundsStream = getContext().getContentResolver().openInputStream(uri);
-            if (boundsStream != null) {
-                BitmapFactory.decodeStream(boundsStream, null, bounds);
-                boundsStream.close();
-            }
-            BitmapFactory.Options options = new BitmapFactory.Options();
-            options.inSampleSize = 1;
-            int largest = Math.max(bounds.outWidth, bounds.outHeight);
-            while (largest / options.inSampleSize > 256) {
-                options.inSampleSize *= 2;
-            }
-            InputStream stream = getContext().getContentResolver().openInputStream(uri);
-            if (stream != null) {
-                bitmap = BitmapFactory.decodeStream(stream, null, options);
-                stream.close();
-            }
+            bitmap = decodeCenteredSquare(uri);
         } catch (Exception ignored) {
             bitmap = null;
         }
+        if (bitmap == null) {
+            try {
+                bitmap = decodeSampledFallback(uri);
+            } catch (Exception ignored) {
+                bitmap = null;
+            }
+        }
         invalidate();
+    }
+
+    private Bitmap decodeCenteredSquare(Uri uri) throws IOException {
+        BitmapRegionDecoder decoder = null;
+        try (InputStream stream = getContext().getContentResolver().openInputStream(uri)) {
+            if (stream == null) {
+                return null;
+            }
+            decoder = BitmapRegionDecoder.newInstance(stream, false);
+            if (decoder == null) {
+                return null;
+            }
+            Rect region = centeredSquareBounds(decoder.getWidth(), decoder.getHeight());
+            if (region.isEmpty()) {
+                return null;
+            }
+            BitmapFactory.Options options = new BitmapFactory.Options();
+            options.inPreferredConfig = Bitmap.Config.ARGB_8888;
+            options.inSampleSize = sampleSizeForTarget(
+                    Math.min(region.width(), region.height()), DECODE_TARGET_SIDE);
+            return decoder.decodeRegion(region, options);
+        } finally {
+            if (decoder != null && !decoder.isRecycled()) {
+                decoder.recycle();
+            }
+        }
+    }
+
+    private Bitmap decodeSampledFallback(Uri uri) throws IOException {
+        BitmapFactory.Options bounds = new BitmapFactory.Options();
+        bounds.inJustDecodeBounds = true;
+        try (InputStream stream = getContext().getContentResolver().openInputStream(uri)) {
+            if (stream == null) {
+                return null;
+            }
+            BitmapFactory.decodeStream(stream, null, bounds);
+        }
+        BitmapFactory.Options options = new BitmapFactory.Options();
+        options.inPreferredConfig = Bitmap.Config.ARGB_8888;
+        options.inSampleSize = sampleSizeForTarget(
+                Math.max(bounds.outWidth, bounds.outHeight), DECODE_TARGET_SIDE);
+        try (InputStream stream = getContext().getContentResolver().openInputStream(uri)) {
+            return stream == null ? null : BitmapFactory.decodeStream(stream, null, options);
+        }
+    }
+
+    static Rect centeredSquareBounds(int width, int height) {
+        if (width <= 0 || height <= 0) {
+            return new Rect();
+        }
+        int side = Math.min(width, height);
+        int left = (width - side) / 2;
+        int top = (height - side) / 2;
+        return new Rect(left, top, left + side, top + side);
+    }
+
+    static int sampleSizeForTarget(int sourceSide, int targetSide) {
+        int sampleSize = 1;
+        int safeTarget = Math.max(1, targetSide);
+        while (sourceSide / sampleSize > safeTarget) {
+            sampleSize *= 2;
+        }
+        return sampleSize;
     }
 
     private void cropSource(Bitmap image, float targetRatio) {

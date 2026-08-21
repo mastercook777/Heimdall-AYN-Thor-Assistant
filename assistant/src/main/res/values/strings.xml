@@ -46,7 +46,9 @@
     <string name="action_recording_permission_cancelled">Screen recording permission was cancelled.</string>
     <string name="action_profile_icon_updated">Profile icon updated.</string>
     <string name="action_macro_icon_imported">Custom macro icon imported.</string>
+    <string name="action_macro_icon_deleted">Custom macro icon deleted.</string>
     <string name="error_macro_icon_import">Could not import the icon. Use a PNG or WebP up to 4096 px.</string>
+    <string name="error_macro_icon_delete">Could not delete this custom icon.</string>
     <string name="action_guide_file_selected">Guide file selected.</string>
     <string name="action_note_file_imported">Note file imported.</string>
     <string name="error_note_file_read">Could not read this note file.</string>
@@ -512,6 +514,13 @@
     <string name="macro_icon_builtin">Built-in</string>
     <string name="macro_icon_custom">Custom</string>
     <string name="macro_icon_empty">No icons available</string>
+    <string name="macro_icon_delete_title">Delete custom icon?</string>
+    <string name="macro_icon_delete_message">Delete %1$s from Custom icons? Its app-owned image file will be removed and cannot be recovered.</string>
+    <string name="macro_icon_delete_accessibility">Delete custom icon %1$s</string>
+    <plurals name="macro_icon_in_use">
+        <item quantity="one">This icon is still used by %1$d control. Choose another icon for that control before deleting it.</item>
+        <item quantity="other">This icon is still used by %1$d controls. Choose other icons for those controls before deleting it.</item>
+    </plurals>
 
     <string name="capture_upper_display">Capturing coordinates on upper display %1$d.</string>
     <string name="capture_current_display_fallback">No second display found. Capturing on the current display.</string>

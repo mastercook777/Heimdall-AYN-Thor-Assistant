@@ -121,6 +121,7 @@ final class HeimdallUi {
 
     static final float MACRO_ICON_SHARE_STANDARD = 0.44f;
     static final float MACRO_ICON_SHARE_UTILITY = 0.40f;
+    static final float MACRO_ICON_SIZE_SCALE = 1.15f;
     static final int MACRO_ICON_MIN = 34;
     static final int MACRO_ICON_MAX = 58;
     static final int MACRO_ICON_LABEL_GAP = 6;

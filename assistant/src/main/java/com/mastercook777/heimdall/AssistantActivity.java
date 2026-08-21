@@ -2832,11 +2832,12 @@ public class AssistantActivity extends Activity {
         float ratio = priority == HeimdallUi.MACRO_UTILITY
                 ? HeimdallUi.MACRO_ICON_SHARE_UTILITY
                 : HeimdallUi.MACRO_ICON_SHARE_STANDARD;
-        int size = height > 0 && width > 0
+        int baseSize = height > 0 && width > 0
                 ? Math.max(dp(HeimdallUi.MACRO_ICON_MIN),
                         Math.min(dp(HeimdallUi.MACRO_ICON_MAX),
                                 Math.round(Math.min(width, height) * ratio)))
                 : dp(HeimdallUi.MACRO_ICON_MIN);
+        int size = Math.round(baseSize * HeimdallUi.MACRO_ICON_SIZE_SCALE);
         if (button instanceof MacroButtonView) {
             ((MacroButtonView) button).setMacroIcon(icon, color, size);
             return;
@@ -10031,10 +10032,10 @@ public class AssistantActivity extends Activity {
         }
 
         addMacroIconRows(builtInList, builtInOptions, draftIconKey, iconPreview,
-                macro, overlayHolder);
+                macro, overlayHolder, false);
         if (customList != null) {
             addMacroIconRows(customList, customOptions, draftIconKey, iconPreview,
-                    macro, overlayHolder);
+                    macro, overlayHolder, true);
         }
 
         View footerDivider = new View(this);
@@ -10087,12 +10088,22 @@ public class AssistantActivity extends Activity {
                                   String[] draftIconKey,
                                   ImageView iconPreview,
                                   Macro macro,
-                                  PanelOverlay[] overlayHolder) {
+                                  PanelOverlay[] overlayHolder,
+                                  boolean allowDelete) {
         final int columns = 3;
         for (int start = 0; start < options.size(); start += columns) {
+            boolean rowHasDelete = false;
+            for (int column = 0; column < columns && start + column < options.size(); column++) {
+                if (allowDelete && MacroIconRepository.isUserIconKey(
+                        options.get(start + column).key)) {
+                    rowHasDelete = true;
+                    break;
+                }
+            }
             LinearLayout row = new LinearLayout(this);
             row.setOrientation(LinearLayout.HORIZONTAL);
-            list.addView(row, new LinearLayout.LayoutParams(-1, dp(114)));
+            list.addView(row, new LinearLayout.LayoutParams(
+                    -1, dp(rowHasDelete ? 154 : 114)));
             for (int column = 0; column < columns; column++) {
                 int index = start + column;
                 if (index >= options.size()) {
@@ -10106,7 +10117,10 @@ public class AssistantActivity extends Activity {
                     if (overlayHolder[0] != null) {
                         dismissPanelAnimated(overlayHolder[0]);
                     }
-                });
+                }, allowDelete && MacroIconRepository.isUserIconKey(option.key)
+                        ? () -> confirmDeleteMacroIcon(option, draftIconKey, iconPreview,
+                                macro, overlayHolder[0])
+                        : null);
                 LinearLayout.LayoutParams cellParams = new LinearLayout.LayoutParams(0, -1, 1);
                 cellParams.setMargins(dp(4), dp(4), dp(4), dp(4));
                 row.addView(cell, cellParams);
@@ -10114,7 +10128,9 @@ public class AssistantActivity extends Activity {
         }
     }
 
-    private View macroIconPickerCell(MacroIconRepository.MacroIconOption option, String selectedKey, Runnable action) {
+    private View macroIconPickerCell(MacroIconRepository.MacroIconOption option,
+                                     String selectedKey, Runnable action,
+                                     Runnable deleteAction) {
         String effectiveSelectedKey = selectedKey == null || selectedKey.trim().length() == 0
                 ? MacroIconRepository.defaultOption(this).key : selectedKey;
         boolean selected = sameIconKey(option.key, effectiveSelectedKey);
@@ -10148,12 +10164,36 @@ public class AssistantActivity extends Activity {
             }
         }
         image.setImageDrawable(drawable);
-        content.addView(image, new LinearLayout.LayoutParams(dp(46), dp(46)));
+        content.addView(image, new LinearLayout.LayoutParams(
+                dp(deleteAction == null ? 46 : 42), dp(deleteAction == null ? 46 : 42)));
 
         TextView label = text(option.displayName, HeimdallUi.TYPE_META, selected ? TEXT : MUTED, selected);
         label.setGravity(Gravity.CENTER);
         label.setSingleLine(true);
-        content.addView(label, new LinearLayout.LayoutParams(-1, dp(26)));
+        content.addView(label, new LinearLayout.LayoutParams(
+                -1, dp(deleteAction == null ? 26 : 24)));
+
+        if (deleteAction != null) {
+            Button delete = new Button(this);
+            delete.setAllCaps(false);
+            delete.setText(getString(R.string.common_delete));
+            delete.setTextSize(11);
+            delete.setTextColor(HeimdallUi.isPearl(this) ? 0xFFB34A4F : DANGER);
+            delete.setGravity(Gravity.CENTER);
+            delete.setMinWidth(0);
+            delete.setMinHeight(0);
+            delete.setPadding(0, 0, 0, 0);
+            delete.setBackground(HeimdallUi.isPearl(this)
+                    ? HeimdallUi.pearlMenuControl(this, 8, false, false)
+                    : rounded(DANGER_BG, DANGER, 8));
+            delete.setContentDescription(getString(
+                    R.string.macro_icon_delete_accessibility, option.displayName));
+            delete.setOnClickListener(view -> deleteAction.run());
+            LinearLayout.LayoutParams deleteParams = new LinearLayout.LayoutParams(
+                    -1, dp(40));
+            deleteParams.setMargins(dp(8), dp(4), dp(8), 0);
+            content.addView(delete, deleteParams);
+        }
 
         if (selected) {
             TextView check = text("\u2713", 12, TEXT, true);
@@ -10168,6 +10208,70 @@ public class AssistantActivity extends Activity {
         }
 
         return frame;
+    }
+
+    private void confirmDeleteMacroIcon(MacroIconRepository.MacroIconOption option,
+                                        String[] draftIconKey,
+                                        ImageView iconPreview,
+                                        Macro macro,
+                                        PanelOverlay pickerOverlay) {
+        if (option == null || !MacroIconRepository.isUserIconKey(option.key)) {
+            return;
+        }
+        int usageCount = macroIconUsageCount(option.key);
+        if (draftIconKey != null && draftIconKey.length > 0
+                && sameIconKey(option.key, draftIconKey[0])
+                && (macro == null || !sameIconKey(option.key, macro.iconKey))) {
+            usageCount++;
+        }
+        if (usageCount > 0) {
+            showErrorAction(getResources().getQuantityString(
+                    R.plurals.macro_icon_in_use, usageCount, usageCount));
+            return;
+        }
+        showSettingsDecisionPanel(getString(R.string.macro_icon_delete_title),
+                getString(R.string.macro_icon_delete_message, option.displayName),
+                null, null, getString(R.string.common_delete), () -> {
+                    if (!MacroIconRepository.deleteUserIcon(this, option.key)) {
+                        showErrorAction(getString(R.string.error_macro_icon_delete));
+                        return;
+                    }
+                    showAction(getString(R.string.action_macro_icon_deleted));
+                    Runnable reopen = () -> showMacroIconPicker(
+                            macro, draftIconKey, iconPreview);
+                    if (pickerOverlay != null) {
+                        dismissPanelAnimated(pickerOverlay, reopen);
+                    } else {
+                        reopen.run();
+                    }
+                });
+    }
+
+    private int macroIconUsageCount(String iconKey) {
+        int count = 0;
+        for (GameProfile profile : profiles) {
+            for (Macro candidate : profile.macros) {
+                if (sameIconKey(iconKey, candidate.iconKey)) {
+                    count++;
+                }
+            }
+            if (profile.widgetLayout == null) {
+                continue;
+            }
+            for (WidgetLayout.Item item : profile.widgetLayout.items) {
+                if (item == null || !WidgetLayout.TYPE_KEYBOARD_PAD.equals(item.type)
+                        || item.keyboardPad == null) {
+                    continue;
+                }
+                for (KeyboardPad.Key key : item.keyboardPad.keys) {
+                    if (key != null && key.display != null
+                            && sameIconKey(iconKey, key.display.iconKey)) {
+                        count++;
+                    }
+                }
+            }
+        }
+        return count;
     }
 
     private boolean sameIconKey(String left, String right) {
