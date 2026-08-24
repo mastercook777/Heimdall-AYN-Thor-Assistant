@@ -51,6 +51,7 @@ import android.text.Editable;
 import android.text.TextWatcher;
 import android.util.DisplayMetrics;
 import android.view.Gravity;
+import android.view.HapticFeedbackConstants;
 import android.view.Display;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
@@ -105,6 +106,8 @@ public class AssistantActivity extends Activity {
     private static final long PANEL_ENTER_MS = 160L;
     private static final long PANEL_EXIT_MS = 110L;
     private static final long CONTENT_TRANSITION_MS = 160L;
+    private static final long FULL_KEYBOARD_ENTER_MS = 150L;
+    private static final long FULL_KEYBOARD_EXIT_MS = 120L;
     private static final int CONTENT_ENTER_TRANSLATION_DP = 32;
     private static final long SETTINGS_DOCK_EXIT_MS = 120L;
     private static final long SETTINGS_DOCK_ENTER_MS = 140L;
@@ -129,6 +132,7 @@ public class AssistantActivity extends Activity {
     private static final int REQUEST_DIAGNOSTIC_EXPORT = 2112;
     private static final int MAGNIFIER_REGION_START_MAX_ATTEMPTS = 12;
     private static final long MAGNIFIER_REGION_START_RETRY_MS = 150L;
+    private static final long QUICK_ACTION_EDIT_LONG_PRESS_TIMEOUT_MS = 1800L;
     private static final int BG = HeimdallUi.COLOR_BG;
     private static final int PANEL = HeimdallUi.COLOR_SURFACE;
     private static final int PANEL_ALT = HeimdallUi.COLOR_SURFACE_RAISED;
@@ -214,6 +218,8 @@ public class AssistantActivity extends Activity {
     private KeyboardInputSession keyboardInputSession;
     private boolean keyboardInputErrorShown;
     private boolean keyboardPadEditorActive;
+    private FullVirtualKeyboardView fullVirtualKeyboardView;
+    private boolean fullVirtualKeyboardClosing;
     private int targetDisplayId = Display.DEFAULT_DISPLAY;
     private int targetDisplayWidth;
     private int targetDisplayHeight;
@@ -623,6 +629,7 @@ public class AssistantActivity extends Activity {
     @Override
     protected void onDestroy() {
         flushGuideReadingPosition();
+        dismissFullVirtualKeyboard(false);
         parkVirtualMouseDispatcher();
         parkKeyboardInputSession();
         for (View view : new ArrayList<>(transientAnimatedViews)) {
@@ -691,6 +698,7 @@ public class AssistantActivity extends Activity {
     @Override
     protected void onPause() {
         saveGuideReadingPosition();
+        dismissFullVirtualKeyboard(false);
         if (!magnifierRegionCaptureInProgress) {
             pauseMagnifierViews();
         }
@@ -1155,6 +1163,10 @@ public class AssistantActivity extends Activity {
 
     @Override
     public void onBackPressed() {
+        if (fullVirtualKeyboardView != null) {
+            dismissFullVirtualKeyboard(true);
+            return;
+        }
         if (dismissTopPanelOverlay()) {
             return;
         }
@@ -1268,11 +1280,25 @@ public class AssistantActivity extends Activity {
     private KeyboardInputSession ensureKeyboardInputSession() {
         if (keyboardInputSession == null) {
             keyboardInputErrorShown = false;
-            keyboardInputSession = new KeyboardInputSession(this, () -> {
-                keyboardInputSession = null;
-                if (!keyboardInputErrorShown) {
-                    keyboardInputErrorShown = true;
-                    showErrorAction(getString(R.string.virtual_keyboard_unavailable));
+            keyboardInputSession = new KeyboardInputSession(this,
+                    new KeyboardInputSession.Listener() {
+                @Override
+                public void onReady() {
+                    if (fullVirtualKeyboardView != null) {
+                        fullVirtualKeyboardView.setReady();
+                    }
+                }
+
+                @Override
+                public void onUnavailable() {
+                    keyboardInputSession = null;
+                    if (fullVirtualKeyboardView != null) {
+                        fullVirtualKeyboardView.setUnavailable();
+                    }
+                    if (!keyboardInputErrorShown) {
+                        keyboardInputErrorShown = true;
+                        showErrorAction(getString(R.string.virtual_keyboard_unavailable));
+                    }
                 }
             });
         }
@@ -1308,6 +1334,118 @@ public class AssistantActivity extends Activity {
             }
         }
         closeKeyboardInputSession();
+    }
+
+    private void openFullVirtualKeyboard() {
+        if (fullVirtualKeyboardView != null || fullVirtualKeyboardClosing
+                || overlayHost == null) {
+            return;
+        }
+        parkKeyboardInputSession();
+        FullVirtualKeyboardView view = new FullVirtualKeyboardView(this,
+                new FullVirtualKeyboardView.Listener() {
+                    @Override
+                    public void onPrepareInput() {
+                        ensureKeyboardInputSession().prepare();
+                    }
+
+                    @Override
+                    public void onKeyDown(Object token, int linuxKeyCode) {
+                        ensureKeyboardInputSession().holdKey(token, linuxKeyCode);
+                    }
+
+                    @Override
+                    public void onKeyUp(Object token) {
+                        if (keyboardInputSession != null) {
+                            keyboardInputSession.release(token);
+                        }
+                    }
+
+                    @Override
+                    public void onReleaseAll() {
+                        if (keyboardInputSession != null) {
+                            keyboardInputSession.releaseAll();
+                        }
+                    }
+
+                    @Override
+                    public void onMenuRequested() {
+                        showInformationPanel(getString(R.string.full_keyboard_menu_title),
+                                getString(R.string.full_keyboard_menu_message));
+                    }
+
+                    @Override
+                    public void onClose() {
+                        dismissFullVirtualKeyboard(true);
+                    }
+                });
+        fullVirtualKeyboardView = view;
+        setHeaderProfileInteractionEnabled(false);
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(-1, -1);
+        params.setMargins(dp(6), dp(HeimdallUi.HEIGHT_HEADER + 12), dp(6), dp(6));
+        overlayHost.addView(view, params);
+        applySystemGestureExclusion(view);
+        updateGameFocusProtection();
+        if (shouldAnimateUi()) {
+            view.setVisibility(View.INVISIBLE);
+            view.post(() -> {
+                if (fullVirtualKeyboardView != view || view.getParent() == null) return;
+                view.setVisibility(View.VISIBLE);
+                view.setTranslationY(Math.max(view.getHeight(), dp(240)));
+                trackAnimatedView(view);
+                view.animate().translationY(0f)
+                        .setDuration(FULL_KEYBOARD_ENTER_MS)
+                        .setInterpolator(UI_EASE_OUT)
+                        .withEndAction(() -> finishAnimatedView(view))
+                        .start();
+            });
+        }
+        view.prepare();
+    }
+
+    private void dismissFullVirtualKeyboard(boolean animate) {
+        FullVirtualKeyboardView view = fullVirtualKeyboardView;
+        if (view == null) return;
+        view.releaseForDismiss();
+        parkKeyboardInputSession();
+        closeKeyboardInputSessionIfUnused();
+        setHeaderProfileInteractionEnabled(true);
+        view.animate().cancel();
+        finishAnimatedView(view);
+        if (!animate || !shouldAnimateUi() || view.getParent() == null) {
+            removeFullVirtualKeyboard(view);
+            return;
+        }
+        if (fullVirtualKeyboardClosing) return;
+        fullVirtualKeyboardClosing = true;
+        trackAnimatedView(view);
+        view.animate().translationY(Math.max(view.getHeight(), dp(240)))
+                .setDuration(FULL_KEYBOARD_EXIT_MS)
+                .setInterpolator(UI_EASE_OUT)
+                .withEndAction(() -> removeFullVirtualKeyboard(view))
+                .start();
+    }
+
+    private void removeFullVirtualKeyboard(FullVirtualKeyboardView view) {
+        view.animate().cancel();
+        finishAnimatedView(view);
+        if (view.getParent() instanceof ViewGroup) {
+            ((ViewGroup) view.getParent()).removeView(view);
+        }
+        if (fullVirtualKeyboardView == view) {
+            fullVirtualKeyboardView = null;
+        }
+        fullVirtualKeyboardClosing = false;
+        updateGameFocusProtection();
+    }
+
+    private void setHeaderProfileInteractionEnabled(boolean enabled) {
+        if (profileIconView != null) {
+            profileIconView.setClickable(enabled);
+        }
+        if (profileTitle != null) {
+            profileTitle.setClickable(enabled);
+        }
     }
 
     private void registerCaptureReceiver() {
@@ -1606,7 +1744,7 @@ public class AssistantActivity extends Activity {
             return view;
         }
         if (WidgetLayout.TYPE_QUICK_ACTIONS.equals(type)) {
-            return createQuickActionsWidget();
+            return createQuickActionsWidget(item);
         }
         if (WidgetLayout.TYPE_MAGNIFIER.equals(type)) {
             UpperScreenMagnifierView view = new UpperScreenMagnifierView(this, item,
@@ -1670,6 +1808,11 @@ public class AssistantActivity extends Activity {
                     }
 
                     @Override
+                    public void onHeimdallAction(String actionId) {
+                        executeHeimdallAction(actionId);
+                    }
+
+                    @Override
                     public void onEditRequested() {
                         parkKeyboardInputSession();
                         showKeyboardPadEditor(item);
@@ -1698,81 +1841,267 @@ public class AssistantActivity extends Activity {
         return statusText;
     }
 
-    private View createQuickActionsWidget() {
+    private View createQuickActionsWidget(WidgetLayout.Item item) {
         LinearLayout root = new TrackedLinearLayout("Quick Actions");
         root.setOrientation(LinearLayout.VERTICAL);
         HeimdallUi.applyQuickActionPanel(this, root);
+        QuickActionsConfig config = item.safeQuickActions();
+        ((TrackedLinearLayout) root).setDelayedEditAction(
+                () -> showQuickActionsEditor(item));
 
         LinearLayout actions = new LinearLayout(this);
         actions.setOrientation(LinearLayout.HORIZONTAL);
         root.addView(actions, new LinearLayout.LayoutParams(-1, 0, 1));
-        QuickActionButtonView screenshot = addQuickActionButton(actions,
-                R.drawable.ic_camera, getString(R.string.quick_action_screenshot),
-                QuickActionButtonView.STATE_IDLE, this::captureUpperScreen);
-        quickScreenshotButtons.add(screenshot);
-        View actionDivider = new View(this);
-        actionDivider.setBackgroundColor(HeimdallUi.quickActionDivider(this));
-        LinearLayout.LayoutParams actionDividerParams =
-                new LinearLayout.LayoutParams(dp(1), -1);
-        actionDividerParams.setMargins(0, dp(7), 0, dp(7));
-        actions.addView(actionDivider, actionDividerParams);
-        boolean projectionBusy = ScreenRecordingService.isRecording()
-                || UpperScreenProjectionService.isActiveOrStarting();
-        QuickActionButtonView record = addQuickActionButton(actions,
-                projectionBusy ? R.drawable.ic_stop : R.drawable.ic_video,
-                quickRecordActionDescription(), quickRecordVisualState(),
-                this::toggleUpperScreenRecording);
-        quickRecordButtons.add(record);
+        int renderedActions = 0;
+        for (String actionId : config.actions) {
+            String normalized = HeimdallActionCatalog.normalizeQuickAction(actionId);
+            if (HeimdallActionCatalog.ACTION_NONE.equals(normalized)) continue;
+            if (renderedActions > 0) {
+                View actionDivider = new View(this);
+                actionDivider.setBackgroundColor(HeimdallUi.quickActionDivider(this));
+                LinearLayout.LayoutParams actionDividerParams =
+                        new LinearLayout.LayoutParams(dp(1), -1);
+                actionDividerParams.setMargins(0, dp(7), 0, dp(7));
+                actions.addView(actionDivider, actionDividerParams);
+            }
+            HeimdallActionCatalog.Entry entry =
+                    HeimdallActionCatalog.findQuickAction(normalized);
+            int icon = entry.iconRes;
+            String description = getString(entry.labelRes);
+            int visualState = QuickActionButtonView.STATE_IDLE;
+            if (HeimdallActionCatalog.ACTION_SCREEN_RECORDING.equals(normalized)) {
+                boolean projectionBusy = ScreenRecordingService.isRecording()
+                        || UpperScreenProjectionService.isActiveOrStarting();
+                icon = projectionBusy ? R.drawable.ic_stop : R.drawable.ic_video;
+                description = quickRecordActionDescription();
+                visualState = quickRecordVisualState();
+            }
+            QuickActionButtonView button = addQuickActionButton(actions, icon,
+                    description, visualState, () -> executeHeimdallAction(normalized));
+            button.setDelayedEditAction(() -> showQuickActionsEditor(item));
+            if (HeimdallActionCatalog.ACTION_SCREENSHOT.equals(normalized)) {
+                quickScreenshotButtons.add(button);
+            } else if (HeimdallActionCatalog.ACTION_SCREEN_RECORDING.equals(normalized)) {
+                quickRecordButtons.add(button);
+            }
+            renderedActions++;
+        }
 
-        View volumeDivider = new View(this);
-        volumeDivider.setBackgroundColor(HeimdallUi.quickActionDivider(this));
-        LinearLayout.LayoutParams volumeDividerParams =
-                new LinearLayout.LayoutParams(-1, dp(1));
-        volumeDividerParams.setMargins(dp(7), 0, dp(7), 0);
-        root.addView(volumeDivider, volumeDividerParams);
+        if (config.mediaVolume) {
+            View volumeDivider = new View(this);
+            volumeDivider.setBackgroundColor(HeimdallUi.quickActionDivider(this));
+            LinearLayout.LayoutParams volumeDividerParams =
+                    new LinearLayout.LayoutParams(-1, dp(1));
+            volumeDividerParams.setMargins(dp(7), 0, dp(7), 0);
+            root.addView(volumeDivider, volumeDividerParams);
 
-        LinearLayout volumeRow = new LinearLayout(this);
-        volumeRow.setOrientation(LinearLayout.HORIZONTAL);
-        volumeRow.setGravity(Gravity.CENTER_VERTICAL);
-        volumeRow.setPadding(dp(9), 0, dp(9), 0);
-        LinearLayout.LayoutParams volumeParams = new LinearLayout.LayoutParams(-1, dp(38));
-        root.addView(volumeRow, volumeParams);
+            LinearLayout volumeRow = new LinearLayout(this);
+            volumeRow.setOrientation(LinearLayout.HORIZONTAL);
+            volumeRow.setGravity(Gravity.CENTER_VERTICAL);
+            volumeRow.setPadding(dp(9), 0, dp(9), 0);
+            LinearLayout.LayoutParams volumeParams = new LinearLayout.LayoutParams(-1, dp(38));
+            root.addView(volumeRow, volumeParams);
 
-        ImageView volumeIcon = new ImageView(this);
-        volumeIcon.setImageResource(R.drawable.ic_volume_up);
-        volumeIcon.setColorFilter(HeimdallUi.isPearl(this) ? 0xFF536274 : 0xFFBFD0E2);
-        volumeIcon.setContentDescription(getString(R.string.quick_action_media_volume));
-        volumeRow.addView(volumeIcon, new LinearLayout.LayoutParams(dp(24), dp(24)));
+            ImageView volumeIcon = new ImageView(this);
+            volumeIcon.setImageResource(R.drawable.ic_volume_up);
+            volumeIcon.setColorFilter(HeimdallUi.isPearl(this) ? 0xFF536274 : 0xFFBFD0E2);
+            volumeIcon.setContentDescription(getString(R.string.quick_action_media_volume));
+            volumeRow.addView(volumeIcon, new LinearLayout.LayoutParams(dp(24), dp(24)));
 
-        AudioManager audio = (AudioManager) getSystemService(AUDIO_SERVICE);
-        QuickVolumeSeekBar volume = new QuickVolumeSeekBar(this);
-        int max = audio == null ? 15 : Math.max(1, audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC));
-        int current = audio == null ? 0 : audio.getStreamVolume(AudioManager.STREAM_MUSIC);
-        volume.setMax(max);
-        volume.setProgress(current);
-        volumeIcon.setAlpha(0.55f + 0.45f * current / (float) max);
-        volume.setContentDescription(getString(R.string.quick_action_adjust_media_volume));
-        volume.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-            @Override
-            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                if (fromUser && audio != null) {
-                    audio.setStreamVolume(AudioManager.STREAM_MUSIC, progress, 0);
+            AudioManager audio = (AudioManager) getSystemService(AUDIO_SERVICE);
+            QuickVolumeSeekBar volume = new QuickVolumeSeekBar(this);
+            int max = audio == null ? 15
+                    : Math.max(1, audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC));
+            int current = audio == null ? 0
+                    : audio.getStreamVolume(AudioManager.STREAM_MUSIC);
+            volume.setMax(max);
+            volume.setProgress(current);
+            volumeIcon.setAlpha(0.55f + 0.45f * current / (float) max);
+            volume.setContentDescription(getString(R.string.quick_action_adjust_media_volume));
+            volume.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+                @Override
+                public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                    if (fromUser && audio != null) {
+                        audio.setStreamVolume(AudioManager.STREAM_MUSIC, progress, 0);
+                    }
+                    volumeIcon.setAlpha(0.55f + 0.45f * progress / (float) max);
                 }
-                volumeIcon.setAlpha(0.55f + 0.45f * progress / (float) max);
-            }
 
-            @Override
-            public void onStartTrackingTouch(SeekBar seekBar) {
-            }
+                @Override
+                public void onStartTrackingTouch(SeekBar seekBar) {
+                }
 
-            @Override
-            public void onStopTrackingTouch(SeekBar seekBar) {
+                @Override
+                public void onStopTrackingTouch(SeekBar seekBar) {
+                }
+            });
+            LinearLayout.LayoutParams sliderParams =
+                    new LinearLayout.LayoutParams(0, dp(38), 1);
+            sliderParams.setMargins(dp(7), 0, 0, 0);
+            volumeRow.addView(volume, sliderParams);
+        }
+        return root;
+    }
+
+    private void executeHeimdallAction(String actionId) {
+        String normalized = HeimdallActionCatalog.normalizeQuickAction(actionId);
+        if (HeimdallActionCatalog.ACTION_SCREENSHOT.equals(normalized)) {
+            captureUpperScreen();
+        } else if (HeimdallActionCatalog.ACTION_SCREEN_RECORDING.equals(normalized)) {
+            toggleUpperScreenRecording();
+        } else if (HeimdallActionCatalog.ACTION_OPEN_VIRTUAL_KEYBOARD.equals(normalized)) {
+            openFullVirtualKeyboard();
+        }
+    }
+
+    private void showQuickActionsEditor(WidgetLayout.Item item) {
+        if (item == null || hasUnsavedWidgetLayout()) {
+            showErrorAction(getString(R.string.quick_actions_save_layout_first));
+            return;
+        }
+        WidgetLayout.Item profileItem = resolveProfileWidgetItem(
+                item, WidgetLayout.TYPE_QUICK_ACTIONS);
+        if (profileItem == null) {
+            showErrorAction(getString(R.string.quick_actions_save_layout_first));
+            return;
+        }
+        QuickActionsConfig draft = item.safeQuickActions().copy();
+        final PanelOverlay[] holder = new PanelOverlay[1];
+        LinearLayout shell = new LinearLayout(this);
+        shell.setOrientation(LinearLayout.VERTICAL);
+        shell.setPadding(dp(12), dp(8), dp(12), dp(8));
+        shell.setBackground(HeimdallUi.isPearl(this)
+                ? HeimdallUi.cncRaised(this, 14, false, false)
+                : HeimdallUi.glass(this, 0xFA0B111B, 0xFF070A10,
+                        0x886A829C, 0x44344150, 14, 2));
+
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        shell.addView(header, new LinearLayout.LayoutParams(-1, dp(44)));
+        header.addView(text(getString(R.string.quick_actions_editor_title),
+                HeimdallUi.TYPE_EDITOR_TITLE, TEXT, true),
+                new LinearLayout.LayoutParams(0, -1, 1));
+        Button close = gridCloseButton(() -> {
+            if (holder[0] != null) dismissPanelAnimated(holder[0]);
+        });
+        close.setContentDescription(getString(R.string.common_close));
+        header.addView(close, new LinearLayout.LayoutParams(dp(42), dp(38)));
+
+        TextView help = text(getString(R.string.quick_actions_editor_help),
+                HeimdallUi.TYPE_META, MUTED, false);
+        help.setGravity(Gravity.CENTER_VERTICAL);
+        help.setSingleLine(true);
+        shell.addView(help, new LinearLayout.LayoutParams(-1, dp(28)));
+
+        for (int slot = 0; slot < QuickActionsConfig.MAX_SLOTS; slot++) {
+            final int slotIndex = slot;
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(-1, dp(44));
+            rowParams.setMargins(0, dp(2), 0, dp(2));
+            shell.addView(row, rowParams);
+            TextView slotLabel = text(getString(R.string.quick_actions_slot, slot + 1),
+                    HeimdallUi.TYPE_LABEL, TEXT, true);
+            row.addView(slotLabel, new LinearLayout.LayoutParams(dp(78), -1));
+            HeimdallActionCatalog.Entry current =
+                    HeimdallActionCatalog.findQuickAction(draft.actionAt(slot));
+            Button actionButton = editorButton(getString(current.labelRes), () -> {});
+            actionButton.setTextSize(HeimdallUi.TYPE_BUTTON_COMPACT);
+            actionButton.setOnClickListener(view -> showQuickActionPicker(
+                    draft, slotIndex, actionButton));
+            HeimdallUi.applyChoiceButton(this, actionButton,
+                    !HeimdallActionCatalog.ACTION_NONE.equals(current.id));
+            row.addView(actionButton, new LinearLayout.LayoutParams(0, -1, 1));
+        }
+
+        CheckBox mediaVolume = new CheckBox(this);
+        mediaVolume.setText(R.string.quick_actions_media_volume_enabled);
+        mediaVolume.setChecked(draft.mediaVolume);
+        mediaVolume.setTextSize(12);
+        styleCheckBox(mediaVolume);
+        shell.addView(mediaVolume, new LinearLayout.LayoutParams(-1, dp(42)));
+
+        View footerDivider = new View(this);
+        footerDivider.setBackgroundColor(
+                HeimdallUi.isPearl(this) ? 0x287B8792 : 0x445F7C9A);
+        shell.addView(footerDivider, new LinearLayout.LayoutParams(-1, dp(1)));
+
+        LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        actions.setPadding(0, dp(5), 0, 0);
+        shell.addView(actions, new LinearLayout.LayoutParams(-1, dp(50)));
+        actions.addView(editorButton(getString(R.string.common_cancel), () -> {
+            if (holder[0] != null) dismissPanelAnimated(holder[0]);
+        }));
+        Button save = editorButton(getString(R.string.common_save), () -> {
+            draft.mediaVolume = mediaVolume.isChecked();
+            QuickActionsConfig saved = draft.copy();
+            profileItem.quickActions = saved.copy();
+            item.quickActions = saved.copy();
+            mirrorQuickActionsIntoEquivalentDraft(profileItem, saved);
+            ProfileStore.saveProfiles(this, profiles);
+            showAction(getString(R.string.quick_actions_saved));
+            if (holder[0] != null) {
+                dismissPanelAnimated(holder[0], this::rebuildContent);
+            } else {
+                rebuildContent();
             }
         });
-        LinearLayout.LayoutParams sliderParams = new LinearLayout.LayoutParams(0, dp(38), 1);
-        sliderParams.setMargins(dp(7), 0, 0, 0);
-        volumeRow.addView(volume, sliderParams);
-        return root;
+        HeimdallUi.applyPrimaryActionButton(this, save);
+        actions.addView(save);
+
+        DisplayMetrics metrics = getResources().getDisplayMetrics();
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
+                Math.min(dp(560), metrics.widthPixels - dp(56)),
+                ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER);
+        holder[0] = showPanelOverlay(shell, params, null);
+    }
+
+    private void showQuickActionPicker(QuickActionsConfig draft, int slot,
+            Button valueButton) {
+        final PanelOverlay[] holder = new PanelOverlay[1];
+        LinearLayout shell = new LinearLayout(this);
+        shell.setOrientation(LinearLayout.VERTICAL);
+        shell.setPadding(dp(12), dp(10), dp(12), dp(10));
+        shell.setBackground(HeimdallUi.isPearl(this)
+                ? HeimdallUi.cncRaised(this, 12, false, false)
+                : HeimdallUi.glass(this, 0xF00B111B, 0xFA070A10,
+                        0x884EA1FF, 0x44344150, 12, 1));
+        LinearLayout header = new LinearLayout(this);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        shell.addView(header, new LinearLayout.LayoutParams(-1, dp(44)));
+        header.addView(text(getString(R.string.quick_actions_picker_title),
+                HeimdallUi.TYPE_PAGE_TITLE, TEXT, true),
+                new LinearLayout.LayoutParams(0, -1, 1));
+        Button close = gridCloseButton(() -> {
+            if (holder[0] != null) dismissPanelAnimated(holder[0]);
+        });
+        header.addView(close, new LinearLayout.LayoutParams(dp(42), dp(38)));
+        LinearLayout list = new LinearLayout(this);
+        list.setOrientation(LinearLayout.VERTICAL);
+        shell.addView(list, new LinearLayout.LayoutParams(-1, -2));
+        for (HeimdallActionCatalog.Entry entry : HeimdallActionCatalog.quickActionEntries()) {
+            Button choice = editorButton(getString(entry.labelRes), () -> {
+                draft.setActionAt(slot, entry.id);
+                valueButton.setText(entry.labelRes);
+                HeimdallUi.applyChoiceButton(this, valueButton,
+                        !HeimdallActionCatalog.ACTION_NONE.equals(entry.id));
+                if (holder[0] != null) dismissPanelAnimated(holder[0]);
+            });
+            HeimdallUi.applyChoiceButton(this, choice,
+                    entry.id.equals(draft.actionAt(slot)));
+            LinearLayout.LayoutParams choiceParams =
+                    new LinearLayout.LayoutParams(-1, dp(44));
+            choiceParams.setMargins(0, dp(2), 0, dp(2));
+            list.addView(choice, choiceParams);
+        }
+        DisplayMetrics metrics = getResources().getDisplayMetrics();
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
+                Math.min(dp(500), metrics.widthPixels - dp(72)),
+                ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER);
+        holder[0] = showPanelOverlay(shell, params, null);
     }
 
     private void captureUpperScreen() {
@@ -2578,6 +2907,64 @@ public class AssistantActivity extends Activity {
         return profileItem;
     }
 
+    /**
+     * Resolves an Item rendered from an equivalent Grid draft back to the saved Profile Item.
+     * Component editors may persist their own nested data, but never commit draft Grid geometry.
+     */
+    private WidgetLayout.Item resolveProfileWidgetItem(
+            WidgetLayout.Item requestedItem, String expectedType) {
+        if (selectedProfile == null || requestedItem == null
+                || !expectedType.equals(requestedItem.type)
+                || hasUnsavedWidgetLayout()) {
+            return null;
+        }
+        WidgetLayout profileLayout = selectedProfile.safeWidgetLayout();
+        if (profileLayout.items.contains(requestedItem)) {
+            return requestedItem;
+        }
+        if (draftWidgetLayout == null || !draftWidgetLayout.items.contains(requestedItem)) {
+            return null;
+        }
+        int itemIndex = draftWidgetLayout.items.indexOf(requestedItem);
+        if (itemIndex < 0 || itemIndex >= profileLayout.items.size()) {
+            return null;
+        }
+        WidgetLayout.Item candidate = profileLayout.items.get(itemIndex);
+        return expectedType.equals(candidate.type) ? candidate : null;
+    }
+
+    private WidgetLayout.Item equivalentDraftWidgetItem(
+            WidgetLayout.Item profileItem, String expectedType) {
+        if (selectedProfile == null || profileItem == null || draftWidgetLayout == null) {
+            return null;
+        }
+        WidgetLayout profileLayout = selectedProfile.safeWidgetLayout();
+        int itemIndex = profileLayout.items.indexOf(profileItem);
+        if (itemIndex < 0 || itemIndex >= draftWidgetLayout.items.size()) {
+            return null;
+        }
+        WidgetLayout.Item candidate = draftWidgetLayout.items.get(itemIndex);
+        return expectedType.equals(candidate.type) ? candidate : null;
+    }
+
+    private void mirrorQuickActionsIntoEquivalentDraft(
+            WidgetLayout.Item profileItem, QuickActionsConfig saved) {
+        WidgetLayout.Item draftItem = equivalentDraftWidgetItem(
+                profileItem, WidgetLayout.TYPE_QUICK_ACTIONS);
+        if (draftItem != null) {
+            draftItem.quickActions = saved.copy();
+        }
+    }
+
+    private void mirrorKeyboardPadIntoEquivalentDraft(
+            WidgetLayout.Item profileItem, KeyboardPad saved) {
+        WidgetLayout.Item draftItem = equivalentDraftWidgetItem(
+                profileItem, WidgetLayout.TYPE_KEYBOARD_PAD);
+        if (draftItem != null) {
+            draftItem.keyboardPad = saved.copy();
+        }
+    }
+
     private void cancelPendingCanvasImport() {
         if (pendingCanvasImportRequest != null) {
             pendingCanvasImportRequest.cancel();
@@ -2691,6 +3078,7 @@ public class AssistantActivity extends Activity {
                 || magnifierRegionCaptureInProgress
                 || canvasOverlayActive
                 || keyboardPadEditorActive
+                || fullVirtualKeyboardView != null
                 || pendingCanvasImportProfile != null
                 || pendingCanvasImportRequest != null
                 || (widgetGridDialog != null && widgetGridDialog.isShowing())) {
@@ -7892,6 +8280,7 @@ public class AssistantActivity extends Activity {
         if (releaseTextInputFocusThen(this::rebuildContent)) {
             return;
         }
+        dismissFullVirtualKeyboard(false);
         flushGuideReadingPosition();
         cancelSettingsTransition();
         cancelContentTransitions();
@@ -8211,12 +8600,104 @@ public class AssistantActivity extends Activity {
         }
     }
 
+    private final class DelayedEditLongPressGesture implements Runnable {
+        private final View host;
+        private final Runnable editAction;
+        private final int touchSlop;
+        private float downX;
+        private float downY;
+        private boolean pending;
+        private boolean triggered;
+
+        DelayedEditLongPressGesture(View host, Runnable editAction) {
+            this.host = host;
+            this.editAction = editAction;
+            touchSlop = ViewConfiguration.get(host.getContext()).getScaledTouchSlop();
+        }
+
+        boolean onTouchEvent(MotionEvent event) {
+            int action = event.getActionMasked();
+            if (action == MotionEvent.ACTION_DOWN) {
+                cancelPending();
+                triggered = false;
+                downX = event.getX();
+                downY = event.getY();
+                pending = true;
+                host.postDelayed(this, QUICK_ACTION_EDIT_LONG_PRESS_TIMEOUT_MS);
+            } else if (action == MotionEvent.ACTION_POINTER_DOWN) {
+                cancelPending();
+            } else if (action == MotionEvent.ACTION_MOVE) {
+                if (event.getPointerCount() != 1
+                        || Math.abs(event.getX() - downX) > touchSlop
+                        || Math.abs(event.getY() - downY) > touchSlop) {
+                    cancelPending();
+                }
+            } else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+                boolean consume = triggered;
+                cancelPending();
+                triggered = false;
+                return consume;
+            }
+            return triggered;
+        }
+
+        @Override
+        public void run() {
+            if (!pending || !host.isAttachedToWindow() || !host.isShown() || !host.isEnabled()) {
+                cancelPending();
+                return;
+            }
+            pending = false;
+            triggered = true;
+            host.cancelLongPress();
+            host.setPressed(false);
+            host.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
+            editAction.run();
+        }
+
+        void detach() {
+            cancelPending();
+            triggered = false;
+        }
+
+        private void cancelPending() {
+            if (pending) {
+                host.removeCallbacks(this);
+                pending = false;
+            }
+        }
+    }
+
     private final class TrackedLinearLayout extends LinearLayout {
         private String component;
+        private DelayedEditLongPressGesture delayedEditGesture;
 
         TrackedLinearLayout(String value) {
             super(AssistantActivity.this);
             component = value;
+        }
+
+        void setDelayedEditAction(Runnable action) {
+            delayedEditGesture = action == null
+                    ? null : new DelayedEditLongPressGesture(this, action);
+            setLongClickable(false);
+            setClickable(action != null);
+        }
+
+        @Override
+        public boolean onTouchEvent(MotionEvent event) {
+            if (delayedEditGesture != null && delayedEditGesture.onTouchEvent(event)) {
+                return true;
+            }
+            return super.onTouchEvent(event);
+        }
+
+        @Override
+        protected void onDetachedFromWindow() {
+            if (delayedEditGesture != null) {
+                delayedEditGesture.detach();
+            }
+            super.onDetachedFromWindow();
         }
 
         @Override
@@ -8484,11 +8965,26 @@ public class AssistantActivity extends Activity {
         private int transientResult = RESULT_NONE;
         private float resultProgress;
         private ValueAnimator resultAnimator;
+        private DelayedEditLongPressGesture delayedEditGesture;
         private final Runnable beginResultExit = this::startResultExit;
         private final Runnable clearResult = this::clearTransientResult;
 
         QuickActionButtonView(Context context) {
             super(context);
+        }
+
+        void setDelayedEditAction(Runnable action) {
+            delayedEditGesture = action == null
+                    ? null : new DelayedEditLongPressGesture(this, action);
+            setLongClickable(false);
+        }
+
+        @Override
+        public boolean onTouchEvent(MotionEvent event) {
+            if (delayedEditGesture != null && delayedEditGesture.onTouchEvent(event)) {
+                return true;
+            }
+            return super.onTouchEvent(event);
         }
 
         void setActionIcon(int iconRes) {
@@ -8658,6 +9154,9 @@ public class AssistantActivity extends Activity {
 
         @Override
         protected void onDetachedFromWindow() {
+            if (delayedEditGesture != null) {
+                delayedEditGesture.detach();
+            }
             removeCallbacks(clearResult);
             removeCallbacks(beginResultExit);
             cancelResultAnimation();
@@ -8876,6 +9375,12 @@ public class AssistantActivity extends Activity {
             showErrorAction(getString(R.string.keyboard_pad_save_layout_first));
             return;
         }
+        WidgetLayout.Item profileItem = resolveProfileWidgetItem(
+                item, WidgetLayout.TYPE_KEYBOARD_PAD);
+        if (profileItem == null) {
+            showErrorAction(getString(R.string.keyboard_pad_save_layout_first));
+            return;
+        }
         if (keyboardPadEditorActive) {
             return;
         }
@@ -8977,6 +9482,7 @@ public class AssistantActivity extends Activity {
                     @Override public void onPress(KeyboardPad.Key key) {}
                     @Override public void onHoldStart(Object token, KeyboardPad.Key key) {}
                     @Override public void onHoldEnd(Object token) {}
+                    @Override public void onHeimdallAction(String actionId) {}
                     @Override public void onEditRequested() {}
 
                     @Override
@@ -9021,7 +9527,10 @@ public class AssistantActivity extends Activity {
             if (holder[0] != null) dismissPanelAnimated(holder[0]);
         }));
         Button save = editorButton(getString(R.string.common_save), () -> {
-            item.keyboardPad = draft.copy();
+            KeyboardPad saved = draft.copy();
+            profileItem.keyboardPad = saved.copy();
+            item.keyboardPad = saved.copy();
+            mirrorKeyboardPadIntoEquivalentDraft(profileItem, saved);
             ProfileStore.saveProfiles(this, profiles);
             showAction(getString(R.string.keyboard_pad_saved));
             if (holder[0] != null) {
@@ -9053,6 +9562,8 @@ public class AssistantActivity extends Activity {
                 key.binding.alt, key.binding.win};
         String[] draftBehavior = {KeyboardPad.normalizeBehavior(key.behavior)};
         String[] draftIconKey = {key.display.iconKey};
+        String[] draftActionType = {KeyboardPad.normalizeActionType(key.actionType)};
+        String[] draftHeimdallAction = {KeyboardPad.normalizeHeimdallAction(key.heimdallAction)};
         final PanelOverlay[] holder = new PanelOverlay[1];
 
         LinearLayout shell = new LinearLayout(this);
@@ -9084,6 +9595,45 @@ public class AssistantActivity extends Activity {
         body.setOrientation(LinearLayout.VERTICAL);
         body.setPadding(dp(2), dp(4), dp(2), dp(10));
         scroll.addView(body, new ScrollView.LayoutParams(-1, -2));
+
+        body.addView(text(getString(R.string.keyboard_pad_action_type),
+                HeimdallUi.TYPE_LABEL, MUTED, true),
+                new LinearLayout.LayoutParams(-1, dp(28)));
+        LinearLayout actionTypeRow = new LinearLayout(this);
+        actionTypeRow.setOrientation(LinearLayout.HORIZONTAL);
+        body.addView(actionTypeRow, new LinearLayout.LayoutParams(-1, dp(50)));
+        final Button[] actionTypeButtons = new Button[2];
+        Button keyboardBindingAction = editorButton(
+                getString(R.string.keyboard_pad_action_keyboard_binding), () -> {
+                    draftActionType[0] = KeyboardPad.ACTION_KEYBOARD_BINDING;
+                    draftHeimdallAction[0] = "";
+                    HeimdallUi.applyChoiceButton(this, actionTypeButtons[0], true);
+                    HeimdallUi.applyChoiceButton(this, actionTypeButtons[1], false);
+                });
+        actionTypeButtons[0] = keyboardBindingAction;
+        actionTypeRow.addView(keyboardBindingAction,
+                new LinearLayout.LayoutParams(0, -1, 1));
+        Button openFullKeyboardAction = editorButton(
+                getString(R.string.keypad_action_open_full_keyboard), () -> {
+                    draftActionType[0] = KeyboardPad.ACTION_HEIMDALL;
+                    draftHeimdallAction[0] =
+                            HeimdallActionCatalog.ACTION_OPEN_VIRTUAL_KEYBOARD;
+                    HeimdallUi.applyChoiceButton(this, actionTypeButtons[0], false);
+                    HeimdallUi.applyChoiceButton(this, actionTypeButtons[1], true);
+                });
+        actionTypeButtons[1] = openFullKeyboardAction;
+        LinearLayout.LayoutParams internalActionParams =
+                new LinearLayout.LayoutParams(0, -1, 1);
+        internalActionParams.setMargins(dp(4), 0, 0, 0);
+        actionTypeRow.addView(openFullKeyboardAction, internalActionParams);
+        HeimdallUi.applyChoiceButton(this, keyboardBindingAction,
+                KeyboardPad.ACTION_KEYBOARD_BINDING.equals(draftActionType[0]));
+        HeimdallUi.applyChoiceButton(this, openFullKeyboardAction,
+                KeyboardPad.ACTION_HEIMDALL.equals(draftActionType[0]));
+        TextView actionTypeHelp = text(getString(R.string.keyboard_pad_action_help),
+                HeimdallUi.TYPE_META, MUTED, false);
+        actionTypeHelp.setPadding(dp(2), dp(2), dp(2), dp(4));
+        body.addView(actionTypeHelp, new LinearLayout.LayoutParams(-1, dp(42)));
 
         body.addView(text(getString(R.string.keyboard_pad_keyboard_key),
                 HeimdallUi.TYPE_LABEL, MUTED, true),
@@ -9196,6 +9746,9 @@ public class AssistantActivity extends Activity {
             key.display.label = labelInput.getText().toString().trim();
             key.display.iconKey = draftIconKey[0] == null ? "" : draftIconKey[0].trim();
             key.behavior = KeyboardPad.normalizeBehavior(draftBehavior[0]);
+            key.actionType = KeyboardPad.normalizeActionType(draftActionType[0]);
+            key.heimdallAction = KeyboardPad.normalizeHeimdallAction(
+                    draftHeimdallAction[0]);
             if (holder[0] != null) {
                 dismissPanelAnimated(holder[0], onSaved);
             } else if (onSaved != null) {
@@ -11324,6 +11877,7 @@ public class AssistantActivity extends Activity {
     private final class TouchPadView extends View {
         private static final int LINUX_BTN_LEFT = 272;
         private static final int LINUX_BTN_RIGHT = 273;
+        private static final long VIRTUAL_MOUSE_TAP_PULSE_MS = 32L;
         private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final RectF rect = new RectF();
         private final Path surfaceClip = new Path();
@@ -11363,6 +11917,8 @@ public class AssistantActivity extends Activity {
         private boolean virtualMouseTapCandidate;
         private boolean virtualMouseSecondTapCandidate;
         private boolean virtualMouseGestureLeftButtonDown;
+        private boolean virtualMouseTapPulseDown;
+        private VirtualMouseDispatcher virtualMouseTapPulseDispatcher;
         private long virtualMouseLastTapUpTime;
         private float virtualMouseLastTapX;
         private float virtualMouseLastTapY;
@@ -11401,6 +11957,8 @@ public class AssistantActivity extends Activity {
                 invalidate();
             }
         };
+        private final Runnable virtualMouseTapPulseUp =
+                this::finishVirtualMouseTapPulse;
 
         TouchPadView(Activity activity) {
             super(activity);
@@ -12671,7 +13229,7 @@ public class AssistantActivity extends Activity {
                     virtualMouseMotionPointerId = -1;
                 }
                 if (singleTap) {
-                    clickVirtualMouseButton(dispatcher, LINUX_BTN_LEFT);
+                    pulseVirtualMouseLeftButton(dispatcher);
                 }
                 if (action == MotionEvent.ACTION_UP) {
                     long tapUpTime = event.getEventTime();
@@ -12778,7 +13336,42 @@ public class AssistantActivity extends Activity {
             dispatcher.button(linuxButtonCode, false);
         }
 
+        private void pulseVirtualMouseLeftButton(VirtualMouseDispatcher dispatcher) {
+            uiHandler.removeCallbacks(virtualMouseTapPulseUp);
+            if (!virtualMouseTapPulseDown
+                    || virtualMouseTapPulseDispatcher != dispatcher) {
+                dispatcher.button(LINUX_BTN_LEFT, true);
+            }
+            virtualMouseTapPulseDown = true;
+            virtualMouseTapPulseDispatcher = dispatcher;
+            uiHandler.postDelayed(virtualMouseTapPulseUp, VIRTUAL_MOUSE_TAP_PULSE_MS);
+        }
+
+        private void finishVirtualMouseTapPulse() {
+            if (!virtualMouseTapPulseDown) {
+                return;
+            }
+            VirtualMouseDispatcher dispatcher = virtualMouseTapPulseDispatcher;
+            virtualMouseTapPulseDown = false;
+            virtualMouseTapPulseDispatcher = null;
+            if (dispatcher != null
+                    && virtualMouseButton != LINUX_BTN_LEFT
+                    && !virtualMouseGestureLeftButtonDown) {
+                dispatcher.button(LINUX_BTN_LEFT, false);
+            }
+        }
+
+        private void cancelVirtualMouseTapPulse() {
+            uiHandler.removeCallbacks(virtualMouseTapPulseUp);
+            if (virtualMouseTapPulseDown && virtualMouseTapPulseDispatcher != null) {
+                virtualMouseTapPulseDispatcher.button(LINUX_BTN_LEFT, false);
+            }
+            virtualMouseTapPulseDown = false;
+            virtualMouseTapPulseDispatcher = null;
+        }
+
         private void releaseAllVirtualMouseButtons(VirtualMouseDispatcher dispatcher) {
+            cancelVirtualMouseTapPulse();
             dispatcher.button(LINUX_BTN_LEFT, false);
             dispatcher.button(LINUX_BTN_RIGHT, false);
             virtualMouseButton = 0;

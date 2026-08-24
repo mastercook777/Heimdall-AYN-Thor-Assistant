@@ -23,6 +23,7 @@ public final class VirtualKeyboardDispatcher {
             });
 
     public interface Listener {
+        void onReady();
         void onUnavailable();
     }
 
@@ -34,6 +35,8 @@ public final class VirtualKeyboardDispatcher {
     private boolean drainQueued;
     private boolean closed;
     private final AtomicBoolean errorReported = new AtomicBoolean();
+    private final AtomicBoolean readyReported = new AtomicBoolean();
+    private final Runnable serviceLossListener = this::reportUnavailable;
 
     public VirtualKeyboardDispatcher(Context context, Listener listener) {
         this.context = context.getApplicationContext();
@@ -41,6 +44,7 @@ public final class VirtualKeyboardDispatcher {
     }
 
     public void start() {
+        ShizukuNativeController.addServiceLossListener(serviceLossListener);
         submit(() -> handleResult(ShizukuNativeController.openVirtualKeyboard(context)));
     }
 
@@ -60,6 +64,16 @@ public final class VirtualKeyboardDispatcher {
     /** Sends all-up while preserving the enumerated device across internal page changes. */
     public void park() {
         shutdown(false);
+    }
+
+    /** Sends all-up without closing this dispatcher or destroying the uinput device. */
+    public void releaseAll() {
+        synchronized (lock) {
+            if (closed) return;
+            transitions.clear();
+        }
+        DEVICE_EXECUTOR.execute(() -> handleResult(
+                ShizukuNativeController.releaseVirtualKeyboardKeys(context)));
     }
 
     /** Sends all-up and destroys the device when keyboard mapping is no longer in use. */
@@ -89,6 +103,7 @@ public final class VirtualKeyboardDispatcher {
             closed = true;
             transitions.clear();
         }
+        ShizukuNativeController.removeServiceLossListener(serviceLossListener);
         DEVICE_EXECUTOR.execute(() -> releaseKeysAndMaybeDestroy(destroyDevice));
     }
 
@@ -136,6 +151,12 @@ public final class VirtualKeyboardDispatcher {
         if (operationSucceeded(result)) {
             DEVICE_MAY_BE_OPEN.set(true);
             errorReported.set(false);
+            synchronized (lock) {
+                if (closed) return;
+            }
+            if (readyReported.compareAndSet(false, true)) {
+                mainHandler.post(listener::onReady);
+            }
             return;
         }
         DEVICE_MAY_BE_OPEN.set(false);
@@ -143,6 +164,7 @@ public final class VirtualKeyboardDispatcher {
     }
 
     private void reportUnavailable() {
+        readyReported.set(false);
         if (!errorReported.compareAndSet(false, true)) return;
         mainHandler.post(listener::onUnavailable);
     }

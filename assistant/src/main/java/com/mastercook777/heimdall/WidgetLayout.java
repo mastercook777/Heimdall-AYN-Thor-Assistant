@@ -162,6 +162,9 @@ public final class WidgetLayout {
             if (TYPE_KEYBOARD_PAD.equals(item.type)) {
                 item.safeKeyboardPad().sanitize();
             }
+            if (TYPE_QUICK_ACTIONS.equals(item.type)) {
+                item.safeQuickActions().sanitize();
+            }
             if (TYPE_MAGNIFIER.equals(item.type)) {
                 item.magnifierLeft = clamp(item.magnifierLeft, 0f, 0.98f);
                 item.magnifierTop = clamp(item.magnifierTop, 0f, 0.98f);
@@ -260,6 +263,7 @@ public final class WidgetLayout {
         public boolean macroIconOnly = false;
         public boolean hasMacroConfig = true;
         public KeyboardPad keyboardPad = KeyboardPad.defaultPad();
+        public QuickActionsConfig quickActions = QuickActionsConfig.newModuleDefault();
         public float magnifierLeft = 0.25f;
         public float magnifierTop = 0.25f;
         public float magnifierRight = 0.75f;
@@ -289,6 +293,7 @@ public final class WidgetLayout {
             item.macroIconOnly = macroIconOnly;
             item.hasMacroConfig = hasMacroConfig;
             item.keyboardPad = safeKeyboardPad().copy();
+            item.quickActions = safeQuickActions().copy();
             item.magnifierLeft = magnifierLeft;
             item.magnifierTop = magnifierTop;
             item.magnifierRight = magnifierRight;
@@ -320,6 +325,9 @@ public final class WidgetLayout {
             }
             if (TYPE_KEYBOARD_PAD.equals(type)) {
                 object.put("keyboardPad", safeKeyboardPad().toJson());
+            }
+            if (TYPE_QUICK_ACTIONS.equals(type)) {
+                object.put("quickActions", safeQuickActions().toJson());
             }
             if (TYPE_MAGNIFIER.equals(type)) {
                 object.put("magnifierLeft", magnifierLeft);
@@ -359,6 +367,7 @@ public final class WidgetLayout {
                     || object.has("macroRightHandPriority")
                     || object.has("macroIconOnly");
             item.keyboardPad = KeyboardPad.fromJson(object.optJSONObject("keyboardPad"));
+            item.quickActions = QuickActionsConfig.fromJson(object.optJSONObject("quickActions"));
             item.magnifierLeft = (float) object.optDouble("magnifierLeft", 0.25d);
             item.magnifierTop = (float) object.optDouble("magnifierTop", 0.25d);
             item.magnifierRight = (float) object.optDouble("magnifierRight", 0.75d);
@@ -380,6 +389,14 @@ public final class WidgetLayout {
             }
             keyboardPad.sanitize();
             return keyboardPad;
+        }
+
+        public QuickActionsConfig safeQuickActions() {
+            if (quickActions == null) {
+                quickActions = QuickActionsConfig.legacyDefault();
+            }
+            quickActions.sanitize();
+            return quickActions;
         }
     }
 }

@@ -30,6 +30,7 @@ final class KeyboardPadView extends ViewGroup {
         void onPress(KeyboardPad.Key key);
         void onHoldStart(Object token, KeyboardPad.Key key);
         void onHoldEnd(Object token);
+        void onHeimdallAction(String actionId);
         void onEditRequested();
         void onKeyEditRequested(KeyboardPad.Key key);
         void onInteractionBlocked();
@@ -210,7 +211,9 @@ final class KeyboardPadView extends ViewGroup {
             this.key = key;
             setClickable(true);
             setFocusable(true);
-            setContentDescription(KeyboardKeyCatalog.bindingSummary(key.binding));
+            setContentDescription(key.isHeimdallAction()
+                    ? context.getString(R.string.keypad_action_open_full_keyboard)
+                    : KeyboardKeyCatalog.bindingSummary(key.binding));
             loadIcon();
             applySurface(false);
         }
@@ -227,7 +230,9 @@ final class KeyboardPadView extends ViewGroup {
                 if (editMode) {
                     return true;
                 }
-                if (key.isWhileHeld()) {
+                if (key.isHeimdallAction()) {
+                    // In-app actions activate on a completed tap and never emit EV_KEY.
+                } else if (key.isWhileHeld()) {
                     heldInput = true;
                     listener.onHoldStart(this, key);
                 } else {
@@ -246,11 +251,16 @@ final class KeyboardPadView extends ViewGroup {
             }
             if (action == MotionEvent.ACTION_UP) {
                 boolean activateEditor = editMode && pressedVisual && interactionEnabled;
+                boolean activateHeimdallAction = !editMode && key.isHeimdallAction()
+                        && pressedVisual && interactionEnabled;
                 releaseHeldInput();
                 setPressedVisual(false);
                 if (activateEditor) {
                     performClick();
                     listener.onKeyEditRequested(key);
+                } else if (activateHeimdallAction) {
+                    performClick();
+                    listener.onHeimdallAction(key.heimdallAction);
                 }
                 return true;
             }
@@ -339,8 +349,11 @@ final class KeyboardPadView extends ViewGroup {
                 canvas.drawLine(dp(7), height - dp(3), width - dp(7), height - dp(3), reliefPaint);
             }
             String customLabel = key.display.label;
+            String fallbackLabel = key.isHeimdallAction()
+                    ? getContext().getString(R.string.keypad_action_open_full_keyboard_short)
+                    : KeyboardKeyCatalog.bindingSummary(key.binding);
             String label = customLabel.isEmpty() && (key.display.isEmpty() || icon == null)
-                    ? KeyboardKeyCatalog.bindingSummary(key.binding) : customLabel;
+                    ? fallbackLabel : customLabel;
             int textColor = HeimdallUi.textColor(getContext());
             if (icon != null) {
                 int iconSize = Math.max(dp(16), Math.min(Math.min(width, height) / 2, dp(34)));

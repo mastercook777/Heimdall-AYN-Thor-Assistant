@@ -13,6 +13,8 @@ public final class KeyboardPad {
     public static final String BEHAVIOR_WHILE_HELD = "while_held";
     public static final String LAYOUT_HORIZONTAL = "horizontal";
     public static final String LAYOUT_VERTICAL = "vertical";
+    public static final String ACTION_KEYBOARD_BINDING = "keyboard_binding";
+    public static final String ACTION_HEIMDALL = "heimdall_action";
 
     public static final int MIN_KEY_COUNT = 1;
     public static final int MAX_KEY_COUNT = 12;
@@ -162,6 +164,7 @@ public final class KeyboardPad {
             Key key = keys.get(index);
             Geometry keyGeometry = key.geometry;
             if (key.binding.linuxKeyCode != codes[index]
+                    || !ACTION_KEYBOARD_BINDING.equals(normalizeActionType(key.actionType))
                     || key.binding.ctrl || key.binding.shift
                     || key.binding.alt || key.binding.win
                     || !key.display.isEmpty()
@@ -195,6 +198,8 @@ public final class KeyboardPad {
         public Display display = new Display();
         public Geometry geometry = new Geometry();
         public String behavior = BEHAVIOR_WHILE_HELD;
+        public String actionType = ACTION_KEYBOARD_BINDING;
+        public String heimdallAction = "";
 
         public Key copy() {
             Key key = new Key();
@@ -202,6 +207,8 @@ public final class KeyboardPad {
             key.display = display.copy();
             key.geometry = geometry.copy();
             key.behavior = normalizeBehavior(behavior);
+            key.actionType = normalizeActionType(actionType);
+            key.heimdallAction = normalizeHeimdallAction(heimdallAction);
             return key;
         }
 
@@ -211,6 +218,10 @@ public final class KeyboardPad {
             object.put("display", display.toJson());
             object.put("geometry", geometry.toJson());
             object.put("behavior", normalizeBehavior(behavior));
+            object.put("actionType", normalizeActionType(actionType));
+            if (ACTION_HEIMDALL.equals(normalizeActionType(actionType))) {
+                object.put("heimdallAction", normalizeHeimdallAction(heimdallAction));
+            }
             return object;
         }
 
@@ -221,6 +232,13 @@ public final class KeyboardPad {
             key.geometry = Geometry.fromJson(object.optJSONObject("geometry"));
             key.behavior = normalizeBehavior(
                     object.optString("behavior", BEHAVIOR_WHILE_HELD));
+            key.actionType = normalizeActionType(
+                    object.optString("actionType", ACTION_KEYBOARD_BINDING));
+            key.heimdallAction = normalizeHeimdallAction(
+                    object.optString("heimdallAction", ""));
+            if (ACTION_HEIMDALL.equals(key.actionType) && key.heimdallAction.isEmpty()) {
+                key.actionType = ACTION_KEYBOARD_BINDING;
+            }
             return key;
         }
 
@@ -232,10 +250,20 @@ public final class KeyboardPad {
             geometry.w = clamp(geometry.w, 1, columns - geometry.x);
             geometry.h = clamp(geometry.h, 1, rows - geometry.y);
             behavior = normalizeBehavior(behavior);
+            actionType = normalizeActionType(actionType);
+            heimdallAction = normalizeHeimdallAction(heimdallAction);
+            if (ACTION_HEIMDALL.equals(actionType) && heimdallAction.isEmpty()) {
+                actionType = ACTION_KEYBOARD_BINDING;
+            }
         }
 
         public boolean isWhileHeld() {
             return BEHAVIOR_WHILE_HELD.equals(normalizeBehavior(behavior));
+        }
+
+        public boolean isHeimdallAction() {
+            return ACTION_HEIMDALL.equals(normalizeActionType(actionType))
+                    && !normalizeHeimdallAction(heimdallAction).isEmpty();
         }
     }
 
@@ -368,6 +396,15 @@ public final class KeyboardPad {
 
     public static String normalizeBehavior(String value) {
         return BEHAVIOR_PRESS.equals(value) ? BEHAVIOR_PRESS : BEHAVIOR_WHILE_HELD;
+    }
+
+    public static String normalizeActionType(String value) {
+        return ACTION_HEIMDALL.equals(value) ? ACTION_HEIMDALL : ACTION_KEYBOARD_BINDING;
+    }
+
+    public static String normalizeHeimdallAction(String value) {
+        return HeimdallActionCatalog.ACTION_OPEN_VIRTUAL_KEYBOARD.equals(value)
+                ? HeimdallActionCatalog.ACTION_OPEN_VIRTUAL_KEYBOARD : "";
     }
 
     public static String normalizeLayoutMode(String value) {

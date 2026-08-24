@@ -46,6 +46,7 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
             testControllerSequenceSafetyPolicy();
             testVirtualKeyboardTransportContract();
             testKeyboardPadModelContract();
+            testQuickActionsModelContract();
             testCanvasRuntimeDecodePolicy();
             testProfileIconDecodePolicy();
             testUserMacroIconDeletionContract();
@@ -95,6 +96,10 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
         key.geometry.w = 2;
         key.geometry.h = 1;
         item.keyboardPad = pad;
+        KeyboardPad.Key actionKey = pad.keys.get(1);
+        actionKey.actionType = KeyboardPad.ACTION_HEIMDALL;
+        actionKey.heimdallAction = HeimdallActionCatalog.ACTION_OPEN_VIRTUAL_KEYBOARD;
+        actionKey.display.label = "Keyboard";
         layout.items.add(item);
 
         WidgetLayout restored = WidgetLayout.fromJson(layout.toJson());
@@ -109,6 +114,11 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
         assertEquals(2, restoredKey.geometry.x);
         assertEquals(1, restoredKey.geometry.y);
         assertEquals(2, restoredKey.geometry.w);
+        KeyboardPad.Key restoredActionKey = restoredItem.safeKeyboardPad().keys.get(1);
+        assertEquals(KeyboardPad.ACTION_HEIMDALL, restoredActionKey.actionType);
+        assertEquals(HeimdallActionCatalog.ACTION_OPEN_VIRTUAL_KEYBOARD,
+                restoredActionKey.heimdallAction);
+        assertTrue(restoredActionKey.isHeimdallAction());
 
         JSONObject legacyPadItem = new JSONObject();
         legacyPadItem.put("type", WidgetLayout.TYPE_KEYBOARD_PAD);
@@ -122,6 +132,8 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
                 restoredLegacyItem.safeKeyboardPad().layoutMode);
         assertEquals(KeyboardPad.BEHAVIOR_WHILE_HELD,
                 restoredLegacyItem.safeKeyboardPad().keys.get(0).behavior);
+        assertEquals(KeyboardPad.ACTION_KEYBOARD_BINDING,
+                restoredLegacyItem.safeKeyboardPad().keys.get(0).actionType);
 
         KeyboardPad compact = KeyboardPad.defaultPad();
         compact.resizeKeyCount(3);
@@ -152,6 +164,41 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
         restoredVertical.setLayoutMode(KeyboardPad.LAYOUT_HORIZONTAL);
         assertEquals(4, restoredVertical.columns);
         assertEquals(3, restoredVertical.rows);
+    }
+
+    public void testQuickActionsModelContract() throws Exception {
+        JSONObject legacyItemJson = new JSONObject();
+        legacyItemJson.put("type", WidgetLayout.TYPE_QUICK_ACTIONS);
+        legacyItemJson.put("x", 0);
+        legacyItemJson.put("y", 0);
+        legacyItemJson.put("w", 3);
+        legacyItemJson.put("h", 3);
+        WidgetLayout.Item legacyItem = WidgetLayout.Item.fromJson(legacyItemJson);
+        QuickActionsConfig legacy = legacyItem.safeQuickActions();
+        assertEquals(2, legacy.actions.size());
+        assertEquals(HeimdallActionCatalog.ACTION_SCREENSHOT, legacy.actionAt(0));
+        assertEquals(HeimdallActionCatalog.ACTION_SCREEN_RECORDING, legacy.actionAt(1));
+        assertTrue(legacy.mediaVolume);
+
+        WidgetLayout.Item newItem = new WidgetLayout.Item(
+                WidgetLayout.TYPE_QUICK_ACTIONS, 0, 0, 3, 3);
+        assertEquals(HeimdallActionCatalog.ACTION_OPEN_VIRTUAL_KEYBOARD,
+                newItem.safeQuickActions().actionAt(2));
+        newItem.safeQuickActions().setActionAt(0,
+                HeimdallActionCatalog.ACTION_OPEN_VIRTUAL_KEYBOARD);
+        newItem.safeQuickActions().setActionAt(1,
+                HeimdallActionCatalog.ACTION_SCREENSHOT);
+        newItem.safeQuickActions().setActionAt(2, HeimdallActionCatalog.ACTION_NONE);
+        newItem.safeQuickActions().mediaVolume = false;
+        WidgetLayout.Item restored = WidgetLayout.Item.fromJson(newItem.toJson());
+        assertEquals(2, restored.safeQuickActions().actions.size());
+        assertEquals(HeimdallActionCatalog.ACTION_OPEN_VIRTUAL_KEYBOARD,
+                restored.safeQuickActions().actionAt(0));
+        assertEquals(HeimdallActionCatalog.ACTION_SCREENSHOT,
+                restored.safeQuickActions().actionAt(1));
+        assertFalse(restored.safeQuickActions().mediaVolume);
+        assertEquals(HeimdallActionCatalog.ACTION_NONE,
+                HeimdallActionCatalog.normalizeQuickAction("arbitrary_intent"));
     }
 
     public void testProfileIconDecodePolicy() {

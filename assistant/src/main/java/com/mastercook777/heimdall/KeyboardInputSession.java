@@ -13,6 +13,7 @@ import java.util.Map;
 /** Owns one Activity's key state and reference-counts shared chord modifiers. */
 final class KeyboardInputSession {
     interface Listener {
+        void onReady();
         void onUnavailable();
     }
 
@@ -25,6 +26,10 @@ final class KeyboardInputSession {
     KeyboardInputSession(Context context, Listener listener) {
         this.context = context.getApplicationContext();
         this.listener = listener;
+    }
+
+    void prepare() {
+        ensureDispatcher();
     }
 
     void press(KeyboardPad.Binding binding) {
@@ -48,6 +53,16 @@ final class KeyboardInputSession {
         }
     }
 
+    void holdKey(Object token, int linuxKeyCode) {
+        if (token == null || activeHolds.containsKey(token)
+                || !VirtualKeyboardDispatcher.isSupportedKeyCode(linuxKeyCode)) {
+            return;
+        }
+        List<Integer> codes = Collections.singletonList(linuxKeyCode);
+        activeHolds.put(token, codes);
+        retainCode(linuxKeyCode);
+    }
+
     void release(Object token) {
         List<Integer> codes = activeHolds.remove(token);
         if (codes == null) {
@@ -55,6 +70,14 @@ final class KeyboardInputSession {
         }
         for (int i = codes.size() - 1; i >= 0; i--) {
             releaseCode(codes.get(i));
+        }
+    }
+
+    void releaseAll() {
+        pressedCodeCounts.clear();
+        activeHolds.clear();
+        if (dispatcher != null) {
+            dispatcher.releaseAll();
         }
     }
 
@@ -105,7 +128,18 @@ final class KeyboardInputSession {
 
     private VirtualKeyboardDispatcher ensureDispatcher() {
         if (dispatcher == null) {
-            dispatcher = new VirtualKeyboardDispatcher(context, this::handleUnavailable);
+            dispatcher = new VirtualKeyboardDispatcher(context,
+                    new VirtualKeyboardDispatcher.Listener() {
+                        @Override
+                        public void onReady() {
+                            listener.onReady();
+                        }
+
+                        @Override
+                        public void onUnavailable() {
+                            handleUnavailable();
+                        }
+                    });
             dispatcher.start();
         }
         return dispatcher;

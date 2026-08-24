@@ -13,6 +13,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.CopyOnWriteArraySet;
 
 import rikka.shizuku.Shizuku;
 
@@ -32,6 +33,8 @@ public final class ShizukuNativeController {
     private static boolean binding;
     private static CountDownLatch bindLatch;
     private static int bindGeneration;
+    private static final CopyOnWriteArraySet<Runnable> SERVICE_LOSS_LISTENERS =
+            new CopyOnWriteArraySet<>();
 
     private static final IBinder.DeathRecipient SERVICE_DEATH_RECIPIENT =
             ShizukuNativeController::clearService;
@@ -87,6 +90,14 @@ public final class ShizukuNativeController {
 
     public static boolean isReady() {
         return isPermissionGranted();
+    }
+
+    static void addServiceLossListener(Runnable listener) {
+        if (listener != null) SERVICE_LOSS_LISTENERS.add(listener);
+    }
+
+    static void removeServiceLossListener(Runnable listener) {
+        if (listener != null) SERVICE_LOSS_LISTENERS.remove(listener);
     }
 
     public static boolean isServiceBound() {
@@ -510,12 +521,19 @@ public final class ShizukuNativeController {
     }
 
     private static void clearService() {
+        boolean notify;
         synchronized (LOCK) {
+            notify = service != null;
             unlinkDeathRecipientLocked(service);
             service = null;
             binding = false;
             bindGeneration++;
             releaseBindLatchLocked();
+        }
+        if (notify) {
+            for (Runnable listener : SERVICE_LOSS_LISTENERS) {
+                AssistantMainHandler.post(listener);
+            }
         }
     }
 
