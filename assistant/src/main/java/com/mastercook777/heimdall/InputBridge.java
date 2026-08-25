@@ -10,6 +10,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class InputBridge {
     public interface Callback {
@@ -21,6 +22,18 @@ public final class InputBridge {
 
         default void onGestureCancelled() {
         }
+
+        default void onMacroFinished(boolean cancelled) {
+        }
+    }
+
+    public enum MacroDispatchResult {
+        STARTED,
+        CANCEL_REQUESTED,
+        CANCEL_PENDING,
+        IGNORED_REPEAT,
+        BUSY,
+        REJECTED
     }
 
     public static final class BackendOption {
@@ -57,6 +70,8 @@ public final class InputBridge {
                 thread.setDaemon(true);
                 return thread;
             });
+    private static final MacroDispatchGate<InputBackend> MACRO_DISPATCH_GATE =
+            new MacroDispatchGate<>();
 
     private InputBridge() {
     }
@@ -122,25 +137,81 @@ public final class InputBridge {
         activeBackend(context).openSettings(context);
     }
 
-    public static void dispatch(Context context, Macro macro, Callback callback) {
+    public static MacroDispatchResult dispatch(Context context, Macro macro, Callback callback) {
         if (!controllerMacroAllowed(context, macro, callback)) {
-            return;
+            return MacroDispatchResult.REJECTED;
         }
-        activeBackend(context).dispatchMacro(context, macro, callback);
+        return dispatchMacro(context, macro, activeBackend(context), false,
+                false, callback);
     }
 
-    public static void dispatch(Context context, Macro macro,
+    public static MacroDispatchResult dispatch(Context context, Macro macro,
             boolean enhancedTouchMode, boolean protectThorMapping,
             Callback callback) {
         if (!controllerMacroAllowed(context, macro, callback)) {
-            return;
+            return MacroDispatchResult.REJECTED;
         }
         if (enhancedTouchMode) {
-            SHIZUKU_BACKEND.dispatchMappedTouchMacro(context, macro,
+            return dispatchMacro(context, macro, SHIZUKU_BACKEND, true,
                     !protectThorMapping, callback);
-            return;
         }
-        activeBackend(context).dispatchMacro(context, macro, callback);
+        return dispatchMacro(context, macro, activeBackend(context), false,
+                false, callback);
+    }
+
+    private static MacroDispatchResult dispatchMacro(Context context, Macro macro,
+            InputBackend backend, boolean mappedTouch, boolean allowControllerSteps,
+            Callback callback) {
+        if (context == null || macro == null || backend == null || callback == null) {
+            if (context != null && callback != null) {
+                callback.onError(context.getString(R.string.macro_status_no_steps,
+                        context.getString(R.string.common_macro_fallback)));
+            }
+            return MacroDispatchResult.REJECTED;
+        }
+
+        MacroDispatchGate.Result<InputBackend> gate = MACRO_DISPATCH_GATE.onTap(
+                macro, macro.hasCancellableControllerHold(), backend);
+        if (gate.decision == MacroDispatchGate.Decision.BUSY) {
+            return MacroDispatchResult.BUSY;
+        }
+        if (gate.decision == MacroDispatchGate.Decision.IGNORE_REPEAT) {
+            return MacroDispatchResult.IGNORED_REPEAT;
+        }
+        if (gate.decision == MacroDispatchGate.Decision.CANCEL_PENDING) {
+            return MacroDispatchResult.CANCEL_PENDING;
+        }
+        if (gate.decision == MacroDispatchGate.Decision.CANCEL) {
+            try {
+                gate.payload.cancelMacro(context.getApplicationContext());
+                return MacroDispatchResult.CANCEL_REQUESTED;
+            } catch (Throwable ignored) {
+                callback.onError(context.getString(R.string.macro_status_dispatch_failed));
+                return MacroDispatchResult.REJECTED;
+            }
+        }
+
+        GuardedMacroCallback guarded = new GuardedMacroCallback(gate.id, callback);
+        try {
+            if (mappedTouch) {
+                SHIZUKU_BACKEND.dispatchMappedTouchMacro(context, macro,
+                        allowControllerSteps, guarded);
+            } else {
+                backend.dispatchMacro(context, macro, guarded);
+            }
+        } catch (Throwable ignored) {
+            guarded.onError(context.getString(R.string.macro_status_dispatch_failed));
+        }
+        return guarded.isFinished()
+                ? MacroDispatchResult.REJECTED : MacroDispatchResult.STARTED;
+    }
+
+    static boolean hasActiveMacroDispatch() {
+        return MACRO_DISPATCH_GATE.hasActive();
+    }
+
+    private static void finishMacroDispatch(long id) {
+        MACRO_DISPATCH_GATE.finish(id);
     }
 
     public static boolean dispatchTouchMove(Context context, int displayId, int width, int height,
@@ -251,8 +322,12 @@ public final class InputBridge {
             return ShizukuNativeController.replayGamepadStep(
                     context, NativeGamepadPath.require(), sequence, 90);
         }
-        return UinputNativeProbe.emitEvdevCombo(
-                NativeGamepadPath.requireWritable(), sequence, 90);
+        String path = NativeGamepadPath.requireWritable();
+        if (GamepadSequenceComposer.isComposedSequence(sequence)) {
+            return ShizukuGamepadSequenceReplay.replay(sequence,
+                    frame -> UinputNativeProbe.emitEvdevCombo(path, frame, 90));
+        }
+        return UinputNativeProbe.emitEvdevCombo(path, sequence, 90);
     }
 
     private static boolean controllerMacroAllowed(Context context, Macro macro,
@@ -301,6 +376,54 @@ public final class InputBridge {
             return SHIZUKU_BACKEND;
         }
         return ACCESSIBILITY_BACKEND;
+    }
+
+    private static final class GuardedMacroCallback implements Callback {
+        private final long id;
+        private final Callback delegate;
+        private final AtomicBoolean finished = new AtomicBoolean();
+
+        GuardedMacroCallback(long id, Callback delegate) {
+            this.id = id;
+            this.delegate = delegate;
+        }
+
+        boolean isFinished() {
+            return finished.get();
+        }
+
+        @Override
+        public void onStatus(String message) {
+            if (!finished.get()) {
+                delegate.onStatus(message);
+            }
+        }
+
+        @Override
+        public void onError(String message) {
+            if (!finished.compareAndSet(false, true)) {
+                return;
+            }
+            finishMacroDispatch(id);
+            delegate.onError(message);
+            delegate.onMacroFinished(false);
+        }
+
+        @Override
+        public void onGestureCancelled() {
+            if (!finished.get()) {
+                delegate.onGestureCancelled();
+            }
+        }
+
+        @Override
+        public void onMacroFinished(boolean cancelled) {
+            if (!finished.compareAndSet(false, true)) {
+                return;
+            }
+            finishMacroDispatch(id);
+            delegate.onMacroFinished(cancelled);
+        }
     }
 
     private static BackendOption findOption(String backendId) {

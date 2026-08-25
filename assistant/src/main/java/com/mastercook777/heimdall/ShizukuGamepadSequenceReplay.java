@@ -1,7 +1,9 @@
 package com.mastercook777.heimdall;
 
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
 final class ShizukuGamepadSequenceReplay {
     interface EventEmitter {
@@ -20,6 +22,10 @@ final class ShizukuGamepadSequenceReplay {
             return "no sequence events";
         }
 
+        if (containsFrameMarkers(events)) {
+            return replayFramed(events, emitter);
+        }
+
         synchronized (REPLAY_LOCK) {
             long targetTimeNanos = System.nanoTime();
             int emittedCount = 0;
@@ -35,6 +41,84 @@ final class ShizukuGamepadSequenceReplay {
                 emittedCount++;
             }
             return "evdev sequence ok events=" + emittedCount;
+        }
+    }
+
+    private static String replayFramed(List<Event> events, EventEmitter emitter) {
+        synchronized (REPLAY_LOCK) {
+            long targetTimeNanos = System.nanoTime();
+            List<Event> frame = new ArrayList<>();
+            FramedState state = new FramedState();
+            int emittedCount = 0;
+            for (Event event : events) {
+                targetTimeNanos += event.delayMs * 1_000_000L;
+                frame.add(event);
+                if (event.type != GamepadSequenceComposer.EV_SYN) {
+                    continue;
+                }
+                if (!sleepUntil(targetTimeNanos)) {
+                    releaseFramedStateBestEffort(state, emitter);
+                    return "Physical controller replay failed: interrupted";
+                }
+                FramedState candidate = state.copy();
+                candidate.apply(frame);
+                String result = emitter.emit(asFrameSequence(frame));
+                if (!NativeGamepadPath.operationSucceeded(result)) {
+                    releaseFramedStateBestEffort(candidate, emitter);
+                    return result;
+                }
+                state = candidate;
+                emittedCount += frame.size();
+                frame.clear();
+            }
+            if (!frame.isEmpty()) {
+                if (!sleepUntil(targetTimeNanos)) {
+                    releaseFramedStateBestEffort(state, emitter);
+                    return "Physical controller replay failed: interrupted";
+                }
+                FramedState candidate = state.copy();
+                candidate.apply(frame);
+                String result = emitter.emit(asFrameSequence(frame));
+                if (!NativeGamepadPath.operationSucceeded(result)) {
+                    releaseFramedStateBestEffort(candidate, emitter);
+                    return result;
+                }
+                state = candidate;
+                emittedCount += frame.size();
+            }
+            return "evdev sequence ok events=" + emittedCount;
+        }
+    }
+
+    private static boolean containsFrameMarkers(List<Event> events) {
+        for (Event event : events) {
+            if (event.type == GamepadSequenceComposer.EV_SYN) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static String asFrameSequence(List<Event> frame) {
+        StringBuilder sequence = new StringBuilder("seq:");
+        for (Event event : frame) {
+            if (sequence.length() > 4) {
+                sequence.append(';');
+            }
+            sequence.append(event.type).append(',').append(event.code).append(',')
+                    .append(event.value).append(",0");
+        }
+        return sequence.toString();
+    }
+
+    private static void releaseFramedStateBestEffort(FramedState state,
+            EventEmitter emitter) {
+        String release = state.releaseSequence();
+        if (release != null) {
+            try {
+                emitter.emit(release);
+            } catch (Throwable ignored) {
+            }
         }
     }
 
@@ -95,6 +179,66 @@ final class ShizukuGamepadSequenceReplay {
 
         String asSingleEventSequence() {
             return "seq:" + type + "," + code + "," + value + ",0";
+        }
+    }
+
+    private static final class FramedState {
+        final Set<Integer> pressedKeys = new LinkedHashSet<>();
+        int hatX;
+        int hatY;
+
+        FramedState copy() {
+            FramedState copy = new FramedState();
+            copy.pressedKeys.addAll(pressedKeys);
+            copy.hatX = hatX;
+            copy.hatY = hatY;
+            return copy;
+        }
+
+        void apply(List<Event> events) {
+            for (Event event : events) {
+                if (event.type == GamepadSequenceComposer.EV_KEY) {
+                    if (event.value == 0) {
+                        pressedKeys.remove(event.code);
+                    } else {
+                        pressedKeys.add(event.code);
+                    }
+                } else if (event.type == GamepadSequenceComposer.EV_ABS) {
+                    if (event.code == GamepadSequenceComposer.ABS_HAT0X) {
+                        hatX = event.value;
+                    } else if (event.code == GamepadSequenceComposer.ABS_HAT0Y) {
+                        hatY = event.value;
+                    }
+                }
+            }
+        }
+
+        String releaseSequence() {
+            if (pressedKeys.isEmpty() && hatX == 0 && hatY == 0) {
+                return null;
+            }
+            StringBuilder sequence = new StringBuilder("seq:");
+            for (Integer code : pressedKeys) {
+                append(sequence, GamepadSequenceComposer.EV_KEY, code, 0);
+            }
+            if (hatX != 0) {
+                append(sequence, GamepadSequenceComposer.EV_ABS,
+                        GamepadSequenceComposer.ABS_HAT0X, 0);
+            }
+            if (hatY != 0) {
+                append(sequence, GamepadSequenceComposer.EV_ABS,
+                        GamepadSequenceComposer.ABS_HAT0Y, 0);
+            }
+            append(sequence, GamepadSequenceComposer.EV_SYN, 0, 0);
+            return sequence.toString();
+        }
+
+        private static void append(StringBuilder sequence, int type, int code, int value) {
+            if (sequence.length() > 4) {
+                sequence.append(';');
+            }
+            sequence.append(type).append(',').append(code).append(',')
+                    .append(value).append(",0");
         }
     }
 }

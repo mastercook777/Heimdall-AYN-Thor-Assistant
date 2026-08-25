@@ -20,10 +20,16 @@ public final class NativeGamepadPath {
     private static final int ABS_RX = 3;
     private static final int ABS_RY = 4;
     private static final int ABS_RZ = 5;
+    private static final int ABS_HAT0X = 16;
+    private static final int ABS_HAT0Y = 17;
     private static final int BTN_SOUTH = 304;
     private static final int BTN_EAST = 305;
     private static final int BTN_NORTH = 307;
     private static final int BTN_WEST = 308;
+    private static final int BTN_DPAD_UP = 544;
+    private static final int BTN_DPAD_DOWN = 545;
+    private static final int BTN_DPAD_LEFT = 546;
+    private static final int BTN_DPAD_RIGHT = 547;
 
     public static final class Device {
         public final String path;
@@ -32,14 +38,19 @@ public final class NativeGamepadPath {
         public final int rightStickAxisY;
         public final boolean readable;
         public final boolean writable;
+        private final BigInteger supportedKeys;
+        private final int dpadEncoding;
         private final int score;
 
-        private Device(String path, String name, int axisX, int axisY, int score) {
+        private Device(String path, String name, int axisX, int axisY,
+                BigInteger supportedKeys, int dpadEncoding, int score) {
             this.path = path;
             this.name = name == null || name.trim().length() == 0
                     ? "Thor Controller" : name.trim();
             this.rightStickAxisX = axisX;
             this.rightStickAxisY = axisY;
+            this.supportedKeys = supportedKeys;
+            this.dpadEncoding = dpadEncoding;
             this.score = score;
             File file = new File(path);
             this.readable = file.exists() && file.canRead();
@@ -48,6 +59,14 @@ public final class NativeGamepadPath {
 
         public String axisLabel() {
             return axisName(rightStickAxisX) + " / " + axisName(rightStickAxisY);
+        }
+
+        public boolean supportsDigitalKey(int code) {
+            return supportedKeys == null || hasBit(supportedKeys, code);
+        }
+
+        public int dpadEncoding() {
+            return dpadEncoding;
         }
     }
 
@@ -267,8 +286,10 @@ public final class NativeGamepadPath {
                 || lower.contains("gamepad") || lower.contains("joystick");
 
         if (abs == null) {
-            if (odinName) return new Device(path, name, ABS_Z, ABS_RZ, 1000);
-            if (xboxName) return new Device(path, name, ABS_RX, ABS_RY, 900);
+            if (odinName) return new Device(path, name, ABS_Z, ABS_RZ,
+                    keys, GamepadSequenceComposer.DPAD_KEYS, 1000);
+            if (xboxName) return new Device(path, name, ABS_RX, ABS_RY,
+                    keys, GamepadSequenceComposer.DPAD_HAT, 900);
             return null;
         }
 
@@ -277,6 +298,10 @@ public final class NativeGamepadPath {
         boolean hasOdinRight = hasBit(abs, ABS_Z) && hasBit(abs, ABS_RZ);
         boolean hasGamepadKeys = keys != null && (hasBit(keys, BTN_SOUTH)
                 || hasBit(keys, BTN_EAST) || hasBit(keys, BTN_NORTH) || hasBit(keys, BTN_WEST));
+        boolean hasHatDpad = hasBit(abs, ABS_HAT0X) && hasBit(abs, ABS_HAT0Y);
+        boolean hasKeyDpad = keys != null && hasBit(keys, BTN_DPAD_UP)
+                && hasBit(keys, BTN_DPAD_DOWN) && hasBit(keys, BTN_DPAD_LEFT)
+                && hasBit(keys, BTN_DPAD_RIGHT);
         if (!hasLeft || (!hasStandardRight && !hasOdinRight)) return null;
 
         int axisX;
@@ -298,7 +323,13 @@ public final class NativeGamepadPath {
         else if (controllerName && hasGamepadKeys) score = 600;
         else if (hasGamepadKeys) score = 350;
         else return null;
-        return new Device(path, name, axisX, axisY, score);
+        int dpadEncoding = hasHatDpad
+                ? GamepadSequenceComposer.DPAD_HAT
+                : GamepadSequenceComposer.DPAD_KEYS;
+        if (!hasHatDpad && !hasKeyDpad && xboxName) {
+            dpadEncoding = GamepadSequenceComposer.DPAD_HAT;
+        }
+        return new Device(path, name, axisX, axisY, keys, dpadEncoding, score);
     }
 
     private static boolean isExcludedName(String lower) {

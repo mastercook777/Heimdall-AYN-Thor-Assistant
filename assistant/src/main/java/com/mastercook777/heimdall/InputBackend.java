@@ -11,6 +11,9 @@ public interface InputBackend {
 
     void dispatchMacro(Context context, Macro macro, InputBridge.Callback callback);
 
+    default void cancelMacro(Context context) {
+    }
+
     boolean dispatchTouchMove(Context context, int displayId, int width, int height,
             float dx, float dy, InputBridge.Callback callback);
 

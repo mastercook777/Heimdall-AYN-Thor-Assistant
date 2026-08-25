@@ -44,6 +44,9 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
             target = getTargetContext();
             assertNotNull(target);
             testControllerSequenceSafetyPolicy();
+            testComposedControllerSequenceContract();
+            testMacroCloneAndDispatchGateContract();
+            testInterruptedComposedReplayReleasesHeldState();
             testVirtualKeyboardTransportContract();
             testKeyboardPadModelContract();
             testQuickActionsModelContract();
@@ -278,6 +281,214 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
         }
         assertTrue(GamepadSequencePolicy.inspect(overlong.toString())
                 .exceedsReplayLimits());
+    }
+
+    public void testComposedControllerSequenceContract() {
+        List<GamepadSequenceComposer.Frame> frames = new ArrayList<>();
+        frames.add(new GamepadSequenceComposer.Frame(-1, 0, Collections.emptyList()));
+        frames.add(new GamepadSequenceComposer.Frame(-1, 1, Collections.emptyList()));
+        frames.add(new GamepadSequenceComposer.Frame(0, 1, Collections.emptyList()));
+        frames.add(new GamepadSequenceComposer.Frame(1, 1, Collections.emptyList()));
+        frames.add(new GamepadSequenceComposer.Frame(1, 0,
+                java.util.Arrays.asList(GamepadSequenceComposer.BTN_A,
+                        GamepadSequenceComposer.BTN_B)));
+
+        String keyDpad = GamepadSequenceComposer.build(frames,
+                GamepadSequenceComposer.DPAD_KEYS, 40, 60);
+        assertEquals("seq:1,546,1,0;0,0,0,0;1,545,1,40;0,0,0,0;"
+                + "1,546,0,40;0,0,0,0;1,547,1,40;0,0,0,0;"
+                + "1,304,1,40;1,305,1,0;1,545,0,0;0,0,0,0;"
+                + "1,304,0,60;1,305,0,0;1,547,0,0;0,0,0,0", keyDpad);
+        assertTrue(GamepadSequenceComposer.isComposedSequence(keyDpad));
+        assertFalse(GamepadSequenceComposer.isComposedSequence(
+                "seq:1,304,1,0;1,304,0,60"));
+        String recordedAnalogWithSyn =
+                "seq:3,0,123,0;0,0,0,0;3,0,0,40;0,0,0,0";
+        assertNull(GamepadSequenceComposer.parseEditable(recordedAnalogWithSyn));
+        assertFalse(GamepadSequenceComposer.isComposedSequence(recordedAnalogWithSyn));
+        GamepadSequenceSummary keySummary = GamepadSequenceSummary.summarize(
+                target, keyDpad, 2, 5);
+        assertTrue(keySummary.valid);
+        assertTrue(keySummary.title.contains("\u2199"));
+        assertTrue(keySummary.title.contains("\u2198"));
+        assertTrue(keySummary.title.contains("A + B"));
+        assertEquals(220, (int) keySummary.replayDurationMs);
+        List<String> emittedFrames = new ArrayList<>();
+        String replayResult = ShizukuGamepadSequenceReplay.replay(keyDpad, sequence -> {
+            emittedFrames.add(sequence);
+            return "ok";
+        });
+        assertTrue(replayResult.contains("sequence ok"));
+        assertEquals(6, emittedFrames.size());
+        assertEquals("seq:1,546,1,0;0,0,0,0", emittedFrames.get(0));
+        assertEquals("seq:1,304,1,0;1,305,1,0;1,545,0,0;0,0,0,0",
+                emittedFrames.get(4));
+        assertEquals("seq:1,304,0,0;1,305,0,0;1,547,0,0;0,0,0,0",
+                emittedFrames.get(5));
+        List<String> failedFrames = new ArrayList<>();
+        String failedReplay = ShizukuGamepadSequenceReplay.replay(keyDpad, sequence -> {
+            failedFrames.add(sequence);
+            return failedFrames.size() == 2 ? "write failed" : "ok";
+        });
+        assertEquals("write failed", failedReplay);
+        assertEquals(3, failedFrames.size());
+        assertEquals("seq:1,546,0,0;1,545,0,0;0,0,0,0", failedFrames.get(2));
+        GamepadSequencePolicy.Inspection inspection =
+                GamepadSequencePolicy.inspect(keyDpad);
+        assertFalse(inspection.containsSystemNavigationKey());
+        assertFalse(inspection.exceedsReplayLimits());
+        assertEquals(220, (int) inspection.replayDurationMs);
+
+        GamepadSequenceComposer.EditableSequence restored =
+                GamepadSequenceComposer.parseEditable(keyDpad);
+        assertNotNull(restored);
+        assertEquals(frames.size(), restored.frames.size());
+        assertEquals(40, restored.frameIntervalMs);
+        assertEquals(60, restored.finalHoldMs);
+        assertEquals(keyDpad, GamepadSequenceComposer.build(restored.frames,
+                GamepadSequenceComposer.DPAD_KEYS,
+                restored.frameIntervalMs, restored.finalHoldMs));
+
+        List<GamepadSequenceComposer.Frame> chargeFrames = new ArrayList<>();
+        chargeFrames.add(new GamepadSequenceComposer.Frame(-1, 0,
+                Collections.emptyList(), 1_200));
+        chargeFrames.add(new GamepadSequenceComposer.Frame(1, 0,
+                Collections.singletonList(GamepadSequenceComposer.BTN_A)));
+        String chargeMove = GamepadSequenceComposer.build(chargeFrames,
+                GamepadSequenceComposer.DPAD_KEYS, 40, 60);
+        assertTrue(chargeMove.contains("0,0,0,500;0,0,0,500;0,0,0,200"));
+        GamepadSequenceComposer.EditableSequence restoredCharge =
+                GamepadSequenceComposer.parseEditable(chargeMove);
+        assertNotNull(restoredCharge);
+        assertEquals(2, restoredCharge.frames.size());
+        assertEquals(1_200, restoredCharge.frames.get(0).holdOverrideMs);
+        assertEquals(chargeMove, GamepadSequenceComposer.build(restoredCharge.frames,
+                GamepadSequenceComposer.DPAD_KEYS,
+                restoredCharge.frameIntervalMs, restoredCharge.finalHoldMs));
+
+        List<GamepadSequenceComposer.Frame> mirrored =
+                GamepadSequenceComposer.mirrorHorizontally(restoredCharge.frames);
+        assertEquals(1, mirrored.get(0).directionX);
+        assertEquals(-1, mirrored.get(1).directionX);
+        assertEquals(1_200, mirrored.get(0).holdOverrideMs);
+        assertEquals(restoredCharge.frames.get(1).buttons, mirrored.get(1).buttons);
+        List<GamepadSequenceComposer.Frame> mirroredTwice =
+                GamepadSequenceComposer.mirrorHorizontally(mirrored);
+        assertEquals(restoredCharge.frames.get(0).directionX,
+                mirroredTwice.get(0).directionX);
+        assertEquals(restoredCharge.frames.get(1).directionX,
+                mirroredTwice.get(1).directionX);
+
+        String hatDpad = GamepadSequenceComposer.build(frames,
+                GamepadSequenceComposer.DPAD_HAT, 40, 60);
+        assertTrue(hatDpad.startsWith("seq:3,16,-1,0;0,0,0,0;3,17,1,40"));
+        assertTrue(hatDpad.contains("3,16,0,40"));
+        assertTrue(hatDpad.endsWith("3,16,0,0;0,0,0,0"));
+        assertEquals("", GamepadSequenceComposer.build(Collections.emptyList(),
+                GamepadSequenceComposer.DPAD_KEYS, 40, 60));
+        assertEquals(GamepadSequenceComposer.MIN_TIMING_MS,
+                GamepadSequenceComposer.clampTiming(0));
+        assertEquals(GamepadSequenceComposer.MAX_TIMING_MS,
+                GamepadSequenceComposer.clampTiming(900));
+        assertEquals(GamepadSequenceComposer.MAX_HOLD_MS,
+                GamepadSequenceComposer.clampHold(20_000));
+    }
+
+    public void testMacroCloneAndDispatchGateContract() {
+        List<GamepadSequenceComposer.Frame> heldFrames = new ArrayList<>();
+        heldFrames.add(new GamepadSequenceComposer.Frame(-1, 0,
+                Collections.singletonList(GamepadSequenceComposer.BTN_A), 1_200));
+        String heldSequence = GamepadSequenceComposer.build(heldFrames,
+                GamepadSequenceComposer.DPAD_KEYS, 40, 60);
+
+        Macro source = new Macro("Charge Right", java.util.Arrays.asList(
+                new MacroStep(MacroStep.TYPE_WAIT, "30ms"),
+                new MacroStep(MacroStep.TYPE_GAMEPAD, heldSequence)));
+        source.role = Macro.ROLE_PRIMARY;
+        source.highlighted = true;
+        source.iconKey = "builtin:ultimate";
+        assertTrue(source.hasCancellableControllerHold());
+
+        Macro targetMacro = new Macro("Old target",
+                Collections.singletonList(new MacroStep(MacroStep.TYPE_WAIT, "80ms")));
+        targetMacro.role = Macro.ROLE_UTILITY;
+        targetMacro.iconKey = "builtin:map";
+        targetMacro.overwriteFrom(source);
+        assertEquals("Charge Right", targetMacro.label);
+        assertEquals(Macro.ROLE_PRIMARY, targetMacro.role);
+        assertTrue(targetMacro.highlighted);
+        assertEquals("builtin:ultimate", targetMacro.iconKey);
+        assertEquals(2, targetMacro.steps.size());
+        assertTrue(targetMacro.steps.get(0) != source.steps.get(0));
+        assertEquals(source.steps.get(1).value, targetMacro.steps.get(1).value);
+        assertTrue(targetMacro.hasCancellableControllerHold());
+        source.label = "Changed source";
+        source.steps.clear();
+        assertEquals("Charge Right", targetMacro.label);
+        assertEquals(2, targetMacro.steps.size());
+
+        MacroDispatchGate<String> gate = new MacroDispatchGate<>();
+        Object ordinary = new Object();
+        MacroDispatchGate.Result<String> ordinaryStart =
+                gate.onTap(ordinary, false, "ordinary-backend");
+        assertEquals(MacroDispatchGate.Decision.START, ordinaryStart.decision);
+        for (int tap = 0; tap < 1_000; tap++) {
+            assertEquals(MacroDispatchGate.Decision.IGNORE_REPEAT,
+                    gate.onTap(ordinary, false, "unused").decision);
+        }
+        assertEquals(MacroDispatchGate.Decision.BUSY,
+                gate.onTap(new Object(), false, "unused").decision);
+        gate.finish(ordinaryStart.id + 1);
+        assertTrue(gate.hasActive());
+        gate.finish(ordinaryStart.id);
+        assertFalse(gate.hasActive());
+
+        Object charge = new Object();
+        MacroDispatchGate.Result<String> chargeStart =
+                gate.onTap(charge, true, "charge-backend");
+        assertEquals(MacroDispatchGate.Decision.START, chargeStart.decision);
+        MacroDispatchGate.Result<String> cancel =
+                gate.onTap(charge, true, "unused");
+        assertEquals(MacroDispatchGate.Decision.CANCEL, cancel.decision);
+        assertEquals("charge-backend", cancel.payload);
+        assertEquals(MacroDispatchGate.Decision.CANCEL_PENDING,
+                gate.onTap(charge, true, "unused").decision);
+        gate.finish(chargeStart.id);
+        assertFalse(gate.hasActive());
+        assertEquals(MacroDispatchGate.Decision.START,
+                gate.onTap(new Object(), false, "next").decision);
+    }
+
+    public void testInterruptedComposedReplayReleasesHeldState() throws Exception {
+        List<GamepadSequenceComposer.Frame> heldFrames = Collections.singletonList(
+                new GamepadSequenceComposer.Frame(-1, 0,
+                        Collections.singletonList(GamepadSequenceComposer.BTN_A), 1_200));
+        String sequence = GamepadSequenceComposer.build(heldFrames,
+                GamepadSequenceComposer.DPAD_KEYS, 40, 60);
+        List<String> emitted = Collections.synchronizedList(new ArrayList<>());
+        CountDownLatch pressed = new CountDownLatch(1);
+        String[] result = {null};
+        Thread replay = new Thread(() -> result[0] =
+                ShizukuGamepadSequenceReplay.replay(sequence, frame -> {
+                    emitted.add(frame);
+                    if (frame.contains("1,546,1,0")
+                            && frame.contains("1,304,1,0")) {
+                        pressed.countDown();
+                    }
+                    return "ok";
+                }), "controller-cancel-contract");
+        replay.start();
+        assertTrue(pressed.await(1, TimeUnit.SECONDS));
+        Thread.sleep(20L);
+        replay.interrupt();
+        replay.join(1_000L);
+        assertFalse(replay.isAlive());
+        assertTrue(result[0] != null && result[0].contains("interrupted"));
+        assertTrue(emitted.size() >= 2);
+        String release = emitted.get(emitted.size() - 1);
+        assertTrue(release.contains("1,304,0,0"));
+        assertTrue(release.contains("1,546,0,0"));
+        assertTrue(release.endsWith("0,0,0,0"));
     }
 
     private static void assertSystemNavigationDetected(int scanCode) {

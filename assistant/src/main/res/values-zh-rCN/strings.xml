@@ -98,6 +98,12 @@
 
     <string name="profile_title_dropdown">%1$s  ▾</string>
     <string name="status_macro_running">● 宏\n%1$s</string>
+    <string name="status_macro_cancel_requested">正在取消 %1$s 并释放持续输入…</string>
+    <string name="status_macro_cancel_pending">%1$s 已经在取消中。</string>
+    <string name="status_macro_repeat_ignored">%1$s 正在执行；额外点击已忽略，不会排队。</string>
+    <string name="status_macro_busy">另一个宏正在执行；%1$s 不会加入队列。</string>
+    <string name="macro_status_cancelled">已取消 %1$s，并释放持续输入。</string>
+    <string name="macro_status_dispatch_failed">宏无法开始执行。</string>
     <string name="main_status_summary">输入状态：%1$s\n当前游戏：%2$s  ·  地图 %3$d  ·  攻略 %4$d</string>
     <string name="input_not_enabled">未启用</string>
     <string name="macro_picker_title">选择要编辑的宏</string>
@@ -114,6 +120,18 @@
     <string name="macro_role_low">低强调</string>
     <string name="macro_picker_card_meta">按键 %1$d  ·  %2$s  ·  %3$s</string>
     <string name="macro_picker_edit">编辑  ›</string>
+    <string name="macro_picker_edit_short">编辑</string>
+    <string name="macro_picker_clone">克隆</string>
+    <string name="macro_clone_target_title">选择克隆目标</string>
+    <string name="macro_clone_target_subtitle">将按键 %1$d · %2$s 复制到另一个宏按钮</string>
+    <string name="macro_clone_target_button">按键 %1$d · %2$s</string>
+    <string name="macro_clone_no_target">当前 Profile 没有其他可覆盖的宏按钮。</string>
+    <string name="macro_clone_confirm_title">覆盖宏按钮？</string>
+    <string name="macro_clone_confirm_message">确定把按键 %1$d · %2$s 克隆到按键 %3$d · %4$s 吗？目标按钮的名称、图标、强调级别和全部步骤都会被覆盖；Grid 位置不会改变。</string>
+    <string name="macro_clone_confirm_action">覆盖并克隆</string>
+    <string name="macro_clone_complete">已将按键 %1$d 克隆到按键 %2$d。</string>
+    <string name="macro_clone_source_unavailable">源宏或目标宏已经变化，请重新打开宏列表后再试。</string>
+    <string name="macro_clone_active_blocked">请先等待当前宏结束或取消，再执行克隆。</string>
     <string name="macro_edit_content_description">编辑宏 %1$s，%2$s，%3$s</string>
     <string name="profile_quick_switch_title">切换 Profile</string>
     <string name="profile_current_name">当前：%1$s</string>
@@ -510,6 +528,7 @@
     <string name="macro_editor_steps">宏步骤</string>
     <string name="macro_editor_add_step">添加宏步骤</string>
     <string name="macro_editor_record_controller">录制手柄操作</string>
+    <string name="macro_editor_compose_controller">编排实体按键</string>
     <string name="macro_editor_capture_tap">点击</string>
     <string name="macro_editor_capture_hold">长按</string>
     <string name="macro_editor_capture_swipe">滑动</string>
@@ -541,6 +560,48 @@
     <string name="capture_current_display_fallback">未找到第二屏，将在当前屏采集。</string>
 
     <string name="gamepad_record_title">录制手柄操作</string>
+    <string name="gamepad_compose_title">编排实体按键</string>
+    <string name="gamepad_compose_subtitle">先组合单个动作，再排列顺序，最后在游戏内测试</string>
+    <string name="gamepad_compose_controller">%1$s  ·  十字键：%2$s</string>
+    <string name="gamepad_compose_dpad_hat">轴模式</string>
+    <string name="gamepad_compose_dpad_keys">按键模式</string>
+    <string name="gamepad_compose_builder_step">1  组合一个动作</string>
+    <string name="gamepad_compose_builder_hint">方向单选、按键可多选；选中的项目会在同一帧发出。</string>
+    <string name="gamepad_compose_direction">方向（单选）</string>
+    <string name="gamepad_compose_no_direction">无方向</string>
+    <string name="gamepad_compose_buttons_available">实体键（多选） · %1$d / %2$d 可用</string>
+    <string name="gamepad_compose_button_unavailable">%1$s：当前手柄模式未报告该数字按键</string>
+    <string name="gamepad_compose_current_action">当前动作  %1$s</string>
+    <string name="gamepad_compose_current_action_empty">尚未选择</string>
+    <string name="gamepad_compose_clear_current">清空</string>
+    <string name="gamepad_compose_add_action">加入序列</string>
+    <string name="gamepad_compose_long_hold">长按此动作</string>
+    <string name="gamepad_compose_long_hold_duration">长按时长（毫秒）</string>
+    <string name="gamepad_compose_long_hold_hint">用于蓄力、持续方向或组合键；范围 8–5000 毫秒。</string>
+    <string name="gamepad_compose_sequence">2  动作序列</string>
+    <string name="gamepad_compose_sequence_count">2  动作序列  ·  %1$d / %2$d</string>
+    <string name="gamepad_compose_mirror_horizontal">左右镜像</string>
+    <string name="gamepad_compose_mirror_applied">已镜像当前草稿中的全部左右方向；按键、上下方向与时序保持不变。</string>
+    <string name="gamepad_compose_mirror_empty">请先加入或载入至少一个动作，再执行镜像。</string>
+    <string name="gamepad_compose_duration_limit">当前编排超过手柄回放的 10 秒上限，请缩短一个或多个长按时长。</string>
+    <string name="gamepad_compose_hold_suffix">%1$s  ·  长按 %2$d 毫秒</string>
+    <string name="gamepad_compose_sequence_empty">序列还是空的。先在上方组合一个动作，再点“加入序列”。</string>
+    <string name="gamepad_compose_action_added">已加入第 %1$d 个动作。可在上方继续组合，或在下方检查序列。</string>
+    <plurals name="gamepad_compose_existing_loaded">
+        <item quantity="other">已载入现有序列，共 %1$d 个动作。调整、镜像和测试后再替换。</item>
+    </plurals>
+    <string name="gamepad_compose_remove_action">删除第 %1$d 个动作</string>
+    <string name="gamepad_compose_timing_step">3  调整时序</string>
+    <string name="gamepad_compose_frame_interval">动作间隔（毫秒）</string>
+    <string name="gamepad_compose_final_hold">末段保持（毫秒）</string>
+    <string name="gamepad_compose_timing_hint">动作时序会保持输入连续；需要全部松开后的停顿，请回到宏页面添加“等待”步骤。</string>
+    <string name="gamepad_compose_mode_warning">12 个标准按键都会显示；灰色项在当前模式不可编排。摇杆和仅模拟输出的扳机请继续使用实体录制；切换 Thor 手柄模式后需重新编排。</string>
+    <string name="gamepad_compose_action_empty">请至少选择一个方向或数字按键。</string>
+    <plurals name="gamepad_compose_action_limit">
+        <item quantity="other">单个编排步骤最多支持 %1$d 个动作。</item>
+    </plurals>
+    <string name="gamepad_compose_no_controller">请先将 Thor 切换到原生或 Xbox 兼容手柄模式，再开始编排。</string>
+    <string name="gamepad_compose_test_ready">添加前请先在游戏中测试这段编排。</string>
     <string name="gamepad_record_prepare">准备录制</string>
     <string name="gamepad_no_controller_title">未检测到物理手柄</string>
     <string name="gamepad_no_controller_body">请确认 Thor 已切换到原生或 Xbox 手柄模式，然后重试。</string>
@@ -566,6 +627,8 @@
     <string name="gamepad_many_inputs_body">这次操作可能包含了摇杆抖动或多余输入。建议先测试，必要时重新录制。</string>
     <string name="gamepad_test_before_add">可以先测试回放，确认游戏内操作正确后再添加。</string>
     <string name="gamepad_rerecord">重新录制</string>
+    <string name="gamepad_recompose">重新编排</string>
+    <string name="gamepad_recompose_unavailable">这段实体按键录制无法安全还原为编排步骤，请使用重新录制替换；不会再打开空白草稿。</string>
     <string name="gamepad_test">测试</string>
     <string name="gamepad_replace_step">替换原步骤</string>
     <string name="gamepad_add_to_macro">添加到宏</string>

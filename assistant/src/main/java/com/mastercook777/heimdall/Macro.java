@@ -23,6 +23,44 @@ public final class Macro {
         this.steps.addAll(steps);
     }
 
+    public void overwriteFrom(Macro source) {
+        if (source == null || source == this) {
+            return;
+        }
+        label = source.label;
+        role = normalizeRole(source.role);
+        highlighted = ROLE_PRIMARY.equals(role);
+        iconKey = source.iconKey;
+        steps.clear();
+        for (MacroStep step : source.steps) {
+            if (step != null) {
+                steps.add(new MacroStep(step.type, step.value));
+            }
+        }
+        if (steps.isEmpty()) {
+            steps.add(new MacroStep(MacroStep.TYPE_WAIT, "80ms"));
+        }
+    }
+
+    public boolean hasCancellableControllerHold() {
+        for (MacroStep step : steps) {
+            if (!MacroStep.TYPE_GAMEPAD.equals(step.type)) {
+                continue;
+            }
+            GamepadSequenceComposer.EditableSequence sequence =
+                    GamepadSequenceComposer.parseEditable(step.value);
+            if (sequence == null) {
+                continue;
+            }
+            for (GamepadSequenceComposer.Frame frame : sequence.frames) {
+                if (frame.holdOverrideMs > 0) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     public String stepsAsText() {
         StringBuilder builder = new StringBuilder();
         for (int i = 0; i < steps.size(); i++) {

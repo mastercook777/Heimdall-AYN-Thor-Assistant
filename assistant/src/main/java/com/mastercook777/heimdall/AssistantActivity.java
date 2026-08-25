@@ -3245,11 +3245,32 @@ public class AssistantActivity extends Activity {
     }
 
     private void runMacro(Macro macro) {
-        if (statusText != null) {
-            statusText.setText(getString(R.string.status_macro_running, macro.label));
-        }
-        InputBridge.dispatch(this, macro, isEnhancedTouchModeActive(),
+        InputBridge.MacroDispatchResult result = InputBridge.dispatch(
+                this, macro, isEnhancedTouchModeActive(),
                 shouldProtectThorMappingFromControllerMacros(), inputStatusCallback);
+        int statusRes;
+        switch (result) {
+            case STARTED:
+                statusRes = R.string.status_macro_running;
+                break;
+            case CANCEL_REQUESTED:
+                statusRes = R.string.status_macro_cancel_requested;
+                break;
+            case CANCEL_PENDING:
+                statusRes = R.string.status_macro_cancel_pending;
+                break;
+            case IGNORED_REPEAT:
+                statusRes = R.string.status_macro_repeat_ignored;
+                break;
+            case BUSY:
+                statusRes = R.string.status_macro_busy;
+                break;
+            default:
+                return;
+        }
+        if (statusText != null) {
+            statusText.setText(getString(statusRes, macro.label));
+        }
     }
 
     private boolean isEnhancedTouchModeActive() {
@@ -3342,6 +3363,13 @@ public class AssistantActivity extends Activity {
                     } else {
                         openEditor.run();
                     }
+                }, () -> {
+                    Runnable openClonePicker = () -> showMacroCloneTargetPicker(macro, index);
+                    if (overlayHolder[0] != null) {
+                        dismissPanelAnimated(overlayHolder[0], openClonePicker);
+                    } else {
+                        openClonePicker.run();
+                    }
                 });
                 row.addView(card, cardParams);
             }
@@ -3373,7 +3401,8 @@ public class AssistantActivity extends Activity {
         overlayHolder[0] = showPanelOverlay(shell, params, null);
     }
 
-    private View macroEditorPickerCard(Macro macro, int index, Runnable action) {
+    private View macroEditorPickerCard(Macro macro, int index,
+            Runnable editAction, Runnable cloneAction) {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.HORIZONTAL);
         card.setGravity(Gravity.CENTER_VERTICAL);
@@ -3384,7 +3413,7 @@ public class AssistantActivity extends Activity {
                         0x665F7C9A, 0x33344150, HeimdallUi.RADIUS_CARD, 1));
         card.setClickable(true);
         card.setFocusable(true);
-        card.setOnClickListener(view -> action.run());
+        card.setOnClickListener(view -> editAction.run());
 
         ImageView icon = new ImageView(this);
         icon.setScaleType(ImageView.ScaleType.FIT_CENTER);
@@ -3420,15 +3449,163 @@ public class AssistantActivity extends Activity {
         meta.setEllipsize(android.text.TextUtils.TruncateAt.END);
         labels.addView(meta, new LinearLayout.LayoutParams(-1, dp(22)));
 
-        TextView edit = text(getString(R.string.macro_picker_edit), 11,
-                HeimdallUi.accent(this), true);
-        edit.setGravity(Gravity.CENTER_VERTICAL | Gravity.RIGHT);
-        edit.setSingleLine(true);
-        card.addView(edit, new LinearLayout.LayoutParams(dp(54), -1));
+        LinearLayout cardActions = new LinearLayout(this);
+        cardActions.setOrientation(LinearLayout.HORIZONTAL);
+        cardActions.setGravity(Gravity.CENTER_VERTICAL);
+        card.addView(cardActions, new LinearLayout.LayoutParams(dp(104), -1));
+
+        ImageButton edit = iconButton(R.drawable.ic_edit,
+                getString(R.string.macro_picker_edit_short), false, editAction);
+        LinearLayout.LayoutParams editParams =
+                new LinearLayout.LayoutParams(dp(48), dp(48));
+        editParams.setMargins(0, 0, dp(4), 0);
+        cardActions.addView(edit, editParams);
+
+        ImageButton clone = iconButton(R.drawable.ic_copy,
+                getString(R.string.macro_picker_clone), false, cloneAction);
+        LinearLayout.LayoutParams cloneParams =
+                new LinearLayout.LayoutParams(dp(48), dp(48));
+        cardActions.addView(clone, cloneParams);
         card.setContentDescription(getString(R.string.macro_edit_content_description,
                 label, getResources().getQuantityString(R.plurals.step_count,
                         stepCount, stepCount), roleLabel));
         return card;
+    }
+
+    private void showMacroCloneTargetPicker(Macro source, int sourceIndex) {
+        if (selectedProfile == null || source == null
+                || sourceIndex < 0 || sourceIndex >= selectedProfile.macros.size()
+                || selectedProfile.macros.get(sourceIndex) != source) {
+            showErrorAction(getString(R.string.macro_clone_source_unavailable));
+            return;
+        }
+        selectedProfile.setMacroCount(selectedProfile.macroCount);
+        int count = Math.min(selectedProfile.macroCount, selectedProfile.macros.size());
+
+        LinearLayout shell = new LinearLayout(this);
+        shell.setOrientation(LinearLayout.VERTICAL);
+        shell.setBackground(HeimdallUi.isPearl(this)
+                ? HeimdallUi.cncFlush(this, 14)
+                : HeimdallUi.glass(this, 0xFA0B111B, 0xFF070A10,
+                        0x886A829C, 0x44344150, 14, 2));
+
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.VERTICAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        header.setPadding(dp(16), dp(6), dp(16), dp(4));
+        shell.addView(header, new LinearLayout.LayoutParams(-1, dp(72)));
+        header.addView(text(getString(R.string.macro_clone_target_title),
+                HeimdallUi.TYPE_EDITOR_TITLE, TEXT, true),
+                new LinearLayout.LayoutParams(-1, dp(30)));
+        header.addView(text(getString(R.string.macro_clone_target_subtitle,
+                        sourceIndex + 1,
+                        nonEmpty(source.label, getString(R.string.common_macro_fallback))),
+                11, MUTED, false), new LinearLayout.LayoutParams(-1, dp(24)));
+
+        View headerDivider = new View(this);
+        headerDivider.setBackgroundColor(HeimdallUi.isPearl(this)
+                ? 0x287B8792 : 0x445F7C9A);
+        shell.addView(headerDivider, new LinearLayout.LayoutParams(-1, dp(1)));
+
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(false);
+        scroll.setScrollbarFadingEnabled(false);
+        LinearLayout list = new LinearLayout(this);
+        list.setOrientation(LinearLayout.VERTICAL);
+        list.setPadding(dp(12), dp(8), dp(12), dp(8));
+        scroll.addView(list, new ScrollView.LayoutParams(-1, -2));
+        shell.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+
+        final PanelOverlay[] holder = new PanelOverlay[1];
+        int targetCount = 0;
+        for (int targetIndex = 0; targetIndex < count; targetIndex++) {
+            if (targetIndex == sourceIndex) {
+                continue;
+            }
+            targetCount++;
+            Macro target = selectedProfile.macros.get(targetIndex);
+            int destination = targetIndex;
+            String targetLabel = nonEmpty(target.label,
+                    getString(R.string.common_macro_fallback));
+            Button targetButton = settingsMenuButton(
+                    getString(R.string.macro_clone_target_button,
+                            destination + 1, targetLabel),
+                    getResources().getQuantityString(R.plurals.step_count,
+                            target.steps.size(), target.steps.size()),
+                    () -> confirmMacroClone(source, sourceIndex,
+                            target, destination, holder));
+            LinearLayout.LayoutParams targetParams =
+                    new LinearLayout.LayoutParams(-1, dp(62));
+            targetParams.setMargins(0, 0, 0, dp(5));
+            list.addView(targetButton, targetParams);
+        }
+        if (targetCount == 0) {
+            TextView empty = text(getString(R.string.macro_clone_no_target),
+                    13, MUTED, false);
+            empty.setGravity(Gravity.CENTER);
+            list.addView(empty, new LinearLayout.LayoutParams(-1, dp(82)));
+        }
+
+        View footerDivider = new View(this);
+        footerDivider.setBackgroundColor(HeimdallUi.isPearl(this)
+                ? 0x287B8792 : 0x445F7C9A);
+        shell.addView(footerDivider, new LinearLayout.LayoutParams(-1, dp(1)));
+        LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        actions.setPadding(dp(12), dp(4), dp(12), dp(4));
+        shell.addView(actions, new LinearLayout.LayoutParams(-1, dp(58)));
+        actions.addView(editorButton(getString(R.string.common_cancel), () -> {
+            if (holder[0] != null) {
+                dismissPanelAnimated(holder[0]);
+            }
+        }));
+
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
+                settingsOverlayWidth(680), settingsOverlayHeight(700), Gravity.CENTER);
+        params.setMargins(dp(12), dp(12), dp(12), dp(12));
+        holder[0] = showPanelOverlay(shell, params, null);
+    }
+
+    private void confirmMacroClone(Macro source, int sourceIndex,
+            Macro target, int targetIndex, PanelOverlay[] targetPickerHolder) {
+        String sourceLabel = nonEmpty(source.label, getString(R.string.common_macro_fallback));
+        String targetLabel = nonEmpty(target.label, getString(R.string.common_macro_fallback));
+        showSettingsDecisionPanel(getString(R.string.macro_clone_confirm_title),
+                getString(R.string.macro_clone_confirm_message,
+                        sourceIndex + 1, sourceLabel, targetIndex + 1, targetLabel),
+                null, null,
+                getString(R.string.macro_clone_confirm_action), () -> {
+                    Runnable clone = () -> cloneMacroOver(
+                            source, sourceIndex, target, targetIndex);
+                    if (targetPickerHolder != null && targetPickerHolder[0] != null) {
+                        dismissPanelAnimated(targetPickerHolder[0], clone);
+                    } else {
+                        clone.run();
+                    }
+                });
+    }
+
+    private void cloneMacroOver(Macro source, int sourceIndex,
+            Macro target, int targetIndex) {
+        if (InputBridge.hasActiveMacroDispatch()) {
+            showErrorAction(getString(R.string.macro_clone_active_blocked));
+            return;
+        }
+        if (selectedProfile == null || source == null || target == null
+                || sourceIndex < 0 || sourceIndex >= selectedProfile.macros.size()
+                || targetIndex < 0 || targetIndex >= selectedProfile.macros.size()
+                || selectedProfile.macros.get(sourceIndex) != source
+                || selectedProfile.macros.get(targetIndex) != target
+                || source == target) {
+            showErrorAction(getString(R.string.macro_clone_source_unavailable));
+            return;
+        }
+        target.overwriteFrom(source);
+        ProfileStore.saveProfiles(this, profiles);
+        renderSelectedProfile();
+        showAction(getString(R.string.macro_clone_complete,
+                sourceIndex + 1, targetIndex + 1));
+        showMacroPicker();
     }
 
     private void showProfileQuickPicker() {
@@ -10153,6 +10330,13 @@ public class AssistantActivity extends Activity {
                 HeimdallUi.textColor(this), dp(18));
         gamepadRecordButton.setCompoundDrawablePadding(dp(7));
         gamepadRow.addView(gamepadRecordButton);
+        Button gamepadComposeButton = editorButton(
+                getString(R.string.macro_editor_compose_controller), () ->
+                showGamepadSequenceEditor(draftSteps, stepsList, -1));
+        setLeftIcon(gamepadComposeButton, R.drawable.ic_macro_gamepad,
+                HeimdallUi.textColor(this), dp(18));
+        gamepadComposeButton.setCompoundDrawablePadding(dp(7));
+        gamepadRow.addView(gamepadComposeButton);
 
         stepsPanel.addView(captureRow, new LinearLayout.LayoutParams(-1, dp(46)));
 
@@ -11007,6 +11191,184 @@ public class AssistantActivity extends Activity {
         renderGamepadRecordingPrepare(session);
     }
 
+    private void showGamepadSequenceEditor(List<MacroStep> draftSteps,
+            LinearLayout stepsList, int replaceIndex) {
+        NativeGamepadPath.Device device = NativeGamepadPath.resolveDevice();
+        if (device == null) {
+            showErrorAction(getString(R.string.gamepad_compose_no_controller));
+            return;
+        }
+
+        LinearLayout shell = new LinearLayout(this);
+        shell.setOrientation(LinearLayout.VERTICAL);
+        shell.setBackground(HeimdallUi.isPearl(this)
+                ? HeimdallUi.cncFlush(this, 14)
+                : HeimdallUi.glass(this, 0xFA0B111B, 0xFF070A10,
+                        0x886A829C, 0x44344150, 14, 2));
+
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.VERTICAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        header.setPadding(dp(18), 0, dp(18), 0);
+        shell.addView(header, new LinearLayout.LayoutParams(-1, dp(58)));
+        header.addView(text(getString(R.string.gamepad_compose_title),
+                HeimdallUi.TYPE_EDITOR_TITLE, TEXT, true),
+                new LinearLayout.LayoutParams(-1, dp(30)));
+        header.addView(text(getString(R.string.gamepad_compose_subtitle),
+                10, MUTED, false), new LinearLayout.LayoutParams(-1, dp(20)));
+
+        View headerDivider = new View(this);
+        headerDivider.setBackgroundColor(HeimdallUi.isPearl(this) ? 0x287B8792 : 0x445F7C9A);
+        shell.addView(headerDivider, new LinearLayout.LayoutParams(-1, dp(1)));
+
+        GamepadSequenceComposer.EditableSequence restoredSequence = null;
+        if (replaceIndex >= 0) {
+            if (replaceIndex >= draftSteps.size()) {
+                showErrorAction(getString(R.string.gamepad_recompose_unavailable));
+                return;
+            }
+            MacroStep existingStep = draftSteps.get(replaceIndex);
+            if (existingStep != null && MacroStep.TYPE_GAMEPAD.equals(existingStep.type)) {
+                restoredSequence = GamepadSequenceComposer.parseEditable(existingStep.value);
+            }
+            if (restoredSequence == null) {
+                showErrorAction(getString(R.string.gamepad_recompose_unavailable));
+                return;
+            }
+        }
+        GamepadSequenceEditorView editor = new GamepadSequenceEditorView(
+                this, device, restoredSequence);
+        editor.bindTextInputs(this::bindTapToEditTextInputFocus);
+        shell.addView(editor, new LinearLayout.LayoutParams(-1, 0, 1));
+
+        View footerDivider = new View(this);
+        footerDivider.setBackgroundColor(HeimdallUi.isPearl(this) ? 0x287B8792 : 0x445F7C9A);
+        shell.addView(footerDivider, new LinearLayout.LayoutParams(-1, dp(1)));
+        LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        actions.setGravity(Gravity.CENTER_VERTICAL);
+        actions.setPadding(dp(12), dp(4), dp(12), dp(4));
+        shell.addView(actions, new LinearLayout.LayoutParams(-1, dp(58)));
+
+        final PanelOverlay[] holder = new PanelOverlay[1];
+        final boolean[] testing = {false};
+        Button cancel = editorButton(getString(R.string.common_cancel), () -> {
+            if (holder[0] != null) {
+                dismissPanelAnimated(holder[0]);
+            }
+        });
+        actions.addView(cancel);
+
+        Button test = editorButton(getString(R.string.gamepad_test), () -> {});
+        Button commit = editorButton(getString(replaceIndex >= 0
+                ? R.string.gamepad_replace_step : R.string.gamepad_add_to_macro), () -> {});
+        HeimdallUi.applyPrimaryActionButton(this, commit);
+        actions.addView(test);
+        actions.addView(commit);
+
+        boolean replayReady = gamepadReplayRouteReady(device);
+        test.setEnabled(replayReady);
+        test.setAlpha(replayReady ? 1f : 0.48f);
+        if (!replayReady) {
+            editor.showStatus(getString(R.string.gamepad_compose_test_ready) + "\n"
+                    + getString(R.string.controller_enhancement_unavailable));
+        }
+
+        test.setOnClickListener(v -> {
+            if (testing[0]) {
+                return;
+            }
+            if (editor.exceedsReplayDurationLimit()) {
+                editor.showStatus(R.string.gamepad_compose_duration_limit);
+                return;
+            }
+            String sequence = editor.buildSequence();
+            if (sequence.length() == 0) {
+                editor.showStatus(R.string.gamepad_compose_action_empty);
+                return;
+            }
+            if (shouldProtectThorMappingFromControllerMacros()) {
+                editor.showStatus(R.string.gamepad_test_enhanced_touch_blocked);
+                showErrorAction(getString(R.string.macro_enhanced_touch_controller_blocked));
+                return;
+            }
+            testing[0] = true;
+            editor.setControlsEnabled(false);
+            test.setEnabled(false);
+            commit.setEnabled(false);
+            test.setAlpha(0.48f);
+            commit.setAlpha(0.48f);
+            editor.showStatus(R.string.gamepad_testing_replay);
+            new Thread(() -> {
+                String result;
+                try {
+                    result = NativeGamepadPath.userFacingError(this,
+                            InputBridge.replayNativeGamepadSequence(this, sequence));
+                } catch (Throwable t) {
+                    result = t.getClass().getSimpleName() + ": "
+                            + nonEmpty(t.getMessage(), "native controller replay failed");
+                }
+                String finalResult = result;
+                runOnUiThread(() -> {
+                    if (holder[0] == null || !panelOverlays.contains(holder[0])) {
+                        return;
+                    }
+                    testing[0] = false;
+                    editor.setControlsEnabled(true);
+                    test.setEnabled(true);
+                    commit.setEnabled(true);
+                    test.setAlpha(1f);
+                    commit.setAlpha(1f);
+                    editor.showStatus(nativeGamepadReplaySucceeded(finalResult)
+                            ? R.string.gamepad_test_complete : R.string.gamepad_test_failed);
+                });
+            }, "composed-gamepad-sequence-preview").start();
+        });
+
+        commit.setOnClickListener(v -> {
+            if (testing[0]) {
+                return;
+            }
+            if (editor.exceedsReplayDurationLimit()) {
+                editor.showStatus(R.string.gamepad_compose_duration_limit);
+                return;
+            }
+            String sequence = editor.buildSequence();
+            GamepadSequenceSummary summary = gamepadSummary(sequence);
+            if (!summary.valid || sequence.length() == 0) {
+                editor.showStatus(R.string.gamepad_compose_action_empty);
+                return;
+            }
+            MacroStep step = new MacroStep(MacroStep.TYPE_GAMEPAD, sequence);
+            boolean replaced = replaceIndex >= 0 && replaceIndex < draftSteps.size();
+            if (replaced) {
+                draftSteps.set(replaceIndex, step);
+            } else {
+                draftSteps.add(step);
+            }
+            renderStepList(draftSteps, stepsList);
+            showAction(getString(replaced ? R.string.gamepad_step_replaced
+                    : R.string.gamepad_step_added, summary.title));
+            if (holder[0] != null) {
+                dismissPanelAnimated(holder[0]);
+            }
+        });
+
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER);
+        params.setMargins(dp(8), dp(8), dp(8), dp(8));
+        holder[0] = showPanelOverlay(shell, params, () -> testing[0] = false);
+    }
+
+    private boolean gamepadReplayRouteReady(NativeGamepadPath.Device device) {
+        if (device == null) {
+            return false;
+        }
+        if (InputBridge.BACKEND_SHIZUKU.equals(InputBridge.selectedBackendId(this))) {
+            return ShizukuNativeController.isReady();
+        }
+        return device.writable;
+    }
+
     private void renderGamepadRecordingPrepare(GamepadRecordingSession session) {
         if (!isActiveGamepadRecordingSession(session)) {
             return;
@@ -11490,13 +11852,31 @@ public class AssistantActivity extends Activity {
                 subtitle.setMaxLines(2);
                 labels.addView(subtitle, new LinearLayout.LayoutParams(-1, dp(36)));
 
-                row.addView(gamepadStepAction(getString(R.string.gamepad_rerecord), () ->
-                                showGamepadRecordingPanel(steps, stepsList, index)),
-                        new LinearLayout.LayoutParams(dp(60), dp(48)));
-                row.addView(gamepadStepAction(getString(R.string.gamepad_delete_short), () -> {
+                boolean composed = GamepadSequenceComposer.parseEditable(step.value) != null;
+                String editDescription = getString(composed
+                        ? R.string.gamepad_recompose : R.string.gamepad_rerecord);
+                ImageButton edit = iconButton(composed
+                                ? R.drawable.ic_edit : R.drawable.ic_refresh,
+                        editDescription, false, () -> {
+                            if (composed) {
+                                showGamepadSequenceEditor(steps, stepsList, index);
+                            } else {
+                                showGamepadRecordingPanel(steps, stepsList, index);
+                            }
+                        });
+                LinearLayout.LayoutParams editParams =
+                        new LinearLayout.LayoutParams(dp(48), dp(48));
+                editParams.setMargins(dp(2), 0, dp(2), 0);
+                row.addView(edit, editParams);
+                ImageButton delete = iconButton(R.drawable.ic_trash,
+                        getString(R.string.gamepad_delete_short), true, () -> {
                     steps.remove(index);
                     renderStepList(steps, stepsList);
-                }), new LinearLayout.LayoutParams(dp(60), dp(48)));
+                });
+                LinearLayout.LayoutParams deleteParams =
+                        new LinearLayout.LayoutParams(dp(48), dp(48));
+                deleteParams.setMargins(dp(2), 0, 0, 0);
+                row.addView(delete, deleteParams);
                 stepsList.addView(row, new LinearLayout.LayoutParams(-1, dp(80)));
                 if (i < steps.size() - 1) {
                     View divider = new View(this);
@@ -11514,26 +11894,14 @@ public class AssistantActivity extends Activity {
             TextView label = text((i + 1) + ". " + stepDisplayText(steps.get(i)), 13, TEXT, false);
             row.addView(label, new LinearLayout.LayoutParams(0, dp(42), 1));
 
-            Button delete = new Button(this);
-            delete.setText(R.string.gamepad_delete_short);
-            delete.setTextSize(12);
-            delete.setAllCaps(false);
-            HeimdallUi.applySecondaryButton(this, delete);
-            delete.setOnClickListener(v -> {
+            ImageButton delete = iconButton(R.drawable.ic_trash,
+                    getString(R.string.gamepad_delete_short), true, () -> {
                 steps.remove(index);
                 renderStepList(steps, stepsList);
             });
-            row.addView(delete, new LinearLayout.LayoutParams(dp(58), dp(42)));
-            stepsList.addView(row, new LinearLayout.LayoutParams(-1, dp(46)));
+            row.addView(delete, new LinearLayout.LayoutParams(dp(48), dp(48)));
+            stepsList.addView(row, new LinearLayout.LayoutParams(-1, dp(52)));
         }
-    }
-
-    private Button gamepadStepAction(String label, Runnable action) {
-        Button button = actionButton(label, action);
-        button.setTextSize(11);
-        button.setPadding(dp(2), 0, dp(2), 0);
-        HeimdallUi.applySecondaryButton(this, button);
-        return button;
     }
 
     private String stepDisplayText(MacroStep step) {
@@ -11574,7 +11942,7 @@ public class AssistantActivity extends Activity {
             MacroStep step = steps.get(i);
             boolean gamepadSequence = MacroStep.TYPE_GAMEPAD.equals(step.type)
                     && step.value != null && step.value.startsWith("seq:");
-            heightDp += gamepadSequence ? 80 : 46;
+            heightDp += gamepadSequence ? 80 : 52;
             if (gamepadSequence && i < count - 1) {
                 heightDp += 1;
             }
@@ -11848,6 +12216,9 @@ public class AssistantActivity extends Activity {
                     : HeimdallUi.surfacePanel(this, 8));
         }
         button.setContentDescription(description);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            button.setTooltipText(description);
+        }
         button.setScaleType(ImageButton.ScaleType.CENTER);
         button.setPadding(dp(16), dp(16), dp(16), dp(16));
         button.setMinimumWidth(dp(48));
