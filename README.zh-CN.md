@@ -10,8 +10,8 @@
 
 <p align="center">
   <a href="https://github.com/mastercook777/Heimdall-AYN-Thor-Assistant/releases"><strong>下载 Alpha</strong></a>
-  · <a href="docs/guides/Heimdall-Installation-Guide-en.pdf"><strong>English PDF Guide</strong></a>
-  · <a href="docs/guides/Heimdall-Installation-Guide-zh-CN.pdf"><strong>简体中文 PDF 指南</strong></a>
+  · <a href="docs/guides/Heimdall-0.2.0-alpha.1-User-Guide-en.pdf"><strong>English User Guide</strong></a>
+  · <a href="docs/guides/Heimdall-0.2.0-alpha.1-User-Guide-zh-CN.pdf"><strong>简体中文使用教程</strong></a>
   · <a href="https://github.com/mastercook777/Heimdall-AYN-Thor-Assistant/issues">反馈问题</a>
 </p>
 
