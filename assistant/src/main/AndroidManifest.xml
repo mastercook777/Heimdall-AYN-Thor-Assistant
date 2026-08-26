@@ -40,6 +40,14 @@
             android:taskAffinity="${applicationId}.capture"
             android:theme="@style/CaptureTheme" />
 
+        <activity
+            android:name=".UpperDisplayFocusHandoffActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:noHistory="true"
+            android:taskAffinity="${applicationId}.focushandoff"
+            android:theme="@style/CaptureTheme" />
+
         <service
             android:name=".ThorAccessibilityService"
             android:exported="true"

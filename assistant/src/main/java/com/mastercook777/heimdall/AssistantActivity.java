@@ -51,6 +51,7 @@ import android.text.Editable;
 import android.text.TextWatcher;
 import android.util.DisplayMetrics;
 import android.view.Gravity;
+import android.view.HapticFeedbackConstants;
 import android.view.Display;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
@@ -105,6 +106,8 @@ public class AssistantActivity extends Activity {
     private static final long PANEL_ENTER_MS = 160L;
     private static final long PANEL_EXIT_MS = 110L;
     private static final long CONTENT_TRANSITION_MS = 160L;
+    private static final long FULL_KEYBOARD_ENTER_MS = 150L;
+    private static final long FULL_KEYBOARD_EXIT_MS = 120L;
     private static final int CONTENT_ENTER_TRANSLATION_DP = 32;
     private static final long SETTINGS_DOCK_EXIT_MS = 120L;
     private static final long SETTINGS_DOCK_ENTER_MS = 140L;
@@ -129,6 +132,7 @@ public class AssistantActivity extends Activity {
     private static final int REQUEST_DIAGNOSTIC_EXPORT = 2112;
     private static final int MAGNIFIER_REGION_START_MAX_ATTEMPTS = 12;
     private static final long MAGNIFIER_REGION_START_RETRY_MS = 150L;
+    private static final long QUICK_ACTION_EDIT_LONG_PRESS_TIMEOUT_MS = 1800L;
     private static final int BG = HeimdallUi.COLOR_BG;
     private static final int PANEL = HeimdallUi.COLOR_SURFACE;
     private static final int PANEL_ALT = HeimdallUi.COLOR_SURFACE_RAISED;
@@ -140,8 +144,6 @@ public class AssistantActivity extends Activity {
     private static final int BORDER = HeimdallUi.COLOR_BORDER;
     private static final int DANGER = HeimdallUi.COLOR_DANGER;
     private static final int DANGER_BG = HeimdallUi.COLOR_DANGER_BG;
-    private static final int GRID_EDITOR_COLUMNS = 6;
-    private static final int GRID_EDITOR_ROWS = 8;
     private static final int SCREEN_MAIN = 0;
     private static final int SCREEN_MAP = 1;
     private static final int SCREEN_GUIDE = 2;
@@ -186,13 +188,8 @@ public class AssistantActivity extends Activity {
     private int settingsContentScrollY;
     private ProfileIconView profileIconView;
     private TextView profileTitle;
-    private TextView systemTimeText;
-    private ImageView systemNetworkIcon;
-    private BatteryStatusView systemBatteryIcon;
-    private TextView systemBatteryText;
-    private String lastSystemTime = "";
-    private String lastNetworkLabel = "";
-    private String lastBatteryLabel = "";
+    private final SystemStatusController systemStatusController =
+            new SystemStatusController(this);
     private TextView statusText;
     private final List<MacroGridBinding> macroGrids = new ArrayList<>();
     private final List<MacroModuleEditorBinding> settingsMacroModuleEditors = new ArrayList<>();
@@ -214,6 +211,15 @@ public class AssistantActivity extends Activity {
     private AlertDialog widgetGridDialog;
     private LinearLayout profileList;
     private TouchPadView touchPadView;
+    private VirtualMouseDispatcher virtualMouseDispatcher;
+    private int virtualMouseSessionGeneration;
+    private boolean virtualMouseReportErrors;
+    private boolean virtualMouseErrorShown;
+    private KeyboardInputSession keyboardInputSession;
+    private boolean keyboardInputErrorShown;
+    private boolean keyboardPadEditorActive;
+    private FullVirtualKeyboardView fullVirtualKeyboardView;
+    private boolean fullVirtualKeyboardClosing;
     private int targetDisplayId = Display.DEFAULT_DISPLAY;
     private int targetDisplayWidth;
     private int targetDisplayHeight;
@@ -221,30 +227,7 @@ public class AssistantActivity extends Activity {
     private TouchpadSettings touchpadSettings;
     private String settingsTouchpadMode;
     private TouchpadSettings settingsTouchpadDraft;
-    private SliderInput settingsSensitivityInput;
-    private SliderInput settingsIntervalInput;
-    private SliderInput settingsMinDeltaInput;
-    private SliderInput settingsAnchorXInput;
-    private SliderInput settingsAnchorYInput;
-    private SliderInput settingsStrokeInput;
-    private SliderInput settingsShizukuTouchSensitivityXInput;
-    private SliderInput settingsShizukuTouchSensitivityYInput;
-    private SliderInput settingsShizukuTouchFrameInput;
-    private SliderInput settingsShizukuTouchMinDeltaInput;
-    private SliderInput settingsShizukuTouchCurveInput;
-    private SliderInput settingsShizukuTouchSmoothingInput;
-    private SliderInput settingsRightStickSensitivityInput;
-    private SliderInput settingsRightStickDeadzoneInput;
-    private SliderInput settingsRightStickCurveInput;
-    private SliderInput settingsRightStickMaxInput;
-    private SliderInput settingsRightStickRadiusInput;
-    private SliderInput settingsRightStickRecenterInput;
-    private String settingsRightStickCenterMode;
-    private SliderInput settingsRelativeMouseSensitivityInput;
-    private SliderInput settingsRelativeMouseMaxOutputInput;
-    private SliderInput settingsRelativeMousePulseInput;
-    private CheckBox settingsRelativeMouseInvertYInput;
-    private String settingsRelativeMouseAcceleration;
+    private boolean virtualMouseEntryHintPending;
     private EditText settingsProfileNameInput;
     private EditText settingsProfilePackageInput;
     private EditText settingsProfileRomInput;
@@ -255,6 +238,53 @@ public class AssistantActivity extends Activity {
     private boolean showTouchpadAdvancedSettings;
     private boolean showInputDiagnostics;
     private boolean showProfileDetectionDetails;
+    private final TouchpadSettingsController touchpadSettingsController =
+            new TouchpadSettingsController(this, new TouchpadSettingsController.Host() {
+                @Override
+                public TouchpadSettings draft() {
+                    return ensureSettingsTouchpadDraft();
+                }
+
+                @Override
+                public String mode() {
+                    return settingsTouchpadMode;
+                }
+
+                @Override
+                public void setMode(String mode) {
+                    settingsTouchpadMode = mode;
+                }
+
+                @Override
+                public boolean advancedVisible() {
+                    return showTouchpadAdvancedSettings;
+                }
+
+                @Override
+                public void setAdvancedVisible(boolean visible) {
+                    showTouchpadAdvancedSettings = visible;
+                }
+
+                @Override
+                public boolean modeAvailable(String mode) {
+                    return touchpadModeAvailable(mode);
+                }
+
+                @Override
+                public boolean relativeMouseBackendAvailable() {
+                    return AssistantActivity.this.relativeMouseBackendAvailable();
+                }
+
+                @Override
+                public void refresh() {
+                    refreshSettingsContent();
+                }
+
+                @Override
+                public void showError(String message) {
+                    showErrorAction(message);
+                }
+            });
     private TextView pendingGuideFileSummary;
     private String[] pendingGuideFileUriDraft;
     private EditText pendingGuideFileTitleInput;
@@ -284,8 +314,6 @@ public class AssistantActivity extends Activity {
             new ThorGameFocusProtection();
     private final ThorTextInputFocusLease thorTextInputFocusLease =
             new ThorTextInputFocusLease();
-    private final ThorImeSessionInitializer thorImeSessionInitializer =
-            new ThorImeSessionInitializer();
     private ViewTreeObserver.OnGlobalFocusChangeListener textInputFocusListener;
     private ViewTreeObserver.OnGlobalLayoutListener imeVisibilityListener;
     private boolean textInputFocused;
@@ -328,6 +356,7 @@ public class AssistantActivity extends Activity {
             snapshot -> uiHandler.post(() -> maybeAutoSwitchProfile(snapshot));
     private boolean profileAwarenessActive;
     private boolean activityStarted;
+    private boolean upperDisplayFocusHandoffRequested;
     private final Runnable profileAwarenessTicker = new Runnable() {
         @Override
         public void run() {
@@ -376,13 +405,6 @@ public class AssistantActivity extends Activity {
         @Override
         public void run() {
             setFullscreenGuideControlsVisible(false);
-        }
-    };
-    private boolean statusReceiverRegistered;
-    private final BroadcastReceiver statusReceiver = new BroadcastReceiver() {
-        @Override
-        public void onReceive(Context context, Intent intent) {
-            updateSystemStatus();
         }
     };
     private final BroadcastReceiver captureReceiver = new BroadcastReceiver() {
@@ -442,6 +464,9 @@ public class AssistantActivity extends Activity {
         DebugPerformanceDiagnostics.initialize(this);
         HeimdallStabilityDiagnostics.reportPreviousExit(this);
         requestWindowFeature(Window.FEATURE_NO_TITLE);
+        // Protect the upper-screen focus before the lower-screen content window is attached.
+        // A normal launch must never acquire lower-display key focus just to release it later.
+        thorGameFocusProtection.apply(this, true);
         enterImmersiveMode();
 
         profiles = ProfileStore.loadProfiles(this);
@@ -455,7 +480,7 @@ public class AssistantActivity extends Activity {
         restoreVisibleProfileDraft(savedInstanceState);
         renderProfiles();
         renderSelectedProfile();
-        startStatusUpdates();
+        systemStatusController.start();
         DebugPerformanceDiagnostics.attachRootObservers(this);
         installTextInputCompatibilityObservers();
         getWindow().getDecorView().post(() -> thorPerformanceCompatibility.apply(
@@ -464,11 +489,7 @@ public class AssistantActivity extends Activity {
             int restoreY = Math.max(0, settingsContentScrollY);
             settingsContentScroll.post(() -> settingsContentScroll.scrollTo(0, restoreY));
         }
-        if (isWindowFocusRequired()) {
-            updateGameFocusProtection();
-        } else {
-            initializeLowerDisplayImeSession();
-        }
+        updateGameFocusProtection();
     }
 
     @Override
@@ -608,6 +629,9 @@ public class AssistantActivity extends Activity {
     @Override
     protected void onDestroy() {
         flushGuideReadingPosition();
+        dismissFullVirtualKeyboard(false);
+        parkVirtualMouseDispatcher();
+        parkKeyboardInputSession();
         for (View view : new ArrayList<>(transientAnimatedViews)) {
             view.animate().cancel();
         }
@@ -624,11 +648,10 @@ public class AssistantActivity extends Activity {
         releaseLocalMapThumbnails();
         uiHandler.removeCallbacks(hideFullscreenMapControls);
         uiHandler.removeCallbacks(hideFullscreenGuideControls);
-        stopStatusUpdates();
+        systemStatusController.stop();
         unregisterReceiver(captureReceiver);
         ThorAccessibilityService.setDiagnosticScanningSuspended(false);
         thorTextInputFocusLease.cancel();
-        thorImeSessionInitializer.cancel();
         removeTextInputCompatibilityObservers();
         stabilityDiagnostics.stop();
         thorPerformanceCompatibility.release();
@@ -652,7 +675,7 @@ public class AssistantActivity extends Activity {
             return;
         }
         ThorAccessibilityService.setDiagnosticScanningSuspended(false);
-        startStatusUpdates();
+        systemStatusController.start();
         updateProfileAwarenessRegistration();
     }
 
@@ -660,21 +683,28 @@ public class AssistantActivity extends Activity {
     protected void onResume() {
         super.onResume();
         updateGameFocusProtection(true);
+        requestUpperDisplayFocusHandoffOnce();
         if (!DebugPerformanceDiagnostics.isStaticUi()) {
             resumeMagnifierViews();
         }
         if (activeMapWebView != null) {
             activeMapWebView.onResume();
         }
+        if (touchPadView != null) {
+            touchPadView.requestAdvancedInputPreparation();
+        }
     }
 
     @Override
     protected void onPause() {
         saveGuideReadingPosition();
+        dismissFullVirtualKeyboard(false);
         if (!magnifierRegionCaptureInProgress) {
             pauseMagnifierViews();
         }
         resetRightStickIfNeeded();
+        parkVirtualMouseDispatcher();
+        parkKeyboardInputSession();
         InputBridge.cancelShizukuTouchpadDrag(this);
         if (activeMapWebView != null) {
             activeMapWebView.onPause();
@@ -692,7 +722,7 @@ public class AssistantActivity extends Activity {
         DebugPerformanceDiagnostics.unregisterRepeatingTask(
                 "App-aware upper-window scan");
         ForegroundAppTracker.clearListener(foregroundAppListener);
-        stopStatusUpdates();
+        systemStatusController.stop();
         super.onStop();
     }
 
@@ -782,10 +812,6 @@ public class AssistantActivity extends Activity {
     }
 
     private void updateGameFocusProtection(boolean force) {
-        if (thorImeSessionInitializer.isHoldingWindowFocus()) {
-            thorGameFocusProtection.apply(this, false);
-            return;
-        }
         boolean protectGameFocus = !isWindowFocusRequired();
         if (force) {
             thorGameFocusProtection.reapply(this, protectGameFocus);
@@ -886,20 +912,19 @@ public class AssistantActivity extends Activity {
         }
     }
 
-    private void initializeLowerDisplayImeSession() {
-        if (isFinishing() || isDestroyed() || overlayHost == null
-                || isWindowFocusRequired()) {
+    private void requestUpperDisplayFocusHandoffOnce() {
+        if (upperDisplayFocusHandoffRequested
+                || DebugPerformanceDiagnostics.isStaticUi()
+                || isFinishing()
+                || isDestroyed()) {
             return;
         }
-        thorImeSessionInitializer.initialize(
-                this,
-                overlayHost,
-                () -> thorGameFocusProtection.apply(this, false),
-                initialized -> {
-                    if (!isFinishing() && !isDestroyed()) {
-                        updateGameFocusProtection();
-                    }
-                });
+        upperDisplayFocusHandoffRequested = true;
+        getWindow().getDecorView().post(() -> {
+            if (activityStarted && !isFinishing() && !isDestroyed()) {
+                UpperDisplayFocusHandoffActivity.launch(this);
+            }
+        });
     }
 
     private void updateProfileAwarenessRegistration() {
@@ -1116,7 +1141,7 @@ public class AssistantActivity extends Activity {
             enterImmersiveMode();
             if (!DebugPerformanceDiagnostics.isStaticUi()) {
                 updateBridgeStatus();
-                updateSystemStatus();
+                systemStatusController.update();
                 if (activeScreen == SCREEN_SETTINGS
                         && activeSettingsSection == SETTINGS_INPUT
                         && settingsContentContainer != null) {
@@ -1138,6 +1163,10 @@ public class AssistantActivity extends Activity {
 
     @Override
     public void onBackPressed() {
+        if (fullVirtualKeyboardView != null) {
+            dismissFullVirtualKeyboard(true);
+            return;
+        }
         if (dismissTopPanelOverlay()) {
             return;
         }
@@ -1174,17 +1203,248 @@ public class AssistantActivity extends Activity {
             rebuildContent();
             return;
         }
-        super.onBackPressed();
+        // Heimdall is an always-open lower-screen assistant. Android Back may close
+        // in-app layers, but it must never finish the base Activity; Settings owns Exit.
     }
 
     private void resetRightStickIfNeeded() {
         if (touchPadView != null) {
             String mode = TouchpadSettings.normalizeMode(touchpadSettings.mode);
             if (!TouchpadSettings.MODE_RIGHT_STICK.equals(mode)
-                    && !TouchpadSettings.MODE_RELATIVE_MOUSE.equals(mode)) {
+                    && !TouchpadSettings.MODE_RELATIVE_MOUSE.equals(mode)
+                    && !TouchpadSettings.MODE_VIRTUAL_MOUSE.equals(mode)) {
                 return;
             }
             touchPadView.recenterFromActivity();
+        }
+    }
+
+    private VirtualMouseDispatcher ensureVirtualMouseDispatcher(boolean reportErrors) {
+        if (reportErrors) {
+            virtualMouseReportErrors = true;
+        }
+        if (virtualMouseDispatcher == null) {
+            virtualMouseErrorShown = false;
+            final int generation = ++virtualMouseSessionGeneration;
+            virtualMouseDispatcher = new VirtualMouseDispatcher(
+                    this, () -> handleVirtualMouseUnavailable(generation));
+            virtualMouseDispatcher.start();
+        }
+        return virtualMouseDispatcher;
+    }
+
+    private void handleVirtualMouseUnavailable(int generation) {
+        if (generation != virtualMouseSessionGeneration) {
+            return;
+        }
+        boolean reportError = virtualMouseReportErrors;
+        closeVirtualMouseDispatcher();
+        if (touchPadView != null) {
+            touchPadView.clearVirtualMouseGesture();
+        }
+        if (reportError && !virtualMouseErrorShown) {
+            virtualMouseErrorShown = true;
+            showErrorAction(getString(R.string.virtual_mouse_unavailable));
+        }
+    }
+
+    private void closeVirtualMouseDispatcher() {
+        VirtualMouseDispatcher dispatcher = virtualMouseDispatcher;
+        virtualMouseDispatcher = null;
+        virtualMouseReportErrors = false;
+        virtualMouseSessionGeneration++;
+        if (dispatcher != null) {
+            dispatcher.close();
+        } else {
+            VirtualMouseDispatcher.destroyParkedDevice(this);
+        }
+    }
+
+    private void parkVirtualMouseDispatcher() {
+        VirtualMouseDispatcher dispatcher = virtualMouseDispatcher;
+        virtualMouseDispatcher = null;
+        virtualMouseReportErrors = false;
+        virtualMouseSessionGeneration++;
+        if (dispatcher != null) {
+            dispatcher.park();
+        }
+    }
+
+    private void closeVirtualMouseDispatcherIfUnused() {
+        if (!TouchpadSettings.MODE_VIRTUAL_MOUSE.equals(
+                TouchpadSettings.normalizeMode(touchpadSettings.mode))) {
+            closeVirtualMouseDispatcher();
+        }
+    }
+
+    private KeyboardInputSession ensureKeyboardInputSession() {
+        if (keyboardInputSession == null) {
+            keyboardInputErrorShown = false;
+            keyboardInputSession = new KeyboardInputSession(this,
+                    new KeyboardInputSession.Listener() {
+                @Override
+                public void onReady() {
+                    if (fullVirtualKeyboardView != null) {
+                        fullVirtualKeyboardView.setReady();
+                    }
+                }
+
+                @Override
+                public void onUnavailable() {
+                    keyboardInputSession = null;
+                    if (fullVirtualKeyboardView != null) {
+                        fullVirtualKeyboardView.setUnavailable();
+                    }
+                    if (!keyboardInputErrorShown) {
+                        keyboardInputErrorShown = true;
+                        showErrorAction(getString(R.string.virtual_keyboard_unavailable));
+                    }
+                }
+            });
+        }
+        return keyboardInputSession;
+    }
+
+    private void parkKeyboardInputSession() {
+        KeyboardInputSession session = keyboardInputSession;
+        keyboardInputSession = null;
+        if (session != null) {
+            session.park();
+        }
+    }
+
+    private void closeKeyboardInputSession() {
+        KeyboardInputSession session = keyboardInputSession;
+        keyboardInputSession = null;
+        if (session != null) {
+            session.close();
+        } else {
+            VirtualKeyboardDispatcher.destroyParkedDevice(this);
+        }
+    }
+
+    private void closeKeyboardInputSessionIfUnused() {
+        if (selectedProfile == null) {
+            closeKeyboardInputSession();
+            return;
+        }
+        for (WidgetLayout.Item item : selectedProfile.safeWidgetLayout().items) {
+            if (WidgetLayout.TYPE_KEYBOARD_PAD.equals(item.type)) {
+                return;
+            }
+        }
+        closeKeyboardInputSession();
+    }
+
+    private void openFullVirtualKeyboard() {
+        if (fullVirtualKeyboardView != null || fullVirtualKeyboardClosing
+                || overlayHost == null) {
+            return;
+        }
+        parkKeyboardInputSession();
+        FullVirtualKeyboardView view = new FullVirtualKeyboardView(this,
+                new FullVirtualKeyboardView.Listener() {
+                    @Override
+                    public void onPrepareInput() {
+                        ensureKeyboardInputSession().prepare();
+                    }
+
+                    @Override
+                    public void onKeyDown(Object token, int linuxKeyCode) {
+                        ensureKeyboardInputSession().holdKey(token, linuxKeyCode);
+                    }
+
+                    @Override
+                    public void onKeyUp(Object token) {
+                        if (keyboardInputSession != null) {
+                            keyboardInputSession.release(token);
+                        }
+                    }
+
+                    @Override
+                    public void onReleaseAll() {
+                        if (keyboardInputSession != null) {
+                            keyboardInputSession.releaseAll();
+                        }
+                    }
+
+                    @Override
+                    public void onMenuRequested() {
+                        showInformationPanel(getString(R.string.full_keyboard_menu_title),
+                                getString(R.string.full_keyboard_menu_message));
+                    }
+
+                    @Override
+                    public void onClose() {
+                        dismissFullVirtualKeyboard(true);
+                    }
+                });
+        fullVirtualKeyboardView = view;
+        setHeaderProfileInteractionEnabled(false);
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(-1, -1);
+        params.setMargins(dp(6), dp(HeimdallUi.HEIGHT_HEADER + 12), dp(6), dp(6));
+        overlayHost.addView(view, params);
+        applySystemGestureExclusion(view);
+        updateGameFocusProtection();
+        if (shouldAnimateUi()) {
+            view.setVisibility(View.INVISIBLE);
+            view.post(() -> {
+                if (fullVirtualKeyboardView != view || view.getParent() == null) return;
+                view.setVisibility(View.VISIBLE);
+                view.setTranslationY(Math.max(view.getHeight(), dp(240)));
+                trackAnimatedView(view);
+                view.animate().translationY(0f)
+                        .setDuration(FULL_KEYBOARD_ENTER_MS)
+                        .setInterpolator(UI_EASE_OUT)
+                        .withEndAction(() -> finishAnimatedView(view))
+                        .start();
+            });
+        }
+        view.prepare();
+    }
+
+    private void dismissFullVirtualKeyboard(boolean animate) {
+        FullVirtualKeyboardView view = fullVirtualKeyboardView;
+        if (view == null) return;
+        view.releaseForDismiss();
+        parkKeyboardInputSession();
+        closeKeyboardInputSessionIfUnused();
+        setHeaderProfileInteractionEnabled(true);
+        view.animate().cancel();
+        finishAnimatedView(view);
+        if (!animate || !shouldAnimateUi() || view.getParent() == null) {
+            removeFullVirtualKeyboard(view);
+            return;
+        }
+        if (fullVirtualKeyboardClosing) return;
+        fullVirtualKeyboardClosing = true;
+        trackAnimatedView(view);
+        view.animate().translationY(Math.max(view.getHeight(), dp(240)))
+                .setDuration(FULL_KEYBOARD_EXIT_MS)
+                .setInterpolator(UI_EASE_OUT)
+                .withEndAction(() -> removeFullVirtualKeyboard(view))
+                .start();
+    }
+
+    private void removeFullVirtualKeyboard(FullVirtualKeyboardView view) {
+        view.animate().cancel();
+        finishAnimatedView(view);
+        if (view.getParent() instanceof ViewGroup) {
+            ((ViewGroup) view.getParent()).removeView(view);
+        }
+        if (fullVirtualKeyboardView == view) {
+            fullVirtualKeyboardView = null;
+        }
+        fullVirtualKeyboardClosing = false;
+        updateGameFocusProtection();
+    }
+
+    private void setHeaderProfileInteractionEnabled(boolean enabled) {
+        if (profileIconView != null) {
+            profileIconView.setClickable(enabled);
+        }
+        if (profileTitle != null) {
+            profileTitle.setClickable(enabled);
         }
     }
 
@@ -1194,141 +1454,6 @@ public class AssistantActivity extends Activity {
         filter.addAction(CoordinateCaptureActivity.ACTION_REGION_PREVIEW);
         filter.addAction(CoordinateCaptureActivity.ACTION_REGION_CANCELLED);
         registerReceiver(captureReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
-    }
-
-    private void startStatusUpdates() {
-        updateSystemStatus();
-        if (DebugPerformanceDiagnostics.isStaticUi() || statusReceiverRegistered) {
-            return;
-        }
-        IntentFilter filter = new IntentFilter(Intent.ACTION_TIME_TICK);
-        filter.addAction(Intent.ACTION_TIME_CHANGED);
-        filter.addAction(Intent.ACTION_TIMEZONE_CHANGED);
-        filter.addAction(Intent.ACTION_BATTERY_CHANGED);
-        filter.addAction(ConnectivityManager.CONNECTIVITY_ACTION);
-        registerReceiver(statusReceiver, filter);
-        statusReceiverRegistered = true;
-    }
-
-    private void stopStatusUpdates() {
-        if (!statusReceiverRegistered) {
-            return;
-        }
-        unregisterReceiver(statusReceiver);
-        statusReceiverRegistered = false;
-    }
-
-    private void updateSystemStatus() {
-        if (systemTimeText == null || systemBatteryText == null || systemNetworkIcon == null || systemBatteryIcon == null) {
-            return;
-        }
-        String time = new SimpleDateFormat("h:mm a", Locale.US).format(new Date());
-        if (!time.equals(lastSystemTime)) {
-            systemTimeText.setText(time);
-            lastSystemTime = time;
-        }
-        String network = networkLabel();
-        if (!network.equals(lastNetworkLabel)) {
-            systemNetworkIcon.setImageResource(networkIconForLabel(network));
-            systemNetworkIcon.setAlpha("No net".equals(network) ? 0.55f : 1f);
-            lastNetworkLabel = network;
-        }
-        BatterySnapshot battery = batterySnapshot();
-        systemBatteryIcon.setBattery(battery.percent, battery.charging);
-        String batteryLabel = battery.label();
-        if (!batteryLabel.equals(lastBatteryLabel)) {
-            systemBatteryText.setText(batteryLabel);
-            lastBatteryLabel = batteryLabel;
-        }
-    }
-
-    private String batteryLabel() {
-        return batterySnapshot().label();
-    }
-
-    private BatterySnapshot batterySnapshot() {
-        Intent intent = registerReceiver(null, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
-        if (intent == null) {
-            return new BatterySnapshot(-1, false);
-        }
-        int level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1);
-        int scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, -1);
-        if (level < 0 || scale <= 0) {
-            return new BatterySnapshot(-1, false);
-        }
-        int percent = Math.round(level * 100f / scale);
-        int status = intent.getIntExtra(BatteryManager.EXTRA_STATUS, -1);
-        boolean charging = status == BatteryManager.BATTERY_STATUS_CHARGING
-                || status == BatteryManager.BATTERY_STATUS_FULL;
-        return new BatterySnapshot(percent, charging);
-    }
-
-    private int networkIconForLabel(String label) {
-        if ("Wi-Fi".equals(label)) {
-            return R.drawable.ic_status_wifi;
-        }
-        return R.drawable.ic_status_wifi_off;
-    }
-
-    private int batteryIconFor(int percent, boolean charging) {
-        if (charging) {
-            return R.drawable.ic_status_battery_charging;
-        }
-        if (percent < 0) {
-            return R.drawable.ic_status_battery_25;
-        }
-        if (percent <= 30) {
-            return R.drawable.ic_status_battery_25;
-        }
-        if (percent <= 60) {
-            return R.drawable.ic_status_battery_50;
-        }
-        if (percent <= 85) {
-            return R.drawable.ic_status_battery_75;
-        }
-        return R.drawable.ic_status_battery;
-    }
-
-    private String networkLabel() {
-        ConnectivityManager manager = (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
-        if (manager == null) {
-            return "No net";
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            NetworkCapabilities capabilities = manager.getNetworkCapabilities(manager.getActiveNetwork());
-            if (capabilities == null) {
-                return "No net";
-            }
-            if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
-                return "Wi-Fi";
-            }
-            if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) {
-                return "Cell";
-            }
-            if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)) {
-                return "LAN";
-            }
-            return "Net";
-        }
-        return manager.getActiveNetworkInfo() != null && manager.getActiveNetworkInfo().isConnected()
-                ? "Net" : "No net";
-    }
-
-    private static final class BatterySnapshot {
-        final int percent;
-        final boolean charging;
-
-        BatterySnapshot(int percent, boolean charging) {
-            this.percent = percent;
-            this.charging = charging;
-        }
-
-        String label() {
-            if (percent < 0) {
-                return "--%";
-            }
-            return percent + "%" + (charging ? "+" : "");
-        }
     }
 
     private void enterImmersiveMode() {
@@ -1414,25 +1539,28 @@ public class AssistantActivity extends Activity {
         systemStatus.setGravity(Gravity.CENTER_VERTICAL | Gravity.RIGHT);
         header.addView(systemStatus, new LinearLayout.LayoutParams(0, -1, 1));
 
-        systemTimeText = text("", 13, TEXT, true);
+        TextView systemTimeText = text("", 13, TEXT, true);
         systemTimeText.setGravity(Gravity.CENTER_VERTICAL | Gravity.RIGHT);
         systemStatus.addView(systemTimeText, new LinearLayout.LayoutParams(-2, -1));
 
-        systemNetworkIcon = new ImageView(this);
+        ImageView systemNetworkIcon = new ImageView(this);
         systemNetworkIcon.setImageResource(R.drawable.ic_status_wifi);
         systemNetworkIcon.setColorFilter(HeimdallUi.textColor(this));
         LinearLayout.LayoutParams networkParams = new LinearLayout.LayoutParams(dp(18), dp(18));
         networkParams.setMargins(dp(10), 0, dp(6), 0);
         systemStatus.addView(systemNetworkIcon, networkParams);
 
-        systemBatteryIcon = new BatteryStatusView(this);
+        SystemStatusController.BatteryStatusView systemBatteryIcon =
+                systemStatusController.createBatteryView();
         LinearLayout.LayoutParams batteryIconParams = new LinearLayout.LayoutParams(dp(20), dp(20));
         batteryIconParams.setMargins(dp(2), 0, dp(4), 0);
         systemStatus.addView(systemBatteryIcon, batteryIconParams);
 
-        systemBatteryText = text("", 13, TEXT, true);
+        TextView systemBatteryText = text("", 13, TEXT, true);
         systemBatteryText.setGravity(Gravity.CENTER_VERTICAL | Gravity.RIGHT);
         systemStatus.addView(systemBatteryText, new LinearLayout.LayoutParams(-2, -1));
+        systemStatusController.bind(systemTimeText, systemNetworkIcon,
+                systemBatteryIcon, systemBatteryText);
 
         contentHost = new FrameLayout(this);
         currentContentPage = createContentPage(activeScreen);
@@ -1503,6 +1631,9 @@ public class AssistantActivity extends Activity {
     private View createMainContent() {
         releaseMagnifierViews();
         releaseCanvasViews();
+        if (activeScreen != SCREEN_MAIN) {
+            parkKeyboardInputSession();
+        }
         if (activeScreen == SCREEN_SETTINGS) {
             macroGrids.clear();
             touchPadView = null;
@@ -1523,6 +1654,9 @@ public class AssistantActivity extends Activity {
         }
         WidgetHostLayout widgetGrid = new WidgetHostLayout(this, currentWidgetLayout());
         addWidgetsToGrid(widgetGrid, currentWidgetLayout());
+        if (touchPadView == null) {
+            closeVirtualMouseDispatcher();
+        }
         return widgetGrid;
     }
 
@@ -1565,9 +1699,17 @@ public class AssistantActivity extends Activity {
         if (WidgetLayout.TYPE_MACRO_GROUP.equals(type)) {
             return createMacroWidget(item);
         }
+        if (WidgetLayout.TYPE_KEYBOARD_PAD.equals(type)) {
+            return createKeyboardPadWidget(item);
+        }
         if (WidgetLayout.TYPE_TOUCHPAD.equals(type)) {
+            FrameLayout touchPadHost = new FrameLayout(this);
             touchPadView = new TouchPadView(this);
-            return touchPadView;
+            touchPadHost.addView(touchPadView,
+                    new FrameLayout.LayoutParams(-1, -1));
+            touchPadHost.addView(touchPadView.virtualMouseFeedbackView(),
+                    new FrameLayout.LayoutParams(-1, -1));
+            return touchPadHost;
         }
         if (WidgetLayout.TYPE_STATUS.equals(type)) {
             return createStatusWidget();
@@ -1602,7 +1744,7 @@ public class AssistantActivity extends Activity {
             return view;
         }
         if (WidgetLayout.TYPE_QUICK_ACTIONS.equals(type)) {
-            return createQuickActionsWidget();
+            return createQuickActionsWidget(item);
         }
         if (WidgetLayout.TYPE_MAGNIFIER.equals(type)) {
             UpperScreenMagnifierView view = new UpperScreenMagnifierView(this, item,
@@ -1644,6 +1786,50 @@ public class AssistantActivity extends Activity {
         return macroGrid;
     }
 
+    private View createKeyboardPadWidget(WidgetLayout.Item item) {
+        boolean interactionEnabled = !hasUnsavedWidgetLayout();
+        return new KeyboardPadView(this, item.safeKeyboardPad(), false,
+                interactionEnabled, new KeyboardPadView.Listener() {
+                    @Override
+                    public void onPress(KeyboardPad.Key key) {
+                        ensureKeyboardInputSession().press(key.binding);
+                    }
+
+                    @Override
+                    public void onHoldStart(Object token, KeyboardPad.Key key) {
+                        ensureKeyboardInputSession().hold(token, key.binding);
+                    }
+
+                    @Override
+                    public void onHoldEnd(Object token) {
+                        if (keyboardInputSession != null) {
+                            keyboardInputSession.release(token);
+                        }
+                    }
+
+                    @Override
+                    public void onHeimdallAction(String actionId) {
+                        executeHeimdallAction(actionId);
+                    }
+
+                    @Override
+                    public void onEditRequested() {
+                        parkKeyboardInputSession();
+                        showKeyboardPadEditor(item);
+                    }
+
+                    @Override
+                    public void onKeyEditRequested(KeyboardPad.Key key) {
+                        // Runtime key surfaces never open per-key editing.
+                    }
+
+                    @Override
+                    public void onInteractionBlocked() {
+                        showErrorAction(getString(R.string.keyboard_pad_save_layout_first));
+                    }
+                });
+    }
+
     private View createStatusWidget() {
         statusText = new TrackedTextView("Status module");
         statusText.setTextSize(HeimdallUi.TYPE_HELP);
@@ -1655,81 +1841,267 @@ public class AssistantActivity extends Activity {
         return statusText;
     }
 
-    private View createQuickActionsWidget() {
+    private View createQuickActionsWidget(WidgetLayout.Item item) {
         LinearLayout root = new TrackedLinearLayout("Quick Actions");
         root.setOrientation(LinearLayout.VERTICAL);
         HeimdallUi.applyQuickActionPanel(this, root);
+        QuickActionsConfig config = item.safeQuickActions();
+        ((TrackedLinearLayout) root).setDelayedEditAction(
+                () -> showQuickActionsEditor(item));
 
         LinearLayout actions = new LinearLayout(this);
         actions.setOrientation(LinearLayout.HORIZONTAL);
         root.addView(actions, new LinearLayout.LayoutParams(-1, 0, 1));
-        QuickActionButtonView screenshot = addQuickActionButton(actions,
-                R.drawable.ic_camera, getString(R.string.quick_action_screenshot),
-                QuickActionButtonView.STATE_IDLE, this::captureUpperScreen);
-        quickScreenshotButtons.add(screenshot);
-        View actionDivider = new View(this);
-        actionDivider.setBackgroundColor(HeimdallUi.quickActionDivider(this));
-        LinearLayout.LayoutParams actionDividerParams =
-                new LinearLayout.LayoutParams(dp(1), -1);
-        actionDividerParams.setMargins(0, dp(7), 0, dp(7));
-        actions.addView(actionDivider, actionDividerParams);
-        boolean projectionBusy = ScreenRecordingService.isRecording()
-                || UpperScreenProjectionService.isActiveOrStarting();
-        QuickActionButtonView record = addQuickActionButton(actions,
-                projectionBusy ? R.drawable.ic_stop : R.drawable.ic_video,
-                quickRecordActionDescription(), quickRecordVisualState(),
-                this::toggleUpperScreenRecording);
-        quickRecordButtons.add(record);
+        int renderedActions = 0;
+        for (String actionId : config.actions) {
+            String normalized = HeimdallActionCatalog.normalizeQuickAction(actionId);
+            if (HeimdallActionCatalog.ACTION_NONE.equals(normalized)) continue;
+            if (renderedActions > 0) {
+                View actionDivider = new View(this);
+                actionDivider.setBackgroundColor(HeimdallUi.quickActionDivider(this));
+                LinearLayout.LayoutParams actionDividerParams =
+                        new LinearLayout.LayoutParams(dp(1), -1);
+                actionDividerParams.setMargins(0, dp(7), 0, dp(7));
+                actions.addView(actionDivider, actionDividerParams);
+            }
+            HeimdallActionCatalog.Entry entry =
+                    HeimdallActionCatalog.findQuickAction(normalized);
+            int icon = entry.iconRes;
+            String description = getString(entry.labelRes);
+            int visualState = QuickActionButtonView.STATE_IDLE;
+            if (HeimdallActionCatalog.ACTION_SCREEN_RECORDING.equals(normalized)) {
+                boolean projectionBusy = ScreenRecordingService.isRecording()
+                        || UpperScreenProjectionService.isActiveOrStarting();
+                icon = projectionBusy ? R.drawable.ic_stop : R.drawable.ic_video;
+                description = quickRecordActionDescription();
+                visualState = quickRecordVisualState();
+            }
+            QuickActionButtonView button = addQuickActionButton(actions, icon,
+                    description, visualState, () -> executeHeimdallAction(normalized));
+            button.setDelayedEditAction(() -> showQuickActionsEditor(item));
+            if (HeimdallActionCatalog.ACTION_SCREENSHOT.equals(normalized)) {
+                quickScreenshotButtons.add(button);
+            } else if (HeimdallActionCatalog.ACTION_SCREEN_RECORDING.equals(normalized)) {
+                quickRecordButtons.add(button);
+            }
+            renderedActions++;
+        }
 
-        View volumeDivider = new View(this);
-        volumeDivider.setBackgroundColor(HeimdallUi.quickActionDivider(this));
-        LinearLayout.LayoutParams volumeDividerParams =
-                new LinearLayout.LayoutParams(-1, dp(1));
-        volumeDividerParams.setMargins(dp(7), 0, dp(7), 0);
-        root.addView(volumeDivider, volumeDividerParams);
+        if (config.mediaVolume) {
+            View volumeDivider = new View(this);
+            volumeDivider.setBackgroundColor(HeimdallUi.quickActionDivider(this));
+            LinearLayout.LayoutParams volumeDividerParams =
+                    new LinearLayout.LayoutParams(-1, dp(1));
+            volumeDividerParams.setMargins(dp(7), 0, dp(7), 0);
+            root.addView(volumeDivider, volumeDividerParams);
 
-        LinearLayout volumeRow = new LinearLayout(this);
-        volumeRow.setOrientation(LinearLayout.HORIZONTAL);
-        volumeRow.setGravity(Gravity.CENTER_VERTICAL);
-        volumeRow.setPadding(dp(9), 0, dp(9), 0);
-        LinearLayout.LayoutParams volumeParams = new LinearLayout.LayoutParams(-1, dp(38));
-        root.addView(volumeRow, volumeParams);
+            LinearLayout volumeRow = new LinearLayout(this);
+            volumeRow.setOrientation(LinearLayout.HORIZONTAL);
+            volumeRow.setGravity(Gravity.CENTER_VERTICAL);
+            volumeRow.setPadding(dp(9), 0, dp(9), 0);
+            LinearLayout.LayoutParams volumeParams = new LinearLayout.LayoutParams(-1, dp(38));
+            root.addView(volumeRow, volumeParams);
 
-        ImageView volumeIcon = new ImageView(this);
-        volumeIcon.setImageResource(R.drawable.ic_volume_up);
-        volumeIcon.setColorFilter(HeimdallUi.isPearl(this) ? 0xFF536274 : 0xFFBFD0E2);
-        volumeIcon.setContentDescription(getString(R.string.quick_action_media_volume));
-        volumeRow.addView(volumeIcon, new LinearLayout.LayoutParams(dp(24), dp(24)));
+            ImageView volumeIcon = new ImageView(this);
+            volumeIcon.setImageResource(R.drawable.ic_volume_up);
+            volumeIcon.setColorFilter(HeimdallUi.isPearl(this) ? 0xFF536274 : 0xFFBFD0E2);
+            volumeIcon.setContentDescription(getString(R.string.quick_action_media_volume));
+            volumeRow.addView(volumeIcon, new LinearLayout.LayoutParams(dp(24), dp(24)));
 
-        AudioManager audio = (AudioManager) getSystemService(AUDIO_SERVICE);
-        QuickVolumeSeekBar volume = new QuickVolumeSeekBar(this);
-        int max = audio == null ? 15 : Math.max(1, audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC));
-        int current = audio == null ? 0 : audio.getStreamVolume(AudioManager.STREAM_MUSIC);
-        volume.setMax(max);
-        volume.setProgress(current);
-        volumeIcon.setAlpha(0.55f + 0.45f * current / (float) max);
-        volume.setContentDescription(getString(R.string.quick_action_adjust_media_volume));
-        volume.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-            @Override
-            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                if (fromUser && audio != null) {
-                    audio.setStreamVolume(AudioManager.STREAM_MUSIC, progress, 0);
+            AudioManager audio = (AudioManager) getSystemService(AUDIO_SERVICE);
+            QuickVolumeSeekBar volume = new QuickVolumeSeekBar(this);
+            int max = audio == null ? 15
+                    : Math.max(1, audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC));
+            int current = audio == null ? 0
+                    : audio.getStreamVolume(AudioManager.STREAM_MUSIC);
+            volume.setMax(max);
+            volume.setProgress(current);
+            volumeIcon.setAlpha(0.55f + 0.45f * current / (float) max);
+            volume.setContentDescription(getString(R.string.quick_action_adjust_media_volume));
+            volume.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+                @Override
+                public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                    if (fromUser && audio != null) {
+                        audio.setStreamVolume(AudioManager.STREAM_MUSIC, progress, 0);
+                    }
+                    volumeIcon.setAlpha(0.55f + 0.45f * progress / (float) max);
                 }
-                volumeIcon.setAlpha(0.55f + 0.45f * progress / (float) max);
-            }
 
-            @Override
-            public void onStartTrackingTouch(SeekBar seekBar) {
-            }
+                @Override
+                public void onStartTrackingTouch(SeekBar seekBar) {
+                }
 
-            @Override
-            public void onStopTrackingTouch(SeekBar seekBar) {
+                @Override
+                public void onStopTrackingTouch(SeekBar seekBar) {
+                }
+            });
+            LinearLayout.LayoutParams sliderParams =
+                    new LinearLayout.LayoutParams(0, dp(38), 1);
+            sliderParams.setMargins(dp(7), 0, 0, 0);
+            volumeRow.addView(volume, sliderParams);
+        }
+        return root;
+    }
+
+    private void executeHeimdallAction(String actionId) {
+        String normalized = HeimdallActionCatalog.normalizeQuickAction(actionId);
+        if (HeimdallActionCatalog.ACTION_SCREENSHOT.equals(normalized)) {
+            captureUpperScreen();
+        } else if (HeimdallActionCatalog.ACTION_SCREEN_RECORDING.equals(normalized)) {
+            toggleUpperScreenRecording();
+        } else if (HeimdallActionCatalog.ACTION_OPEN_VIRTUAL_KEYBOARD.equals(normalized)) {
+            openFullVirtualKeyboard();
+        }
+    }
+
+    private void showQuickActionsEditor(WidgetLayout.Item item) {
+        if (item == null || hasUnsavedWidgetLayout()) {
+            showErrorAction(getString(R.string.quick_actions_save_layout_first));
+            return;
+        }
+        WidgetLayout.Item profileItem = resolveProfileWidgetItem(
+                item, WidgetLayout.TYPE_QUICK_ACTIONS);
+        if (profileItem == null) {
+            showErrorAction(getString(R.string.quick_actions_save_layout_first));
+            return;
+        }
+        QuickActionsConfig draft = item.safeQuickActions().copy();
+        final PanelOverlay[] holder = new PanelOverlay[1];
+        LinearLayout shell = new LinearLayout(this);
+        shell.setOrientation(LinearLayout.VERTICAL);
+        shell.setPadding(dp(12), dp(8), dp(12), dp(8));
+        shell.setBackground(HeimdallUi.isPearl(this)
+                ? HeimdallUi.cncRaised(this, 14, false, false)
+                : HeimdallUi.glass(this, 0xFA0B111B, 0xFF070A10,
+                        0x886A829C, 0x44344150, 14, 2));
+
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        shell.addView(header, new LinearLayout.LayoutParams(-1, dp(44)));
+        header.addView(text(getString(R.string.quick_actions_editor_title),
+                HeimdallUi.TYPE_EDITOR_TITLE, TEXT, true),
+                new LinearLayout.LayoutParams(0, -1, 1));
+        Button close = gridCloseButton(() -> {
+            if (holder[0] != null) dismissPanelAnimated(holder[0]);
+        });
+        close.setContentDescription(getString(R.string.common_close));
+        header.addView(close, new LinearLayout.LayoutParams(dp(42), dp(38)));
+
+        TextView help = text(getString(R.string.quick_actions_editor_help),
+                HeimdallUi.TYPE_META, MUTED, false);
+        help.setGravity(Gravity.CENTER_VERTICAL);
+        help.setSingleLine(true);
+        shell.addView(help, new LinearLayout.LayoutParams(-1, dp(28)));
+
+        for (int slot = 0; slot < QuickActionsConfig.MAX_SLOTS; slot++) {
+            final int slotIndex = slot;
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(-1, dp(44));
+            rowParams.setMargins(0, dp(2), 0, dp(2));
+            shell.addView(row, rowParams);
+            TextView slotLabel = text(getString(R.string.quick_actions_slot, slot + 1),
+                    HeimdallUi.TYPE_LABEL, TEXT, true);
+            row.addView(slotLabel, new LinearLayout.LayoutParams(dp(78), -1));
+            HeimdallActionCatalog.Entry current =
+                    HeimdallActionCatalog.findQuickAction(draft.actionAt(slot));
+            Button actionButton = editorButton(getString(current.labelRes), () -> {});
+            actionButton.setTextSize(HeimdallUi.TYPE_BUTTON_COMPACT);
+            actionButton.setOnClickListener(view -> showQuickActionPicker(
+                    draft, slotIndex, actionButton));
+            HeimdallUi.applyChoiceButton(this, actionButton,
+                    !HeimdallActionCatalog.ACTION_NONE.equals(current.id));
+            row.addView(actionButton, new LinearLayout.LayoutParams(0, -1, 1));
+        }
+
+        CheckBox mediaVolume = new CheckBox(this);
+        mediaVolume.setText(R.string.quick_actions_media_volume_enabled);
+        mediaVolume.setChecked(draft.mediaVolume);
+        mediaVolume.setTextSize(12);
+        styleCheckBox(mediaVolume);
+        shell.addView(mediaVolume, new LinearLayout.LayoutParams(-1, dp(42)));
+
+        View footerDivider = new View(this);
+        footerDivider.setBackgroundColor(
+                HeimdallUi.isPearl(this) ? 0x287B8792 : 0x445F7C9A);
+        shell.addView(footerDivider, new LinearLayout.LayoutParams(-1, dp(1)));
+
+        LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        actions.setPadding(0, dp(5), 0, 0);
+        shell.addView(actions, new LinearLayout.LayoutParams(-1, dp(50)));
+        actions.addView(editorButton(getString(R.string.common_cancel), () -> {
+            if (holder[0] != null) dismissPanelAnimated(holder[0]);
+        }));
+        Button save = editorButton(getString(R.string.common_save), () -> {
+            draft.mediaVolume = mediaVolume.isChecked();
+            QuickActionsConfig saved = draft.copy();
+            profileItem.quickActions = saved.copy();
+            item.quickActions = saved.copy();
+            mirrorQuickActionsIntoEquivalentDraft(profileItem, saved);
+            ProfileStore.saveProfiles(this, profiles);
+            showAction(getString(R.string.quick_actions_saved));
+            if (holder[0] != null) {
+                dismissPanelAnimated(holder[0], this::rebuildContent);
+            } else {
+                rebuildContent();
             }
         });
-        LinearLayout.LayoutParams sliderParams = new LinearLayout.LayoutParams(0, dp(38), 1);
-        sliderParams.setMargins(dp(7), 0, 0, 0);
-        volumeRow.addView(volume, sliderParams);
-        return root;
+        HeimdallUi.applyPrimaryActionButton(this, save);
+        actions.addView(save);
+
+        DisplayMetrics metrics = getResources().getDisplayMetrics();
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
+                Math.min(dp(560), metrics.widthPixels - dp(56)),
+                ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER);
+        holder[0] = showPanelOverlay(shell, params, null);
+    }
+
+    private void showQuickActionPicker(QuickActionsConfig draft, int slot,
+            Button valueButton) {
+        final PanelOverlay[] holder = new PanelOverlay[1];
+        LinearLayout shell = new LinearLayout(this);
+        shell.setOrientation(LinearLayout.VERTICAL);
+        shell.setPadding(dp(12), dp(10), dp(12), dp(10));
+        shell.setBackground(HeimdallUi.isPearl(this)
+                ? HeimdallUi.cncRaised(this, 12, false, false)
+                : HeimdallUi.glass(this, 0xF00B111B, 0xFA070A10,
+                        0x884EA1FF, 0x44344150, 12, 1));
+        LinearLayout header = new LinearLayout(this);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        shell.addView(header, new LinearLayout.LayoutParams(-1, dp(44)));
+        header.addView(text(getString(R.string.quick_actions_picker_title),
+                HeimdallUi.TYPE_PAGE_TITLE, TEXT, true),
+                new LinearLayout.LayoutParams(0, -1, 1));
+        Button close = gridCloseButton(() -> {
+            if (holder[0] != null) dismissPanelAnimated(holder[0]);
+        });
+        header.addView(close, new LinearLayout.LayoutParams(dp(42), dp(38)));
+        LinearLayout list = new LinearLayout(this);
+        list.setOrientation(LinearLayout.VERTICAL);
+        shell.addView(list, new LinearLayout.LayoutParams(-1, -2));
+        for (HeimdallActionCatalog.Entry entry : HeimdallActionCatalog.quickActionEntries()) {
+            Button choice = editorButton(getString(entry.labelRes), () -> {
+                draft.setActionAt(slot, entry.id);
+                valueButton.setText(entry.labelRes);
+                HeimdallUi.applyChoiceButton(this, valueButton,
+                        !HeimdallActionCatalog.ACTION_NONE.equals(entry.id));
+                if (holder[0] != null) dismissPanelAnimated(holder[0]);
+            });
+            HeimdallUi.applyChoiceButton(this, choice,
+                    entry.id.equals(draft.actionAt(slot)));
+            LinearLayout.LayoutParams choiceParams =
+                    new LinearLayout.LayoutParams(-1, dp(44));
+            choiceParams.setMargins(0, dp(2), 0, dp(2));
+            list.addView(choice, choiceParams);
+        }
+        DisplayMetrics metrics = getResources().getDisplayMetrics();
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
+                Math.min(dp(500), metrics.widthPixels - dp(72)),
+                ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER);
+        holder[0] = showPanelOverlay(shell, params, null);
     }
 
     private void captureUpperScreen() {
@@ -2535,6 +2907,64 @@ public class AssistantActivity extends Activity {
         return profileItem;
     }
 
+    /**
+     * Resolves an Item rendered from an equivalent Grid draft back to the saved Profile Item.
+     * Component editors may persist their own nested data, but never commit draft Grid geometry.
+     */
+    private WidgetLayout.Item resolveProfileWidgetItem(
+            WidgetLayout.Item requestedItem, String expectedType) {
+        if (selectedProfile == null || requestedItem == null
+                || !expectedType.equals(requestedItem.type)
+                || hasUnsavedWidgetLayout()) {
+            return null;
+        }
+        WidgetLayout profileLayout = selectedProfile.safeWidgetLayout();
+        if (profileLayout.items.contains(requestedItem)) {
+            return requestedItem;
+        }
+        if (draftWidgetLayout == null || !draftWidgetLayout.items.contains(requestedItem)) {
+            return null;
+        }
+        int itemIndex = draftWidgetLayout.items.indexOf(requestedItem);
+        if (itemIndex < 0 || itemIndex >= profileLayout.items.size()) {
+            return null;
+        }
+        WidgetLayout.Item candidate = profileLayout.items.get(itemIndex);
+        return expectedType.equals(candidate.type) ? candidate : null;
+    }
+
+    private WidgetLayout.Item equivalentDraftWidgetItem(
+            WidgetLayout.Item profileItem, String expectedType) {
+        if (selectedProfile == null || profileItem == null || draftWidgetLayout == null) {
+            return null;
+        }
+        WidgetLayout profileLayout = selectedProfile.safeWidgetLayout();
+        int itemIndex = profileLayout.items.indexOf(profileItem);
+        if (itemIndex < 0 || itemIndex >= draftWidgetLayout.items.size()) {
+            return null;
+        }
+        WidgetLayout.Item candidate = draftWidgetLayout.items.get(itemIndex);
+        return expectedType.equals(candidate.type) ? candidate : null;
+    }
+
+    private void mirrorQuickActionsIntoEquivalentDraft(
+            WidgetLayout.Item profileItem, QuickActionsConfig saved) {
+        WidgetLayout.Item draftItem = equivalentDraftWidgetItem(
+                profileItem, WidgetLayout.TYPE_QUICK_ACTIONS);
+        if (draftItem != null) {
+            draftItem.quickActions = saved.copy();
+        }
+    }
+
+    private void mirrorKeyboardPadIntoEquivalentDraft(
+            WidgetLayout.Item profileItem, KeyboardPad saved) {
+        WidgetLayout.Item draftItem = equivalentDraftWidgetItem(
+                profileItem, WidgetLayout.TYPE_KEYBOARD_PAD);
+        if (draftItem != null) {
+            draftItem.keyboardPad = saved.copy();
+        }
+    }
+
     private void cancelPendingCanvasImport() {
         if (pendingCanvasImportRequest != null) {
             pendingCanvasImportRequest.cancel();
@@ -2623,6 +3053,7 @@ public class AssistantActivity extends Activity {
         editingInteractiveMapInline = false;
         editingMapMarkerInline = null;
         creatingMapMarkerInline = false;
+        parkKeyboardInputSession();
         mapViewerFullscreen = false;
         guideReaderFullscreen = false;
         mapWebCurrentUrl = null;
@@ -2630,6 +3061,8 @@ public class AssistantActivity extends Activity {
         selectedProfileIndex = index;
         selectedProfile = profiles.get(index);
         touchpadSettings = selectedProfile.safeTouchpadSettings();
+        closeVirtualMouseDispatcherIfUnused();
+        closeKeyboardInputSessionIfUnused();
         ProfileStore.saveSelectedIndex(this, selectedProfileIndex);
         rebuildContent();
     }
@@ -2644,6 +3077,8 @@ public class AssistantActivity extends Activity {
                 || captureInProgress
                 || magnifierRegionCaptureInProgress
                 || canvasOverlayActive
+                || keyboardPadEditorActive
+                || fullVirtualKeyboardView != null
                 || pendingCanvasImportProfile != null
                 || pendingCanvasImportRequest != null
                 || (widgetGridDialog != null && widgetGridDialog.isShowing())) {
@@ -2785,11 +3220,12 @@ public class AssistantActivity extends Activity {
         float ratio = priority == HeimdallUi.MACRO_UTILITY
                 ? HeimdallUi.MACRO_ICON_SHARE_UTILITY
                 : HeimdallUi.MACRO_ICON_SHARE_STANDARD;
-        int size = height > 0 && width > 0
+        int baseSize = height > 0 && width > 0
                 ? Math.max(dp(HeimdallUi.MACRO_ICON_MIN),
                         Math.min(dp(HeimdallUi.MACRO_ICON_MAX),
                                 Math.round(Math.min(width, height) * ratio)))
                 : dp(HeimdallUi.MACRO_ICON_MIN);
+        int size = Math.round(baseSize * HeimdallUi.MACRO_ICON_SIZE_SCALE);
         if (button instanceof MacroButtonView) {
             ((MacroButtonView) button).setMacroIcon(icon, color, size);
             return;
@@ -2809,11 +3245,32 @@ public class AssistantActivity extends Activity {
     }
 
     private void runMacro(Macro macro) {
-        if (statusText != null) {
-            statusText.setText(getString(R.string.status_macro_running, macro.label));
-        }
-        InputBridge.dispatch(this, macro, isEnhancedTouchModeActive(),
+        InputBridge.MacroDispatchResult result = InputBridge.dispatch(
+                this, macro, isEnhancedTouchModeActive(),
                 shouldProtectThorMappingFromControllerMacros(), inputStatusCallback);
+        int statusRes;
+        switch (result) {
+            case STARTED:
+                statusRes = R.string.status_macro_running;
+                break;
+            case CANCEL_REQUESTED:
+                statusRes = R.string.status_macro_cancel_requested;
+                break;
+            case CANCEL_PENDING:
+                statusRes = R.string.status_macro_cancel_pending;
+                break;
+            case IGNORED_REPEAT:
+                statusRes = R.string.status_macro_repeat_ignored;
+                break;
+            case BUSY:
+                statusRes = R.string.status_macro_busy;
+                break;
+            default:
+                return;
+        }
+        if (statusText != null) {
+            statusText.setText(getString(statusRes, macro.label));
+        }
     }
 
     private boolean isEnhancedTouchModeActive() {
@@ -2906,6 +3363,13 @@ public class AssistantActivity extends Activity {
                     } else {
                         openEditor.run();
                     }
+                }, () -> {
+                    Runnable openClonePicker = () -> showMacroCloneTargetPicker(macro, index);
+                    if (overlayHolder[0] != null) {
+                        dismissPanelAnimated(overlayHolder[0], openClonePicker);
+                    } else {
+                        openClonePicker.run();
+                    }
                 });
                 row.addView(card, cardParams);
             }
@@ -2937,7 +3401,8 @@ public class AssistantActivity extends Activity {
         overlayHolder[0] = showPanelOverlay(shell, params, null);
     }
 
-    private View macroEditorPickerCard(Macro macro, int index, Runnable action) {
+    private View macroEditorPickerCard(Macro macro, int index,
+            Runnable editAction, Runnable cloneAction) {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.HORIZONTAL);
         card.setGravity(Gravity.CENTER_VERTICAL);
@@ -2948,7 +3413,7 @@ public class AssistantActivity extends Activity {
                         0x665F7C9A, 0x33344150, HeimdallUi.RADIUS_CARD, 1));
         card.setClickable(true);
         card.setFocusable(true);
-        card.setOnClickListener(view -> action.run());
+        card.setOnClickListener(view -> editAction.run());
 
         ImageView icon = new ImageView(this);
         icon.setScaleType(ImageView.ScaleType.FIT_CENTER);
@@ -2984,15 +3449,163 @@ public class AssistantActivity extends Activity {
         meta.setEllipsize(android.text.TextUtils.TruncateAt.END);
         labels.addView(meta, new LinearLayout.LayoutParams(-1, dp(22)));
 
-        TextView edit = text(getString(R.string.macro_picker_edit), 11,
-                HeimdallUi.accent(this), true);
-        edit.setGravity(Gravity.CENTER_VERTICAL | Gravity.RIGHT);
-        edit.setSingleLine(true);
-        card.addView(edit, new LinearLayout.LayoutParams(dp(54), -1));
+        LinearLayout cardActions = new LinearLayout(this);
+        cardActions.setOrientation(LinearLayout.HORIZONTAL);
+        cardActions.setGravity(Gravity.CENTER_VERTICAL);
+        card.addView(cardActions, new LinearLayout.LayoutParams(dp(104), -1));
+
+        ImageButton edit = iconButton(R.drawable.ic_edit,
+                getString(R.string.macro_picker_edit_short), false, editAction);
+        LinearLayout.LayoutParams editParams =
+                new LinearLayout.LayoutParams(dp(48), dp(48));
+        editParams.setMargins(0, 0, dp(4), 0);
+        cardActions.addView(edit, editParams);
+
+        ImageButton clone = iconButton(R.drawable.ic_copy,
+                getString(R.string.macro_picker_clone), false, cloneAction);
+        LinearLayout.LayoutParams cloneParams =
+                new LinearLayout.LayoutParams(dp(48), dp(48));
+        cardActions.addView(clone, cloneParams);
         card.setContentDescription(getString(R.string.macro_edit_content_description,
                 label, getResources().getQuantityString(R.plurals.step_count,
                         stepCount, stepCount), roleLabel));
         return card;
+    }
+
+    private void showMacroCloneTargetPicker(Macro source, int sourceIndex) {
+        if (selectedProfile == null || source == null
+                || sourceIndex < 0 || sourceIndex >= selectedProfile.macros.size()
+                || selectedProfile.macros.get(sourceIndex) != source) {
+            showErrorAction(getString(R.string.macro_clone_source_unavailable));
+            return;
+        }
+        selectedProfile.setMacroCount(selectedProfile.macroCount);
+        int count = Math.min(selectedProfile.macroCount, selectedProfile.macros.size());
+
+        LinearLayout shell = new LinearLayout(this);
+        shell.setOrientation(LinearLayout.VERTICAL);
+        shell.setBackground(HeimdallUi.isPearl(this)
+                ? HeimdallUi.cncFlush(this, 14)
+                : HeimdallUi.glass(this, 0xFA0B111B, 0xFF070A10,
+                        0x886A829C, 0x44344150, 14, 2));
+
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.VERTICAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        header.setPadding(dp(16), dp(6), dp(16), dp(4));
+        shell.addView(header, new LinearLayout.LayoutParams(-1, dp(72)));
+        header.addView(text(getString(R.string.macro_clone_target_title),
+                HeimdallUi.TYPE_EDITOR_TITLE, TEXT, true),
+                new LinearLayout.LayoutParams(-1, dp(30)));
+        header.addView(text(getString(R.string.macro_clone_target_subtitle,
+                        sourceIndex + 1,
+                        nonEmpty(source.label, getString(R.string.common_macro_fallback))),
+                11, MUTED, false), new LinearLayout.LayoutParams(-1, dp(24)));
+
+        View headerDivider = new View(this);
+        headerDivider.setBackgroundColor(HeimdallUi.isPearl(this)
+                ? 0x287B8792 : 0x445F7C9A);
+        shell.addView(headerDivider, new LinearLayout.LayoutParams(-1, dp(1)));
+
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(false);
+        scroll.setScrollbarFadingEnabled(false);
+        LinearLayout list = new LinearLayout(this);
+        list.setOrientation(LinearLayout.VERTICAL);
+        list.setPadding(dp(12), dp(8), dp(12), dp(8));
+        scroll.addView(list, new ScrollView.LayoutParams(-1, -2));
+        shell.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+
+        final PanelOverlay[] holder = new PanelOverlay[1];
+        int targetCount = 0;
+        for (int targetIndex = 0; targetIndex < count; targetIndex++) {
+            if (targetIndex == sourceIndex) {
+                continue;
+            }
+            targetCount++;
+            Macro target = selectedProfile.macros.get(targetIndex);
+            int destination = targetIndex;
+            String targetLabel = nonEmpty(target.label,
+                    getString(R.string.common_macro_fallback));
+            Button targetButton = settingsMenuButton(
+                    getString(R.string.macro_clone_target_button,
+                            destination + 1, targetLabel),
+                    getResources().getQuantityString(R.plurals.step_count,
+                            target.steps.size(), target.steps.size()),
+                    () -> confirmMacroClone(source, sourceIndex,
+                            target, destination, holder));
+            LinearLayout.LayoutParams targetParams =
+                    new LinearLayout.LayoutParams(-1, dp(62));
+            targetParams.setMargins(0, 0, 0, dp(5));
+            list.addView(targetButton, targetParams);
+        }
+        if (targetCount == 0) {
+            TextView empty = text(getString(R.string.macro_clone_no_target),
+                    13, MUTED, false);
+            empty.setGravity(Gravity.CENTER);
+            list.addView(empty, new LinearLayout.LayoutParams(-1, dp(82)));
+        }
+
+        View footerDivider = new View(this);
+        footerDivider.setBackgroundColor(HeimdallUi.isPearl(this)
+                ? 0x287B8792 : 0x445F7C9A);
+        shell.addView(footerDivider, new LinearLayout.LayoutParams(-1, dp(1)));
+        LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        actions.setPadding(dp(12), dp(4), dp(12), dp(4));
+        shell.addView(actions, new LinearLayout.LayoutParams(-1, dp(58)));
+        actions.addView(editorButton(getString(R.string.common_cancel), () -> {
+            if (holder[0] != null) {
+                dismissPanelAnimated(holder[0]);
+            }
+        }));
+
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
+                settingsOverlayWidth(680), settingsOverlayHeight(700), Gravity.CENTER);
+        params.setMargins(dp(12), dp(12), dp(12), dp(12));
+        holder[0] = showPanelOverlay(shell, params, null);
+    }
+
+    private void confirmMacroClone(Macro source, int sourceIndex,
+            Macro target, int targetIndex, PanelOverlay[] targetPickerHolder) {
+        String sourceLabel = nonEmpty(source.label, getString(R.string.common_macro_fallback));
+        String targetLabel = nonEmpty(target.label, getString(R.string.common_macro_fallback));
+        showSettingsDecisionPanel(getString(R.string.macro_clone_confirm_title),
+                getString(R.string.macro_clone_confirm_message,
+                        sourceIndex + 1, sourceLabel, targetIndex + 1, targetLabel),
+                null, null,
+                getString(R.string.macro_clone_confirm_action), () -> {
+                    Runnable clone = () -> cloneMacroOver(
+                            source, sourceIndex, target, targetIndex);
+                    if (targetPickerHolder != null && targetPickerHolder[0] != null) {
+                        dismissPanelAnimated(targetPickerHolder[0], clone);
+                    } else {
+                        clone.run();
+                    }
+                });
+    }
+
+    private void cloneMacroOver(Macro source, int sourceIndex,
+            Macro target, int targetIndex) {
+        if (InputBridge.hasActiveMacroDispatch()) {
+            showErrorAction(getString(R.string.macro_clone_active_blocked));
+            return;
+        }
+        if (selectedProfile == null || source == null || target == null
+                || sourceIndex < 0 || sourceIndex >= selectedProfile.macros.size()
+                || targetIndex < 0 || targetIndex >= selectedProfile.macros.size()
+                || selectedProfile.macros.get(sourceIndex) != source
+                || selectedProfile.macros.get(targetIndex) != target
+                || source == target) {
+            showErrorAction(getString(R.string.macro_clone_source_unavailable));
+            return;
+        }
+        target.overwriteFrom(source);
+        ProfileStore.saveProfiles(this, profiles);
+        renderSelectedProfile();
+        showAction(getString(R.string.macro_clone_complete,
+                sourceIndex + 1, targetIndex + 1));
+        showMacroPicker();
     }
 
     private void showProfileQuickPicker() {
@@ -3288,6 +3901,7 @@ public class AssistantActivity extends Activity {
                 || bottomDock == null) {
             activeScreen = SCREEN_MAIN;
             rebuildContent();
+            maybeShowVirtualMouseEntryHint();
             uiHandler.post(() -> maybeAutoSwitchProfile(ForegroundAppTracker.latest()));
             return;
         }
@@ -3374,7 +3988,19 @@ public class AssistantActivity extends Activity {
         settingsTransitionState = SETTINGS_TRANSITION_NONE;
         updateGameFocusProtection();
         setDockNavButtonsEnabled(true);
+        maybeShowVirtualMouseEntryHint();
         uiHandler.post(() -> maybeAutoSwitchProfile(ForegroundAppTracker.latest()));
+    }
+
+    private void maybeShowVirtualMouseEntryHint() {
+        if (!virtualMouseEntryHintPending || activeScreen != SCREEN_MAIN
+                || !TouchpadSettings.MODE_VIRTUAL_MOUSE.equals(
+                        TouchpadSettings.normalizeMode(touchpadSettings.mode))) {
+            return;
+        }
+        virtualMouseEntryHintPending = false;
+        Toast.makeText(this, getString(R.string.virtual_mouse_entry_hint),
+                Toast.LENGTH_LONG).show();
     }
 
     private boolean isSettingsTransitionCurrent(int generation, int state) {
@@ -3732,158 +4358,7 @@ public class AssistantActivity extends Activity {
     }
 
     private void populateTouchpadSettingsContent(LinearLayout content) {
-        clearSettingsTouchpadInputs();
-        TouchpadSettings draft = ensureSettingsTouchpadDraft();
-        settingsTouchpadMode = TouchpadSettings.normalizeMode(draft.mode);
-        LinearLayout modeRow = settingsActionRow(content);
-        modeRow.addView(touchpadModeButton(getString(R.string.touch_mode_compatible),
-                TouchpadSettings.MODE_TOUCH_DRAG));
-        modeRow.addView(touchpadModeButton(getString(R.string.touch_mode_precision_aim),
-                TouchpadSettings.MODE_RELATIVE_MOUSE));
-
-        LinearLayout modeRow2 = settingsActionRow(content);
-        modeRow2.addView(touchpadModeButton(getString(R.string.touch_mode_virtual_right_stick),
-                TouchpadSettings.MODE_RIGHT_STICK));
-        modeRow2.addView(touchpadModeButton(getString(R.string.touch_mode_enhanced),
-                TouchpadSettings.MODE_SHIZUKU_TOUCH));
-
-        if (!relativeMouseBackendAvailable()) {
-            addSettingsHelp(content,
-                    getString(R.string.touch_precision_requires_controller));
-        }
-
-        if (TouchpadSettings.MODE_RELATIVE_MOUSE.equals(settingsTouchpadMode)) {
-            settingsRelativeMouseSensitivityInput = settingsSliderInput(content,
-                    getString(R.string.touch_aim_sensitivity), 0.2f, 4f,
-                    draft.relativeMouseSensitivity, 10, "x");
-            settingsRelativeMouseMaxOutputInput = settingsSliderInput(content,
-                    getString(R.string.touch_max_output), 10f, 100f,
-                    Math.round(draft.relativeMouseMaxOutputPercent * 100f), 1, "%");
-
-            addSettingsLabel(content, getString(R.string.touch_response_curve));
-            settingsRelativeMouseAcceleration =
-                    TouchpadSettings.normalizeRelativeMouseAcceleration(draft.relativeMouseAcceleration);
-            LinearLayout accelerationRow = settingsActionRow(content);
-            accelerationRow.addView(relativeMouseAccelerationButton(
-                    getString(R.string.touch_curve_off),
-                    TouchpadSettings.RELATIVE_MOUSE_ACCELERATION_OFF));
-            accelerationRow.addView(relativeMouseAccelerationButton(
-                    getString(R.string.touch_curve_gentle),
-                    TouchpadSettings.RELATIVE_MOUSE_ACCELERATION_LOW));
-            accelerationRow.addView(relativeMouseAccelerationButton(
-                    getString(R.string.touch_curve_balanced),
-                    TouchpadSettings.RELATIVE_MOUSE_ACCELERATION_MEDIUM));
-            accelerationRow.addView(relativeMouseAccelerationButton(
-                    getString(R.string.touch_curve_fast),
-                    TouchpadSettings.RELATIVE_MOUSE_ACCELERATION_HIGH));
-
-            settingsRelativeMouseInvertYInput = new CheckBox(this);
-            settingsRelativeMouseInvertYInput.setText(
-                    getString(R.string.touch_invert_vertical));
-            settingsRelativeMouseInvertYInput.setTextSize(12);
-            styleCheckBox(settingsRelativeMouseInvertYInput);
-            settingsRelativeMouseInvertYInput.setChecked(draft.relativeMouseInvertY);
-            content.addView(settingsRelativeMouseInvertYInput,
-                    new LinearLayout.LayoutParams(-1, dp(42)));
-
-            addTouchpadAdvancedToggle(content);
-            if (showTouchpadAdvancedSettings) {
-                settingsRelativeMousePulseInput = settingsSliderInput(content,
-                    getString(R.string.touch_response_duration), 8f, 24f,
-                        draft.relativeMousePulseDurationMs, 1, "ms");
-            }
-            addSettingsHelp(content, getString(R.string.touch_precision_help));
-        } else if (TouchpadSettings.MODE_RIGHT_STICK.equals(settingsTouchpadMode)) {
-            settingsRightStickCenterMode = TouchpadSettings.normalizeRightStickCenterMode(draft.rightStickCenterMode);
-            addSettingsLabel(content, getString(R.string.touch_stick_center));
-            LinearLayout centerModeRow = settingsActionRow(content);
-            centerModeRow.addView(rightStickCenterModeButton(
-                    getString(R.string.touch_center_dynamic),
-                    TouchpadSettings.RIGHT_STICK_CENTER_FLOAT));
-            centerModeRow.addView(rightStickCenterModeButton(
-                    getString(R.string.touch_center_fixed),
-                    TouchpadSettings.RIGHT_STICK_CENTER_STATIC));
-            settingsRightStickSensitivityInput = settingsSliderInput(content,
-                    getString(R.string.touch_sensitivity), 0.2f, 4f,
-                    draft.rightStickSensitivity, 10, "x");
-            settingsRightStickDeadzoneInput = settingsSliderInput(content,
-                    getString(R.string.touch_deadzone), 0f, 40f,
-                    Math.round(draft.rightStickDeadzone * 100f), 1, "%");
-            settingsRightStickCurveInput = settingsSliderInput(content,
-                    getString(R.string.touch_feel_curve), 0.5f, 3f,
-                    draft.rightStickCurve, 10, "");
-            settingsRightStickMaxInput = settingsSliderInput(content,
-                    getString(R.string.touch_max_output), 10f, 100f,
-                    Math.round(draft.rightStickMaxOutput * 100f), 1, "%");
-            addTouchpadAdvancedToggle(content);
-            if (showTouchpadAdvancedSettings) {
-            settingsRightStickRadiusInput = settingsSliderInput(content,
-                    getString(R.string.touch_operation_radius), 18f, 80f,
-                    Math.round(draft.rightStickRadius * 100f), 1, "%");
-            settingsRightStickRecenterInput = settingsSliderInput(content,
-                    getString(R.string.touch_recenter_strength), 1f, 8f,
-                    draft.rightStickRecenterBursts, 1, "");
-            settingsIntervalInput = settingsSliderInput(content,
-                    getString(R.string.touch_response_interval), 0f, 80f,
-                    draft.intervalMs, 1, "ms");
-            }
-            addSettingsHelp(content, getString(R.string.touch_right_stick_help));
-        } else if (TouchpadSettings.MODE_SHIZUKU_TOUCH.equals(settingsTouchpadMode)) {
-            settingsShizukuTouchSensitivityXInput = settingsSliderInput(content,
-                    getString(R.string.touch_horizontal_sensitivity), 0.2f, 12f,
-                    draft.shizukuTouchSensitivityX, 10, "x");
-            settingsShizukuTouchSensitivityYInput = settingsSliderInput(content,
-                    getString(R.string.touch_vertical_sensitivity), 0.2f, 12f,
-                    draft.shizukuTouchSensitivityY, 10, "x");
-            settingsShizukuTouchSmoothingInput = settingsSliderInput(content,
-                    getString(R.string.touch_smoothing), 0f, 90f,
-                    Math.round(draft.shizukuTouchSmoothing * 100f), 1, "%");
-            addTouchpadAdvancedToggle(content);
-            if (showTouchpadAdvancedSettings) {
-            settingsShizukuTouchFrameInput = settingsSliderInput(content,
-                    getString(R.string.touch_response_interval), 4f, 33f,
-                    draft.shizukuTouchFrameMs, 1, "ms");
-            settingsShizukuTouchMinDeltaInput = settingsSliderInput(content,
-                    getString(R.string.touch_minimum_movement), 0f, 20f,
-                    draft.shizukuTouchMinDelta, 10, "px");
-            settingsShizukuTouchCurveInput = settingsSliderInput(content,
-                    getString(R.string.touch_feel_curve), 0.5f, 3f,
-                    draft.shizukuTouchCurve, 10, "");
-            settingsAnchorXInput = settingsSliderInput(content,
-                    getString(R.string.touch_start_x), 5f, 95f,
-                    Math.round(draft.anchorX * 100f), 1, "%");
-            settingsAnchorYInput = settingsSliderInput(content,
-                    getString(R.string.touch_start_y), 5f, 95f,
-                    Math.round(draft.anchorY * 100f), 1, "%");
-            }
-            addSettingsHelp(content, getString(R.string.touch_enhanced_help));
-        } else if (TouchpadSettings.MODE_TOUCH_DRAG.equals(settingsTouchpadMode)) {
-            settingsSensitivityInput = settingsSliderInput(content,
-                    getString(R.string.touch_sensitivity), 0.2f, 12f,
-                    draft.sensitivity, 10, "x");
-            addTouchpadAdvancedToggle(content);
-            if (showTouchpadAdvancedSettings) {
-            settingsIntervalInput = settingsSliderInput(content,
-                    getString(R.string.touch_response_interval), 0f, 160f,
-                    draft.intervalMs, 1, "ms");
-            settingsMinDeltaInput = settingsSliderInput(content,
-                    getString(R.string.touch_minimum_movement), 0f, 20f,
-                    draft.minDelta, 10, "px");
-            settingsAnchorXInput = settingsSliderInput(content,
-                    getString(R.string.touch_start_x), 5f, 95f,
-                    Math.round(draft.anchorX * 100f), 1, "%");
-            settingsAnchorYInput = settingsSliderInput(content,
-                    getString(R.string.touch_start_y), 5f, 95f,
-                    Math.round(draft.anchorY * 100f), 1, "%");
-            settingsStrokeInput = settingsSliderInput(content,
-                    getString(R.string.touch_press_duration), 1f, 80f,
-                    draft.strokeMs, 1, "ms");
-            }
-            addSettingsHelp(content, getString(R.string.touch_compatible_help));
-        } else {
-            addSettingsHelp(content, getString(R.string.touch_no_extra_tuning,
-                    localizedTouchpadModeLabel(settingsTouchpadMode)));
-        }
+        touchpadSettingsController.populate(content);
     }
 
     private void populateMacroSettingsContent(LinearLayout content) {
@@ -4712,17 +5187,6 @@ public class AssistantActivity extends Activity {
         content.addView(button, buttonParams);
     }
 
-    private void addTouchpadAdvancedToggle(LinearLayout content) {
-        LinearLayout row = settingsActionRow(content);
-        row.addView(editorButton(showTouchpadAdvancedSettings
-                ? getString(R.string.touch_collapse_advanced_tuning)
-                : getString(R.string.touch_advanced_tuning), () -> {
-            applySettingsTouchpadInputs();
-            showTouchpadAdvancedSettings = !showTouchpadAdvancedSettings;
-            refreshSettingsContent();
-        }));
-    }
-
     private EditText settingsEditText(String value) {
         EditText input = new EditText(this);
         input.setSingleLine(true);
@@ -4735,38 +5199,8 @@ public class AssistantActivity extends Activity {
         return input;
     }
 
-    private Button touchpadModeButton(String label, String mode) {
-        Button button = editorButton(label, () -> selectTouchpadModeDraft(mode));
-        boolean selected = mode.equals(settingsTouchpadMode);
-        HeimdallUi.applyChoiceButton(this, button, selected);
-        if (TouchpadSettings.MODE_RELATIVE_MOUSE.equals(mode)
-                && !relativeMouseBackendAvailable()) {
-            button.setEnabled(false);
-            button.setAlpha(0.45f);
-            button.setContentDescription(getString(
-                    R.string.touch_precision_requires_controller_description));
-        }
-        return button;
-    }
-
     private String localizedTouchpadModeLabel(String mode) {
-        String normalized = TouchpadSettings.normalizeMode(mode);
-        if (TouchpadSettings.MODE_RELATIVE_MOVE.equals(normalized)) {
-            return getString(R.string.touch_mode_relative_move);
-        }
-        if (TouchpadSettings.MODE_MOUSE_POINTER.equals(normalized)) {
-            return getString(R.string.touch_mode_mouse_pointer);
-        }
-        if (TouchpadSettings.MODE_RIGHT_STICK.equals(normalized)) {
-            return getString(R.string.touch_mode_virtual_right_stick);
-        }
-        if (TouchpadSettings.MODE_SHIZUKU_TOUCH.equals(normalized)) {
-            return getString(R.string.touch_mode_enhanced);
-        }
-        if (TouchpadSettings.MODE_RELATIVE_MOUSE.equals(normalized)) {
-            return getString(R.string.touch_mode_precision_aim);
-        }
-        return getString(R.string.touch_mode_compatible);
+        return TouchpadSettingsController.localizedModeLabel(this, mode);
     }
 
     private TouchpadSettings ensureSettingsTouchpadDraft() {
@@ -4777,45 +5211,11 @@ public class AssistantActivity extends Activity {
     }
 
     private void selectTouchpadModeDraft(String mode) {
-        if (!touchpadModeAvailable(mode)) {
-            if (TouchpadSettings.MODE_RELATIVE_MOUSE.equals(mode)) {
-                showErrorAction(getString(R.string.action_controller_enhancement_required));
-                return;
-            }
-            showErrorAction(getString(R.string.action_connection_setup_required));
-            return;
-        }
-        applySettingsTouchpadInputs();
-        ensureSettingsTouchpadDraft().mode = mode;
-        settingsTouchpadMode = TouchpadSettings.normalizeMode(mode);
-        refreshSettingsContent();
+        touchpadSettingsController.selectMode(mode);
     }
 
     private void clearSettingsTouchpadInputs() {
-        settingsSensitivityInput = null;
-        settingsIntervalInput = null;
-        settingsMinDeltaInput = null;
-        settingsAnchorXInput = null;
-        settingsAnchorYInput = null;
-        settingsStrokeInput = null;
-        settingsShizukuTouchSensitivityXInput = null;
-        settingsShizukuTouchSensitivityYInput = null;
-        settingsShizukuTouchFrameInput = null;
-        settingsShizukuTouchMinDeltaInput = null;
-        settingsShizukuTouchCurveInput = null;
-        settingsShizukuTouchSmoothingInput = null;
-        settingsRightStickSensitivityInput = null;
-        settingsRightStickDeadzoneInput = null;
-        settingsRightStickCurveInput = null;
-        settingsRightStickMaxInput = null;
-        settingsRightStickRadiusInput = null;
-        settingsRightStickRecenterInput = null;
-        settingsRightStickCenterMode = null;
-        settingsRelativeMouseSensitivityInput = null;
-        settingsRelativeMouseMaxOutputInput = null;
-        settingsRelativeMousePulseInput = null;
-        settingsRelativeMouseInvertYInput = null;
-        settingsRelativeMouseAcceleration = null;
+        touchpadSettingsController.clearInputs();
     }
 
     private void addSettingsHelp(LinearLayout content, String message) {
@@ -4965,116 +5365,8 @@ public class AssistantActivity extends Activity {
         return Math.max(dp(320), Math.min(dp(preferredDp), available));
     }
 
-    private Button rightStickCenterModeButton(String label, String mode) {
-        Button button = editorButton(label, () -> selectRightStickCenterModeDraft(mode));
-        boolean selected = mode.equals(settingsRightStickCenterMode);
-        HeimdallUi.applyChoiceButton(this, button, selected);
-        return button;
-    }
-
-    private void selectRightStickCenterModeDraft(String mode) {
-        applySettingsTouchpadInputs();
-        settingsRightStickCenterMode = TouchpadSettings.normalizeRightStickCenterMode(mode);
-        ensureSettingsTouchpadDraft().rightStickCenterMode = settingsRightStickCenterMode;
-        refreshSettingsContent();
-    }
-
-    private Button relativeMouseAccelerationButton(String label, String acceleration) {
-        Button button = editorButton(label, () -> selectRelativeMouseAccelerationDraft(acceleration));
-        button.setTextSize(HeimdallUi.TYPE_BUTTON_COMPACT);
-        button.setPadding(dp(HeimdallUi.SPACE_1), 0, dp(HeimdallUi.SPACE_1), 0);
-        boolean selected = acceleration.equals(settingsRelativeMouseAcceleration);
-        HeimdallUi.applyChoiceButton(this, button, selected);
-        return button;
-    }
-
-    private void selectRelativeMouseAccelerationDraft(String acceleration) {
-        applySettingsTouchpadInputs();
-        settingsRelativeMouseAcceleration =
-                TouchpadSettings.normalizeRelativeMouseAcceleration(acceleration);
-        ensureSettingsTouchpadDraft().relativeMouseAcceleration = settingsRelativeMouseAcceleration;
-        refreshSettingsContent();
-    }
-
     private void applySettingsTouchpadInputs() {
-        TouchpadSettings draft = ensureSettingsTouchpadDraft();
-        if (settingsTouchpadMode != null) {
-            draft.mode = settingsTouchpadMode;
-        }
-        if (settingsRightStickCenterMode != null) {
-            draft.rightStickCenterMode = settingsRightStickCenterMode;
-        }
-        if (settingsSensitivityInput != null) {
-            draft.sensitivity = settingsSensitivityInput.floatValue();
-        }
-        if (settingsIntervalInput != null) {
-            draft.intervalMs = settingsIntervalInput.intValue();
-        }
-        if (settingsMinDeltaInput != null) {
-            draft.minDelta = settingsMinDeltaInput.floatValue();
-        }
-        if (settingsAnchorXInput != null) {
-            draft.anchorX = settingsAnchorXInput.floatValue() / 100f;
-        }
-        if (settingsAnchorYInput != null) {
-            draft.anchorY = settingsAnchorYInput.floatValue() / 100f;
-        }
-        if (settingsStrokeInput != null) {
-            draft.strokeMs = settingsStrokeInput.intValue();
-        }
-        if (settingsShizukuTouchSensitivityXInput != null) {
-            draft.shizukuTouchSensitivityX = settingsShizukuTouchSensitivityXInput.floatValue();
-        }
-        if (settingsShizukuTouchSensitivityYInput != null) {
-            draft.shizukuTouchSensitivityY = settingsShizukuTouchSensitivityYInput.floatValue();
-        }
-        if (settingsShizukuTouchFrameInput != null) {
-            draft.shizukuTouchFrameMs = settingsShizukuTouchFrameInput.intValue();
-        }
-        if (settingsShizukuTouchMinDeltaInput != null) {
-            draft.shizukuTouchMinDelta = settingsShizukuTouchMinDeltaInput.floatValue();
-        }
-        if (settingsShizukuTouchCurveInput != null) {
-            draft.shizukuTouchCurve = settingsShizukuTouchCurveInput.floatValue();
-        }
-        if (settingsShizukuTouchSmoothingInput != null) {
-            draft.shizukuTouchSmoothing = settingsShizukuTouchSmoothingInput.floatValue() / 100f;
-        }
-        if (settingsRightStickSensitivityInput != null) {
-            draft.rightStickSensitivity = settingsRightStickSensitivityInput.floatValue();
-        }
-        if (settingsRightStickDeadzoneInput != null) {
-            draft.rightStickDeadzone = settingsRightStickDeadzoneInput.floatValue() / 100f;
-        }
-        if (settingsRightStickCurveInput != null) {
-            draft.rightStickCurve = settingsRightStickCurveInput.floatValue();
-        }
-        if (settingsRightStickMaxInput != null) {
-            draft.rightStickMaxOutput = settingsRightStickMaxInput.floatValue() / 100f;
-        }
-        if (settingsRightStickRadiusInput != null) {
-            draft.rightStickRadius = settingsRightStickRadiusInput.floatValue() / 100f;
-        }
-        if (settingsRightStickRecenterInput != null) {
-            draft.rightStickRecenterBursts = settingsRightStickRecenterInput.intValue();
-        }
-        if (settingsRelativeMouseSensitivityInput != null) {
-            draft.relativeMouseSensitivity = settingsRelativeMouseSensitivityInput.floatValue();
-        }
-        if (settingsRelativeMouseMaxOutputInput != null) {
-            draft.relativeMouseMaxOutputPercent =
-                    settingsRelativeMouseMaxOutputInput.floatValue() / 100f;
-        }
-        if (settingsRelativeMousePulseInput != null) {
-            draft.relativeMousePulseDurationMs = settingsRelativeMousePulseInput.intValue();
-        }
-        if (settingsRelativeMouseInvertYInput != null) {
-            draft.relativeMouseInvertY = settingsRelativeMouseInvertYInput.isChecked();
-        }
-        if (settingsRelativeMouseAcceleration != null) {
-            draft.relativeMouseAcceleration =
-                    TouchpadSettings.normalizeRelativeMouseAcceleration(settingsRelativeMouseAcceleration);
-        }
+        touchpadSettingsController.applyInputs();
     }
 
     private void applySettingsMacroModuleInputs() {
@@ -5239,6 +5531,7 @@ public class AssistantActivity extends Activity {
             return;
         }
         ProfileStore.saveProfiles(this, profiles);
+        closeKeyboardInputSessionIfUnused();
         showDebugAction(getString(R.string.settings_section_reset, settingsSectionTitle()));
         refreshSettingsContent();
     }
@@ -5252,8 +5545,15 @@ public class AssistantActivity extends Activity {
         }
         if (activeSettingsSection == SETTINGS_TOUCHPAD) {
             applySettingsTouchpadInputs();
-            selectedProfile.touchpadSettings = ensureSettingsTouchpadDraft().copy();
+            TouchpadSettings savedTouchpadSettings = ensureSettingsTouchpadDraft().copy();
+            boolean wasVirtualMouse = TouchpadSettings.MODE_VIRTUAL_MOUSE.equals(
+                    TouchpadSettings.normalizeMode(touchpadSettings.mode));
+            boolean isVirtualMouse = TouchpadSettings.MODE_VIRTUAL_MOUSE.equals(
+                    TouchpadSettings.normalizeMode(savedTouchpadSettings.mode));
+            virtualMouseEntryHintPending = !wasVirtualMouse && isVirtualMouse;
+            selectedProfile.touchpadSettings = savedTouchpadSettings;
             touchpadSettings = selectedProfile.safeTouchpadSettings();
+            closeVirtualMouseDispatcherIfUnused();
             settingsTouchpadDraft = null;
         }
         if (activeSettingsSection == SETTINGS_MACRO) {
@@ -5288,6 +5588,7 @@ public class AssistantActivity extends Activity {
             enterImmersiveMode();
         }
         ProfileStore.saveProfiles(this, profiles);
+        closeKeyboardInputSessionIfUnused();
         showDebugAction(savingLayout
                 ? getString(R.string.grid_layout_saved)
                 : getString(R.string.settings_section_saved, settingsSectionTitle()));
@@ -5378,7 +5679,7 @@ public class AssistantActivity extends Activity {
         editor.addView(titleRow, new LinearLayout.LayoutParams(-1, dp(32)));
 
         TextView title = text(getString(R.string.grid_editor_title,
-                GRID_EDITOR_COLUMNS, GRID_EDITOR_ROWS), 13, TEXT, true);
+                WidgetGridEditor.COLUMNS, WidgetGridEditor.ROWS), 13, TEXT, true);
         title.setGravity(Gravity.CENTER_VERTICAL | Gravity.LEFT);
         titleRow.addView(title, new LinearLayout.LayoutParams(0, -1, 1));
 
@@ -5397,36 +5698,88 @@ public class AssistantActivity extends Activity {
         help.setPadding(dp(4), 0, 0, 0);
         editor.addView(help, new LinearLayout.LayoutParams(-1, dp(18)));
 
-        GridEditorView gridEditor = new GridEditorView(this);
+        WidgetGridEditor gridEditor = new WidgetGridEditor(this, new WidgetGridEditor.Host() {
+            @Override
+            public WidgetLayout currentLayout() {
+                return currentWidgetLayout();
+            }
+
+            @Override
+            public WidgetLayout editableLayout() {
+                return editableWidgetLayout();
+            }
+
+            @Override
+            public void replaceDraftLayout(WidgetLayout layout) {
+                draftWidgetLayout = layout;
+            }
+
+            @Override
+            public void ensureMacroCapacity(int requiredCount) {
+                AssistantActivity.this.ensureMacroCapacity(requiredCount);
+            }
+
+            @Override
+            public void showDebug(String message) {
+                showDebugAction(message);
+            }
+
+            @Override
+            public void showError(String message) {
+                showErrorAction(message);
+            }
+        });
         applySystemGestureExclusion(gridEditor);
         editor.addView(gridEditor, new LinearLayout.LayoutParams(-1, 0, 1));
+
+        LinearLayout controlTypes = new LinearLayout(this);
+        controlTypes.setOrientation(LinearLayout.HORIZONTAL);
+        controlTypes.setVisibility(View.GONE);
+        controlTypes.setPadding(dp(4), dp(2), dp(4), dp(2));
+        controlTypes.setBackground(HeimdallUi.isPearl(this)
+                ? HeimdallUi.cncShallowInset(this, 10)
+                : HeimdallUi.glass(this, 0xD30B121C, 0xE8070B11,
+                        0x665F7C9A, 0x22344150, 10, 1));
+        editor.addView(controlTypes, new LinearLayout.LayoutParams(-1, dp(48)));
+
+        Button addMacro = editorButton(getString(R.string.grid_editor_control_type_macro), () -> {
+            gridEditor.addWidget(WidgetLayout.TYPE_MACRO_GROUP);
+            controlTypes.setVisibility(View.GONE);
+        });
+        HeimdallUi.applyChoiceButton(this, addMacro, false);
+        controlTypes.addView(addMacro);
+        Button addKeyboardPad = editorButton(
+                getString(R.string.grid_editor_control_type_keyboard_pad), () -> {
+                    gridEditor.addWidget(WidgetLayout.TYPE_KEYBOARD_PAD);
+                    controlTypes.setVisibility(View.GONE);
+                });
+        HeimdallUi.applyChoiceButton(this, addKeyboardPad, false);
+        controlTypes.addView(addKeyboardPad);
 
         LinearLayout actions = new LinearLayout(this);
         actions.setOrientation(LinearLayout.HORIZONTAL);
         editor.addView(actions, new LinearLayout.LayoutParams(-1, dp(38)));
-        actions.addView(editorButton(getString(R.string.grid_editor_add_macro),
-                () -> addWidgetFromEditor(WidgetLayout.TYPE_MACRO_GROUP, gridEditor)));
+        actions.addView(editorButton(getString(R.string.grid_editor_add_control), () ->
+                controlTypes.setVisibility(controlTypes.getVisibility() == View.VISIBLE
+                        ? View.GONE : View.VISIBLE)));
         actions.addView(editorButton(getString(R.string.grid_editor_add_touch),
-                () -> addWidgetFromEditor(WidgetLayout.TYPE_TOUCHPAD, gridEditor)));
+                () -> gridEditor.addWidget(WidgetLayout.TYPE_TOUCHPAD)));
         actions.addView(editorButton(getString(R.string.grid_editor_add_magnifier),
-                () -> addWidgetFromEditor(WidgetLayout.TYPE_MAGNIFIER, gridEditor)));
+                () -> gridEditor.addWidget(WidgetLayout.TYPE_MAGNIFIER)));
         actions.addView(editorButton(getString(R.string.grid_editor_add_canvas),
-                () -> addWidgetFromEditor(WidgetLayout.TYPE_CANVAS, gridEditor)));
+                () -> gridEditor.addWidget(WidgetLayout.TYPE_CANVAS)));
         actions.addView(editorButton(getString(R.string.grid_editor_add_quick_actions),
-                () -> addWidgetFromEditor(WidgetLayout.TYPE_QUICK_ACTIONS, gridEditor)));
+                () -> gridEditor.addWidget(WidgetLayout.TYPE_QUICK_ACTIONS)));
 
         LinearLayout editActions = new LinearLayout(this);
         editActions.setOrientation(LinearLayout.HORIZONTAL);
         editor.addView(editActions, new LinearLayout.LayoutParams(-1, dp(38)));
         editActions.addView(editorButton(getString(R.string.grid_editor_copy),
-                () -> duplicateSelectedWidget(gridEditor)));
+                gridEditor::duplicateSelectedWidget));
         editActions.addView(editorButton(getString(R.string.grid_editor_delete),
-                () -> deleteSelectedWidget(gridEditor)));
-        editActions.addView(editorButton(getString(R.string.grid_editor_reset), () -> {
-            draftWidgetLayout = WidgetLayout.defaultLayout();
-            gridEditor.invalidate();
-            showDebugAction(getString(R.string.grid_editor_reset_preview));
-        }));
+                gridEditor::deleteSelectedWidget));
+        editActions.addView(editorButton(getString(R.string.grid_editor_reset),
+                gridEditor::resetPreview));
 
         widgetGridDialog = new AlertDialog.Builder(this)
                 .setView(editor)
@@ -5450,626 +5803,9 @@ public class AssistantActivity extends Activity {
 
     private void normalizeGridEditorLayout() {
         WidgetLayout layout = editableWidgetLayout();
-        layout.columns = GRID_EDITOR_COLUMNS;
-        layout.rows = GRID_EDITOR_ROWS;
+        layout.columns = WidgetGridEditor.COLUMNS;
+        layout.rows = WidgetGridEditor.ROWS;
         layout.sanitize();
-    }
-
-    private int widgetPreviewColor(String type) {
-        if (HeimdallUi.isPearl(this)) {
-            if (WidgetLayout.TYPE_TOUCHPAD.equals(type)) {
-                return 0xFFD6DEE6;
-            }
-            if (WidgetLayout.TYPE_MACRO_GROUP.equals(type)) {
-                return 0xFFE3DFE8;
-            }
-            if (WidgetLayout.TYPE_QUICK_ACTIONS.equals(type)) {
-                return 0xFFDCE3E9;
-            }
-            if (WidgetLayout.TYPE_MAGNIFIER.equals(type)) {
-                return 0xFFD6E1E3;
-            }
-            if (WidgetLayout.TYPE_CANVAS.equals(type)) {
-                return 0xFFD4D9DE;
-            }
-            return 0xFFDCE5DF;
-        }
-        if (WidgetLayout.TYPE_TOUCHPAD.equals(type)) {
-            return 0xFF15243A;
-        }
-        if (WidgetLayout.TYPE_MACRO_GROUP.equals(type)) {
-            return 0xFF241D3A;
-        }
-        if (WidgetLayout.TYPE_QUICK_ACTIONS.equals(type)) {
-            return 0xFF17263B;
-        }
-        if (WidgetLayout.TYPE_MAGNIFIER.equals(type)) {
-            return 0xFF142A35;
-        }
-        if (WidgetLayout.TYPE_CANVAS.equals(type)) {
-            return 0xFF101820;
-        }
-        return 0xFF142A22;
-    }
-
-    private String widgetTypeLabel(String type) {
-        if (WidgetLayout.TYPE_TOUCHPAD.equals(type)) {
-            return getString(R.string.grid_widget_touch);
-        }
-        if (WidgetLayout.TYPE_MACRO_GROUP.equals(type)) {
-            return getString(R.string.grid_widget_macro);
-        }
-        if (WidgetLayout.TYPE_STATUS.equals(type)) {
-            return getString(R.string.grid_widget_status);
-        }
-        if (WidgetLayout.TYPE_CANVAS.equals(type)) {
-            return getString(R.string.canvas_name);
-        }
-        if (WidgetLayout.TYPE_QUICK_ACTIONS.equals(type)) {
-            return getString(R.string.grid_widget_quick_actions);
-        }
-        if (WidgetLayout.TYPE_MAGNIFIER.equals(type)) {
-            return getString(R.string.grid_widget_magnifier);
-        }
-        return getString(R.string.grid_widget_module);
-    }
-
-    private String widgetEditorMeta(WidgetLayout.Item item) {
-        String size = item.w + " x " + item.h;
-        if (!WidgetLayout.TYPE_MACRO_GROUP.equals(item.type)) {
-            return size;
-        }
-        int first = item.macroStart + 1;
-        int last = item.macroStart + item.macroCount;
-        return size + "  M" + first + "-" + last;
-    }
-
-    private void addWidgetFromEditor(String type, GridEditorView gridEditor) {
-        WidgetLayout layout = editableWidgetLayout();
-        if (WidgetLayout.TYPE_MAGNIFIER.equals(type)
-                && layout.findItem(WidgetLayout.TYPE_MAGNIFIER) != null) {
-            showErrorAction(getString(R.string.grid_editor_magnifier_limit));
-            return;
-        }
-        int[] size = defaultWidgetSize(type);
-        WidgetLayout.Item item = firstAvailableWidgetItem(layout, type, size[0], size[1]);
-        if (item == null) {
-            showErrorAction(getString(R.string.grid_editor_no_space_add));
-            return;
-        }
-        configureNewWidgetItem(layout, item);
-        layout.items.add(item);
-        layout.preset = WidgetLayout.PRESET_CUSTOM;
-        layout.sanitize();
-        gridEditor.selectItem(layout.items.size() - 1);
-        gridEditor.invalidate();
-        showDebugAction(getString(R.string.grid_editor_added, widgetTypeLabel(type)));
-    }
-
-    private void configureNewWidgetItem(WidgetLayout layout, WidgetLayout.Item item) {
-        if (!WidgetLayout.TYPE_MACRO_GROUP.equals(item.type)) {
-            return;
-        }
-        int start = nextMacroStart(layout);
-        item.macroStart = start;
-        item.macroCount = 4;
-        item.macroColumns = 2;
-        item.macroRows = 2;
-        item.macroRightHandPriority = true;
-        ensureMacroCapacity(start + item.macroCount);
-    }
-
-    private int nextMacroStart(WidgetLayout layout) {
-        int next = 0;
-        for (WidgetLayout.Item item : layout.items) {
-            if (WidgetLayout.TYPE_MACRO_GROUP.equals(item.type)) {
-                next = Math.max(next, item.macroStart + item.macroCount);
-            }
-        }
-        return Math.max(0, Math.min(23, next));
-    }
-
-    private void duplicateSelectedWidget(GridEditorView gridEditor) {
-        WidgetLayout layout = editableWidgetLayout();
-        int selected = gridEditor.selectedIndex();
-        if (selected < 0 || selected >= layout.items.size()) {
-            showErrorAction(getString(R.string.grid_editor_select_copy));
-            return;
-        }
-        WidgetLayout.Item source = layout.items.get(selected);
-        if (!WidgetLayout.TYPE_MACRO_GROUP.equals(source.type)) {
-            showErrorAction(getString(R.string.grid_editor_copy_macro_only));
-            return;
-        }
-        WidgetLayout.Item copy = firstAvailableWidgetItem(layout, source.type, source.w, source.h);
-        if (copy == null) {
-            showErrorAction(getString(R.string.grid_editor_no_space_copy));
-            return;
-        }
-        copy.macroStart = source.macroStart;
-        copy.macroCount = source.macroCount;
-        copy.macroColumns = source.macroColumns;
-        copy.macroRows = source.macroRows;
-        copy.macroRightHandPriority = source.macroRightHandPriority;
-        copy.macroIconOnly = source.macroIconOnly;
-        layout.items.add(copy);
-        layout.preset = WidgetLayout.PRESET_CUSTOM;
-        layout.sanitize();
-        gridEditor.selectItem(layout.items.size() - 1);
-        gridEditor.invalidate();
-        showDebugAction(getString(R.string.grid_editor_copied));
-    }
-
-    private void deleteSelectedWidget(GridEditorView gridEditor) {
-        WidgetLayout layout = editableWidgetLayout();
-        int selected = gridEditor.selectedIndex();
-        if (selected < 0 || selected >= layout.items.size()) {
-            showErrorAction(getString(R.string.grid_editor_select_delete));
-            return;
-        }
-        layout.items.remove(selected);
-        layout.preset = WidgetLayout.PRESET_CUSTOM;
-        layout.sanitize();
-        gridEditor.selectItem(-1);
-        gridEditor.invalidate();
-        showDebugAction(getString(R.string.grid_editor_deleted));
-    }
-
-    private void saveWidgetLayoutFromEditor(GridEditorView gridEditor) {
-        WidgetLayout layout = editableWidgetLayout();
-        layout.preset = WidgetLayout.PRESET_CUSTOM;
-        layout.sanitize();
-        gridEditor.invalidate();
-    }
-
-    private int singleOverlapIndex(WidgetLayout layout, WidgetLayout.Item candidate, int ignoreIndex) {
-        int overlap = -1;
-        for (int i = 0; i < layout.items.size(); i++) {
-            if (i == ignoreIndex) {
-                continue;
-            }
-            if (rectsOverlap(candidate, layout.items.get(i))) {
-                if (overlap >= 0) {
-                    return -2;
-                }
-                overlap = i;
-            }
-        }
-        return overlap;
-    }
-
-    private boolean canPlaceWidget(WidgetLayout layout, WidgetLayout.Item candidate, int ignoreA, int ignoreB) {
-        for (int i = 0; i < layout.items.size(); i++) {
-            if (i == ignoreA || i == ignoreB) {
-                continue;
-            }
-            if (rectsOverlap(candidate, layout.items.get(i))) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    private boolean rectsOverlap(WidgetLayout.Item a, WidgetLayout.Item b) {
-        return a.x < b.x + b.w
-                && a.x + a.w > b.x
-                && a.y < b.y + b.h
-                && a.y + a.h > b.y;
-    }
-
-    private final class WidgetHostLayout extends ViewGroup {
-        private final WidgetLayout layout;
-        private final List<WidgetLayout.Item> childItems = new ArrayList<>();
-        private final int gap = dp(6);
-
-        WidgetHostLayout(Context context, WidgetLayout layout) {
-            super(context);
-            this.layout = layout;
-        }
-
-        void addWidget(View child, WidgetLayout.Item item) {
-            childItems.add(item);
-            addView(child, new ViewGroup.LayoutParams(0, 0));
-        }
-
-        @Override
-        protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
-            int width = MeasureSpec.getSize(widthMeasureSpec);
-            int height = MeasureSpec.getSize(heightMeasureSpec);
-            float cellW = width / (float) Math.max(1, layout.columns);
-            float cellH = height / (float) Math.max(1, layout.rows);
-            for (int i = 0; i < getChildCount(); i++) {
-                WidgetLayout.Item item = childItems.get(i);
-                int childW = Math.max(1, Math.round(item.w * cellW) - gap * 2);
-                int childH = Math.max(1, Math.round(item.h * cellH) - gap * 2);
-                int childWSpec = MeasureSpec.makeMeasureSpec(childW, MeasureSpec.EXACTLY);
-                int childHSpec = MeasureSpec.makeMeasureSpec(childH, MeasureSpec.EXACTLY);
-                getChildAt(i).measure(childWSpec, childHSpec);
-            }
-            setMeasuredDimension(width, height);
-        }
-
-        @Override
-        protected void onLayout(boolean changed, int left, int top, int right, int bottom) {
-            int width = right - left;
-            int height = bottom - top;
-            float cellW = width / (float) Math.max(1, layout.columns);
-            float cellH = height / (float) Math.max(1, layout.rows);
-            for (int i = 0; i < getChildCount(); i++) {
-                WidgetLayout.Item item = childItems.get(i);
-                int childLeft = Math.round(item.x * cellW) + gap;
-                int childTop = Math.round(item.y * cellH) + gap;
-                int childRight = Math.round((item.x + item.w) * cellW) - gap;
-                int childBottom = Math.round((item.y + item.h) * cellH) - gap;
-                getChildAt(i).layout(childLeft, childTop, childRight, childBottom);
-            }
-        }
-    }
-
-    private final class GridEditorView extends View {
-        private static final int MODE_NONE = 0;
-        private static final int MODE_MOVE = 1;
-        private static final int MODE_RESIZE = 2;
-
-        private final Paint editorPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final RectF editorRect = new RectF();
-        private int selectedIndex = -1;
-        private int mode = MODE_NONE;
-        private int originalX;
-        private int originalY;
-        private int originalW;
-        private int originalH;
-        private float downX;
-        private float downY;
-        private int grabCellX;
-        private int grabCellY;
-
-        GridEditorView(Context context) {
-            super(context);
-            setBackground(HeimdallUi.insetPanel(AssistantActivity.this, 10));
-            setContentDescription(getString(R.string.grid_editor_canvas_description));
-        }
-
-        @Override
-        protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
-            int availableW = Math.max(1, MeasureSpec.getSize(widthMeasureSpec));
-            int availableH = Math.max(1, MeasureSpec.getSize(heightMeasureSpec));
-            if (MeasureSpec.getMode(heightMeasureSpec) == MeasureSpec.EXACTLY) {
-                setMeasuredDimension(availableW, availableH);
-                return;
-            }
-            int targetH = Math.round(availableW * realGridAspectHeight());
-            int measuredH = Math.min(availableH, targetH);
-            setMeasuredDimension(availableW, measuredH);
-        }
-
-        private float realGridAspectHeight() {
-            DisplayMetrics metrics = getResources().getDisplayMetrics();
-            float width = Math.max(1f, metrics.widthPixels - dp(8));
-            float height = Math.max(1f, metrics.heightPixels
-                    - dp(8)
-                    - dp(44)
-                    - dp(6)
-                    - dp(50)
-                    - dp(6));
-            return height / width;
-        }
-
-        int selectedIndex() {
-            return selectedIndex;
-        }
-
-        void selectItem(int index) {
-            selectedIndex = index;
-        }
-
-        @Override
-        protected void onDraw(Canvas canvas) {
-            super.onDraw(canvas);
-            WidgetLayout layout = currentWidgetLayout();
-            float cellW = getWidth() / (float) layout.columns;
-            float cellH = getHeight() / (float) layout.rows;
-
-            editorPaint.setStyle(Paint.Style.STROKE);
-            editorPaint.setStrokeWidth(dp(1));
-            editorPaint.setColor(HeimdallUi.isPearl(AssistantActivity.this) ? 0x335D6975 : 0x334EA1FF);
-            for (int col = 1; col < layout.columns; col++) {
-                float x = col * cellW;
-                canvas.drawLine(x, 0, x, getHeight(), editorPaint);
-            }
-            for (int row = 1; row < layout.rows; row++) {
-                float y = row * cellH;
-                canvas.drawLine(0, y, getWidth(), y, editorPaint);
-            }
-
-            editorPaint.setStyle(Paint.Style.STROKE);
-            editorPaint.setStrokeWidth(dp(2));
-            editorPaint.setColor(HeimdallUi.isPearl(AssistantActivity.this) ? 0x886D7B88 : 0x664EA1FF);
-            canvas.drawRect(0, 0, getWidth(), getHeight(), editorPaint);
-
-            if (layout.items.isEmpty()) {
-                editorPaint.setStyle(Paint.Style.FILL);
-                editorPaint.setTextAlign(Paint.Align.CENTER);
-                editorPaint.setTextSize(dp(15));
-                editorPaint.setColor(HeimdallUi.mutedTextColor(AssistantActivity.this));
-                canvas.drawText(getString(R.string.grid_editor_empty),
-                        getWidth() * 0.5f, getHeight() * 0.5f, editorPaint);
-                editorPaint.setTextAlign(Paint.Align.LEFT);
-                return;
-            }
-
-            for (int i = 0; i < layout.items.size(); i++) {
-                drawEditorItem(canvas, layout.items.get(i), i, cellW, cellH);
-            }
-        }
-
-        private void drawEditorItem(Canvas canvas, WidgetLayout.Item item, int index, float cellW, float cellH) {
-            float gap = dp(4);
-            editorRect.set(item.x * cellW + gap,
-                    item.y * cellH + gap,
-                    (item.x + item.w) * cellW - gap,
-                    (item.y + item.h) * cellH - gap);
-            boolean selected = index == selectedIndex;
-
-            editorPaint.setStyle(Paint.Style.FILL);
-            editorPaint.setColor(selected ? selectedWidgetColor(item.type) : widgetPreviewColor(item.type));
-            canvas.drawRoundRect(editorRect, dp(10), dp(10), editorPaint);
-
-            editorPaint.setStyle(Paint.Style.STROKE);
-            editorPaint.setStrokeWidth(selected ? dp(3) : dp(1));
-            editorPaint.setColor(selected
-                    ? HeimdallUi.accent(AssistantActivity.this)
-                    : (HeimdallUi.isPearl(AssistantActivity.this) ? 0x886D7B88 : 0x884EA1FF));
-            canvas.drawRoundRect(editorRect, dp(10), dp(10), editorPaint);
-
-            editorPaint.setStyle(Paint.Style.FILL);
-            editorPaint.setColor(HeimdallUi.textColor(AssistantActivity.this));
-            editorPaint.setTextSize(dp(15));
-            editorPaint.setTextAlign(Paint.Align.LEFT);
-            canvas.drawText(widgetTypeLabel(item.type), editorRect.left + dp(10), editorRect.top + dp(24), editorPaint);
-            editorPaint.setColor(HeimdallUi.mutedTextColor(AssistantActivity.this));
-            editorPaint.setTextSize(dp(12));
-            canvas.drawText(widgetEditorMeta(item), editorRect.left + dp(10), editorRect.top + dp(44), editorPaint);
-
-            if (selected) {
-                float handle = dp(24);
-                editorPaint.setStyle(Paint.Style.FILL);
-                editorPaint.setColor(HeimdallUi.isPearl(AssistantActivity.this) ? 0xDDF08A2A : 0xDD4EA1FF);
-                canvas.drawRoundRect(editorRect.right - handle, editorRect.bottom - handle,
-                        editorRect.right, editorRect.bottom, dp(8), dp(8), editorPaint);
-                editorPaint.setColor(0xFFFFFFFF);
-                editorPaint.setStrokeWidth(dp(2));
-                canvas.drawLine(editorRect.right - dp(7), editorRect.bottom - dp(18),
-                        editorRect.right - dp(18), editorRect.bottom - dp(7), editorPaint);
-            }
-        }
-
-        private int selectedWidgetColor(String type) {
-            if (HeimdallUi.isPearl(AssistantActivity.this)) {
-                return 0xFFE7E1D9;
-            }
-            if (WidgetLayout.TYPE_TOUCHPAD.equals(type)) {
-                return 0xCC1F4D78;
-            }
-            if (WidgetLayout.TYPE_MACRO_GROUP.equals(type)) {
-                return 0xCC4A3278;
-            }
-            if (WidgetLayout.TYPE_MAGNIFIER.equals(type)) {
-                return 0xCC20566A;
-            }
-            if (WidgetLayout.TYPE_CANVAS.equals(type)) {
-                return 0xCC283B4C;
-            }
-            return 0xCC1D5A3B;
-        }
-
-        @Override
-        public boolean onTouchEvent(MotionEvent event) {
-            WidgetLayout layout = editableWidgetLayout();
-            if (layout.items.isEmpty()) {
-                return true;
-            }
-            float cellW = getWidth() / (float) layout.columns;
-            float cellH = getHeight() / (float) layout.rows;
-            switch (event.getActionMasked()) {
-                case MotionEvent.ACTION_DOWN:
-                    getParent().requestDisallowInterceptTouchEvent(true);
-                    downX = event.getX();
-                    downY = event.getY();
-                    selectedIndex = hitTest(layout, downX, downY, cellW, cellH);
-                    if (selectedIndex < 0) {
-                        mode = MODE_NONE;
-                        invalidate();
-                        return true;
-                    }
-                    WidgetLayout.Item item = layout.items.get(selectedIndex);
-                    originalX = item.x;
-                    originalY = item.y;
-                    originalW = item.w;
-                    originalH = item.h;
-                    grabCellX = Math.max(0, Math.min(item.w - 1, (int) ((downX - item.x * cellW) / cellW)));
-                    grabCellY = Math.max(0, Math.min(item.h - 1, (int) ((downY - item.y * cellH) / cellH)));
-                    mode = hitResizeHandle(item, downX, downY, cellW, cellH) ? MODE_RESIZE : MODE_MOVE;
-                    invalidate();
-                    return true;
-                case MotionEvent.ACTION_MOVE:
-                    if (selectedIndex < 0 || selectedIndex >= layout.items.size()) {
-                        return true;
-                    }
-                    updateDraggedItem(layout, layout.items.get(selectedIndex), event.getX(), event.getY(), cellW, cellH);
-                    invalidate();
-                    return true;
-                case MotionEvent.ACTION_UP:
-                    getParent().requestDisallowInterceptTouchEvent(false);
-                    finishDrag(layout);
-                    mode = MODE_NONE;
-                    invalidate();
-                    return true;
-                case MotionEvent.ACTION_CANCEL:
-                    getParent().requestDisallowInterceptTouchEvent(false);
-                    restoreOriginal(layout);
-                    mode = MODE_NONE;
-                    invalidate();
-                    return true;
-                default:
-                    return true;
-            }
-        }
-
-        private int hitTest(WidgetLayout layout, float x, float y, float cellW, float cellH) {
-            for (int i = layout.items.size() - 1; i >= 0; i--) {
-                WidgetLayout.Item item = layout.items.get(i);
-                if (x >= item.x * cellW
-                        && x <= (item.x + item.w) * cellW
-                        && y >= item.y * cellH
-                        && y <= (item.y + item.h) * cellH) {
-                    return i;
-                }
-            }
-            return -1;
-        }
-
-        private boolean hitResizeHandle(WidgetLayout.Item item, float x, float y, float cellW, float cellH) {
-            float right = (item.x + item.w) * cellW;
-            float bottom = (item.y + item.h) * cellH;
-            float handle = dp(34);
-            return x >= right - handle && x <= right && y >= bottom - handle && y <= bottom;
-        }
-
-        private void updateDraggedItem(WidgetLayout layout, WidgetLayout.Item item, float x, float y, float cellW, float cellH) {
-            if (mode == MODE_RESIZE) {
-                int right = Math.max(item.x + 1, Math.min(layout.columns, (int) Math.ceil(x / cellW)));
-                int bottom = Math.max(item.y + 1, Math.min(layout.rows, (int) Math.ceil(y / cellH)));
-                item.w = Math.max(1, Math.min(layout.columns - item.x, right - item.x));
-                item.h = Math.max(1, Math.min(layout.rows - item.y, bottom - item.y));
-                return;
-            }
-            if (mode == MODE_MOVE) {
-                int nextX = Math.round(x / cellW) - grabCellX;
-                int nextY = Math.round(y / cellH) - grabCellY;
-                item.x = Math.max(0, Math.min(layout.columns - item.w, nextX));
-                item.y = Math.max(0, Math.min(layout.rows - item.h, nextY));
-            }
-        }
-
-        private void finishDrag(WidgetLayout layout) {
-            if (selectedIndex < 0 || selectedIndex >= layout.items.size()) {
-                return;
-            }
-            WidgetLayout.Item item = layout.items.get(selectedIndex);
-            if (mode == MODE_RESIZE) {
-                if (widgetOverlaps(layout, item, selectedIndex)) {
-                    restoreOriginal(layout);
-            showErrorAction(getString(R.string.grid_editor_resize_overlap));
-                    return;
-                }
-                saveWidgetLayoutFromEditor(this);
-                showDebugAction(getString(R.string.grid_editor_resized));
-                return;
-            }
-
-            int overlap = singleOverlapIndex(layout, item, selectedIndex);
-            if (overlap == -1) {
-                saveWidgetLayoutFromEditor(this);
-                showDebugAction(getString(R.string.grid_editor_moved));
-                return;
-            }
-            if (overlap >= 0 && trySwap(layout, selectedIndex, overlap)) {
-                saveWidgetLayoutFromEditor(this);
-                showDebugAction(getString(R.string.grid_editor_swapped));
-                return;
-            }
-            restoreOriginal(layout);
-            showErrorAction(getString(R.string.grid_editor_position_conflict));
-        }
-
-        private boolean trySwap(WidgetLayout layout, int movingIndex, int targetIndex) {
-            WidgetLayout.Item moving = layout.items.get(movingIndex);
-            WidgetLayout.Item target = layout.items.get(targetIndex);
-            WidgetLayout.Item movingAtTarget = new WidgetLayout.Item(moving.type, target.x, target.y, moving.w, moving.h);
-            WidgetLayout.Item targetAtOriginal = new WidgetLayout.Item(target.type, originalX, originalY, target.w, target.h);
-            clampWidgetItem(layout, movingAtTarget);
-            clampWidgetItem(layout, targetAtOriginal);
-            if (movingAtTarget.x != target.x || movingAtTarget.y != target.y
-                    || targetAtOriginal.x != originalX || targetAtOriginal.y != originalY) {
-                return false;
-            }
-            if (!canPlaceWidget(layout, movingAtTarget, movingIndex, targetIndex)
-                    || !canPlaceWidget(layout, targetAtOriginal, movingIndex, targetIndex)) {
-                return false;
-            }
-            moving.x = movingAtTarget.x;
-            moving.y = movingAtTarget.y;
-            target.x = targetAtOriginal.x;
-            target.y = targetAtOriginal.y;
-            return true;
-        }
-
-        private void restoreOriginal(WidgetLayout layout) {
-            if (selectedIndex < 0 || selectedIndex >= layout.items.size()) {
-                return;
-            }
-            WidgetLayout.Item item = layout.items.get(selectedIndex);
-            item.x = originalX;
-            item.y = originalY;
-            item.w = originalW;
-            item.h = originalH;
-        }
-    }
-
-    private int[] defaultWidgetSize(String type) {
-        if (WidgetLayout.TYPE_TOUCHPAD.equals(type)) {
-            return new int[]{3, 4};
-        }
-        if (WidgetLayout.TYPE_MACRO_GROUP.equals(type)) {
-            return new int[]{2, 4};
-        }
-        if (WidgetLayout.TYPE_QUICK_ACTIONS.equals(type)) {
-            return new int[]{2, 2};
-        }
-        if (WidgetLayout.TYPE_MAGNIFIER.equals(type)) {
-            return new int[]{3, 3};
-        }
-        if (WidgetLayout.TYPE_CANVAS.equals(type)) {
-            return new int[]{3, 3};
-        }
-        return new int[]{2, 1};
-    }
-
-    private WidgetLayout.Item firstAvailableWidgetItem(WidgetLayout layout, String type, int width, int height) {
-        for (int y = 0; y <= layout.rows - height; y++) {
-            for (int x = 0; x <= layout.columns - width; x++) {
-                WidgetLayout.Item candidate = new WidgetLayout.Item(type, x, y, width, height);
-                if (!widgetOverlaps(layout, candidate, -1)) {
-                    return candidate;
-                }
-            }
-        }
-        return null;
-    }
-
-    private void clampWidgetItem(WidgetLayout layout, WidgetLayout.Item item) {
-        item.x = Math.max(0, Math.min(layout.columns - 1, item.x));
-        item.y = Math.max(0, Math.min(layout.rows - 1, item.y));
-        item.w = Math.max(1, Math.min(layout.columns - item.x, item.w));
-        item.h = Math.max(1, Math.min(layout.rows - item.y, item.h));
-    }
-
-    private boolean widgetOverlaps(WidgetLayout layout, WidgetLayout.Item candidate, int ignoreIndex) {
-        for (int i = 0; i < layout.items.size(); i++) {
-            if (i == ignoreIndex) {
-                continue;
-            }
-            WidgetLayout.Item item = layout.items.get(i);
-            boolean separated = candidate.x + candidate.w <= item.x
-                    || item.x + item.w <= candidate.x
-                    || candidate.y + candidate.h <= item.y
-                    || item.y + item.h <= candidate.y;
-            if (!separated) {
-                return true;
-            }
-        }
-        return false;
     }
 
     private String inputDiagnosticText(InputBackendDiagnostics.Snapshot snapshot) {
@@ -6139,10 +5875,7 @@ public class AssistantActivity extends Activity {
     private View createFullscreenMapLayout() {
         profileIconView = null;
         profileTitle = null;
-        systemTimeText = null;
-        systemNetworkIcon = null;
-        systemBatteryIcon = null;
-        systemBatteryText = null;
+        systemStatusController.clearViews();
         statusText = null;
         profileList = null;
         touchPadView = null;
@@ -7923,10 +7656,7 @@ public class AssistantActivity extends Activity {
     private View createFullscreenGuideLayout() {
         profileIconView = null;
         profileTitle = null;
-        systemTimeText = null;
-        systemNetworkIcon = null;
-        systemBatteryIcon = null;
-        systemBatteryText = null;
+        systemStatusController.clearViews();
         statusText = null;
         profileList = null;
         touchPadView = null;
@@ -8648,6 +8378,7 @@ public class AssistantActivity extends Activity {
         settingsMacroMappingProtectionInput = null;
         settingsMacroMappingProtectionDraft = null;
         touchpadSettings = selectedProfile.safeTouchpadSettings();
+        closeVirtualMouseDispatcherIfUnused();
         ProfileStore.saveSelectedIndex(this, selectedProfileIndex);
         ProfileStore.saveProfiles(this, profiles);
         renderProfiles();
@@ -8710,6 +8441,9 @@ public class AssistantActivity extends Activity {
         if (TouchpadSettings.MODE_MOUSE_POINTER.equals(normalized)) {
             return InputBridge.supportsMouseMode(this);
         }
+        if (TouchpadSettings.MODE_VIRTUAL_MOUSE.equals(normalized)) {
+            return ShizukuNativeController.isReady();
+        }
         return false;
     }
 
@@ -8719,69 +8453,11 @@ public class AssistantActivity extends Activity {
                 && NativeGamepadPath.resolveDevice() != null;
     }
 
-    private SliderInput sliderInput(LinearLayout parent, String label, float min, float max, float value, int scale, String suffix) {
-        return sliderInput(parent, label, min, max, value, scale, suffix, 0xFF202124, 0xFF5F6368);
-    }
-
-    private SliderInput settingsSliderInput(LinearLayout parent, String label, float min, float max, float value, int scale, String suffix) {
-        return sliderInput(parent, label, min, max, value, scale, suffix, TEXT, MUTED);
-    }
-
-    private SliderInput sliderInput(LinearLayout parent, String label, float min, float max, float value, int scale, String suffix, int titleColor, int valueColor) {
-        SliderInput input = new SliderInput(min, max, value, scale, suffix);
-
-        LinearLayout labelRow = new LinearLayout(this);
-        labelRow.setOrientation(LinearLayout.HORIZONTAL);
-        labelRow.setGravity(Gravity.CENTER_VERTICAL);
-        parent.addView(labelRow, new LinearLayout.LayoutParams(-1, dp(28)));
-
-        TextView title = text(label, 13, titleColor, true);
-        labelRow.addView(title, new LinearLayout.LayoutParams(0, -1, 1));
-
-        input.valueLabel = text("", 13, valueColor, true);
-        input.valueLabel.setGravity(Gravity.CENTER_VERTICAL | Gravity.RIGHT);
-        labelRow.addView(input.valueLabel, new LinearLayout.LayoutParams(dp(88), -1));
-
-        input.seekBar = new SeekBar(this);
-        input.seekBar.setMax(input.maxUnits - input.minUnits);
-        input.seekBar.setProgress(input.currentUnits - input.minUnits);
-        styleSettingsSeekBar(input.seekBar);
-        input.seekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-            @Override
-            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                input.currentUnits = input.minUnits + progress;
-                input.updateLabel();
-            }
-
-            @Override
-            public void onStartTrackingTouch(SeekBar seekBar) {
-            }
-
-            @Override
-            public void onStopTrackingTouch(SeekBar seekBar) {
-            }
-        });
-        input.updateLabel();
-        parent.addView(input.seekBar, new LinearLayout.LayoutParams(-1, dp(42)));
-        return input;
-    }
-
-    private void styleSettingsSeekBar(SeekBar seekBar) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) {
-            return;
-        }
-        int active = HeimdallUi.isPearl(this) ? 0xFFF08A2A : HeimdallUi.accent(this);
-        int track = HeimdallUi.isPearl(this) ? 0xFF909AA2 : 0xFF445A72;
-        seekBar.setProgressTintList(ColorStateList.valueOf(active));
-        seekBar.setProgressBackgroundTintList(ColorStateList.valueOf(track));
-        seekBar.setThumbTintList(ColorStateList.valueOf(active));
-        seekBar.setSplitTrack(false);
-    }
-
     private void rebuildContent() {
         if (releaseTextInputFocusThen(this::rebuildContent)) {
             return;
         }
+        dismissFullVirtualKeyboard(false);
         flushGuideReadingPosition();
         cancelSettingsTransition();
         cancelContentTransitions();
@@ -8795,12 +8471,10 @@ public class AssistantActivity extends Activity {
         releaseLocalMapBitmap();
         releaseLocalMapThumbnails();
         setContentView(createLayout());
-        lastSystemTime = "";
-        lastNetworkLabel = "";
-        lastBatteryLabel = "";
+        systemStatusController.resetCachedLabels();
         renderProfiles();
         renderSelectedProfile();
-        updateSystemStatus();
+        systemStatusController.update();
         DebugPerformanceDiagnostics.attachRootObservers(this);
         updateGameFocusProtection();
         if (activeScreen == SCREEN_SETTINGS && settingsContentScroll != null) {
@@ -9037,7 +8711,7 @@ public class AssistantActivity extends Activity {
         settingsContentContainer.requestLayout();
         DebugPerformanceDiagnostics.countRequestLayout("Settings content");
         renderSelectedProfile();
-        updateSystemStatus();
+        systemStatusController.update();
         settingsContentScroll.post(() -> settingsContentScroll.scrollTo(0, restoreY));
     }
 
@@ -9103,12 +8777,104 @@ public class AssistantActivity extends Activity {
         }
     }
 
+    private final class DelayedEditLongPressGesture implements Runnable {
+        private final View host;
+        private final Runnable editAction;
+        private final int touchSlop;
+        private float downX;
+        private float downY;
+        private boolean pending;
+        private boolean triggered;
+
+        DelayedEditLongPressGesture(View host, Runnable editAction) {
+            this.host = host;
+            this.editAction = editAction;
+            touchSlop = ViewConfiguration.get(host.getContext()).getScaledTouchSlop();
+        }
+
+        boolean onTouchEvent(MotionEvent event) {
+            int action = event.getActionMasked();
+            if (action == MotionEvent.ACTION_DOWN) {
+                cancelPending();
+                triggered = false;
+                downX = event.getX();
+                downY = event.getY();
+                pending = true;
+                host.postDelayed(this, QUICK_ACTION_EDIT_LONG_PRESS_TIMEOUT_MS);
+            } else if (action == MotionEvent.ACTION_POINTER_DOWN) {
+                cancelPending();
+            } else if (action == MotionEvent.ACTION_MOVE) {
+                if (event.getPointerCount() != 1
+                        || Math.abs(event.getX() - downX) > touchSlop
+                        || Math.abs(event.getY() - downY) > touchSlop) {
+                    cancelPending();
+                }
+            } else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+                boolean consume = triggered;
+                cancelPending();
+                triggered = false;
+                return consume;
+            }
+            return triggered;
+        }
+
+        @Override
+        public void run() {
+            if (!pending || !host.isAttachedToWindow() || !host.isShown() || !host.isEnabled()) {
+                cancelPending();
+                return;
+            }
+            pending = false;
+            triggered = true;
+            host.cancelLongPress();
+            host.setPressed(false);
+            host.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
+            editAction.run();
+        }
+
+        void detach() {
+            cancelPending();
+            triggered = false;
+        }
+
+        private void cancelPending() {
+            if (pending) {
+                host.removeCallbacks(this);
+                pending = false;
+            }
+        }
+    }
+
     private final class TrackedLinearLayout extends LinearLayout {
         private String component;
+        private DelayedEditLongPressGesture delayedEditGesture;
 
         TrackedLinearLayout(String value) {
             super(AssistantActivity.this);
             component = value;
+        }
+
+        void setDelayedEditAction(Runnable action) {
+            delayedEditGesture = action == null
+                    ? null : new DelayedEditLongPressGesture(this, action);
+            setLongClickable(false);
+            setClickable(action != null);
+        }
+
+        @Override
+        public boolean onTouchEvent(MotionEvent event) {
+            if (delayedEditGesture != null && delayedEditGesture.onTouchEvent(event)) {
+                return true;
+            }
+            return super.onTouchEvent(event);
+        }
+
+        @Override
+        protected void onDetachedFromWindow() {
+            if (delayedEditGesture != null) {
+                delayedEditGesture.detach();
+            }
+            super.onDetachedFromWindow();
         }
 
         @Override
@@ -9357,79 +9123,6 @@ public class AssistantActivity extends Activity {
         }
     }
 
-    private final class BatteryStatusView extends View {
-        private final Paint batteryPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final Path batteryBolt = new Path();
-        private int percent = -1;
-        private boolean charging;
-
-        BatteryStatusView(Context context) {
-            super(context);
-        }
-
-        void setBattery(int value, boolean isCharging) {
-            if (percent == value && charging == isCharging) {
-                return;
-            }
-            percent = value;
-            charging = isCharging;
-            invalidate();
-        }
-
-        @Override
-        public void invalidate() {
-            DebugPerformanceDiagnostics.countInvalidate("Header battery");
-            super.invalidate();
-        }
-
-        @Override
-        protected void onDraw(Canvas canvas) {
-            DebugPerformanceDiagnostics.countDraw("Header battery");
-            super.onDraw(canvas);
-            float width = getWidth();
-            float height = getHeight();
-            if (width <= 0 || height <= 0) {
-                return;
-            }
-            boolean pearl = HeimdallUi.isPearl(AssistantActivity.this);
-            float shellLeft = dp(2);
-            float shellTop = height * 0.27f;
-            float shellRight = width - dp(4);
-            float shellBottom = height * 0.73f;
-            float radius = dp(2);
-            batteryPaint.setShader(null);
-            batteryPaint.setStyle(Paint.Style.STROKE);
-            batteryPaint.setStrokeWidth(dp(1));
-            batteryPaint.setColor(pearl ? 0xFF596774 : 0xFFD9E8F8);
-            canvas.drawRoundRect(shellLeft, shellTop, shellRight, shellBottom,
-                    radius, radius, batteryPaint);
-            batteryPaint.setStyle(Paint.Style.FILL);
-            canvas.drawRoundRect(shellRight + dp(1), height * 0.39f, width - dp(1),
-                    height * 0.61f, dp(1), dp(1), batteryPaint);
-
-            float level = percent < 0 ? 0.25f : Math.max(0.06f, Math.min(1f, percent / 100f));
-            float inset = dp(2);
-            float fillRight = shellLeft + inset + (shellRight - shellLeft - inset * 2f) * level;
-            batteryPaint.setColor(pearl ? 0xFFF08A2A : 0xFF70B7FF);
-            canvas.drawRoundRect(shellLeft + inset, shellTop + inset, fillRight,
-                    shellBottom - inset, dp(1), dp(1), batteryPaint);
-            if (charging) {
-                batteryPaint.setColor(pearl ? 0xFFFEF4E8 : 0xFFF4FAFF);
-                batteryBolt.reset();
-                float cx = (shellLeft + shellRight) / 2f;
-                float cy = height / 2f;
-                batteryBolt.moveTo(cx + dp(1), cy - dp(4));
-                batteryBolt.lineTo(cx - dp(2), cy);
-                batteryBolt.lineTo(cx, cy);
-                batteryBolt.lineTo(cx - dp(1), cy + dp(4));
-                batteryBolt.lineTo(cx + dp(3), cy - dp(1));
-                batteryBolt.lineTo(cx + dp(1), cy - dp(1));
-                batteryBolt.close();
-                canvas.drawPath(batteryBolt, batteryPaint);
-            }
-        }
-    }
-
     private final class QuickActionButtonView extends ImageButton {
         static final int STATE_IDLE = 0;
         static final int STATE_MAGNIFIER_STOP = 1;
@@ -9449,11 +9142,26 @@ public class AssistantActivity extends Activity {
         private int transientResult = RESULT_NONE;
         private float resultProgress;
         private ValueAnimator resultAnimator;
+        private DelayedEditLongPressGesture delayedEditGesture;
         private final Runnable beginResultExit = this::startResultExit;
         private final Runnable clearResult = this::clearTransientResult;
 
         QuickActionButtonView(Context context) {
             super(context);
+        }
+
+        void setDelayedEditAction(Runnable action) {
+            delayedEditGesture = action == null
+                    ? null : new DelayedEditLongPressGesture(this, action);
+            setLongClickable(false);
+        }
+
+        @Override
+        public boolean onTouchEvent(MotionEvent event) {
+            if (delayedEditGesture != null && delayedEditGesture.onTouchEvent(event)) {
+                return true;
+            }
+            return super.onTouchEvent(event);
         }
 
         void setActionIcon(int iconRes) {
@@ -9623,6 +9331,9 @@ public class AssistantActivity extends Activity {
 
         @Override
         protected void onDetachedFromWindow() {
+            if (delayedEditGesture != null) {
+                delayedEditGesture.detach();
+            }
             removeCallbacks(clearResult);
             removeCallbacks(beginResultExit);
             cancelResultAnimation();
@@ -9714,46 +9425,6 @@ public class AssistantActivity extends Activity {
         }
     }
 
-    private final class SliderInput {
-        private final int minUnits;
-        private final int maxUnits;
-        private final int scale;
-        private final String suffix;
-        private int currentUnits;
-        private SeekBar seekBar;
-        private TextView valueLabel;
-
-        SliderInput(float min, float max, float value, int scale, String suffix) {
-            this.scale = scale;
-            this.suffix = suffix == null ? "" : suffix;
-            this.minUnits = Math.round(min * scale);
-            this.maxUnits = Math.round(max * scale);
-            int units = Math.round(value * scale);
-            this.currentUnits = Math.max(minUnits, Math.min(maxUnits, units));
-        }
-
-        int intValue() {
-            return Math.round(floatValue());
-        }
-
-        float floatValue() {
-            return currentUnits / (float) scale;
-        }
-
-        void updateLabel() {
-            if (valueLabel == null) {
-                return;
-            }
-            String value;
-            if (scale == 1) {
-                value = String.valueOf(currentUnits);
-            } else {
-                value = String.format(Locale.US, "%.1f", floatValue());
-            }
-            valueLabel.setText(value + suffix);
-        }
-    }
-
     private void addProfileFrom(GameProfile source) {
         List<Macro> macros = new ArrayList<>();
         for (Macro macro : source.macros) {
@@ -9801,6 +9472,7 @@ public class AssistantActivity extends Activity {
         settingsMacroMappingProtectionInput = null;
         settingsMacroMappingProtectionDraft = null;
         touchpadSettings = selectedProfile.safeTouchpadSettings();
+        closeVirtualMouseDispatcherIfUnused();
         ProfileStore.saveSelectedIndex(this, selectedProfileIndex);
         ProfileStore.saveProfiles(this, profiles);
         renderProfiles();
@@ -9829,6 +9501,7 @@ public class AssistantActivity extends Activity {
         settingsMacroMappingProtectionInput = null;
         settingsMacroMappingProtectionDraft = null;
         touchpadSettings = selectedProfile.safeTouchpadSettings();
+        closeVirtualMouseDispatcherIfUnused();
         ProfileStore.saveSelectedIndex(this, selectedProfileIndex);
         ProfileStore.saveProfiles(this, profiles);
         renderProfiles();
@@ -9861,6 +9534,7 @@ public class AssistantActivity extends Activity {
         settingsMacroMappingProtectionInput = null;
         settingsMacroMappingProtectionDraft = null;
         touchpadSettings = selectedProfile.safeTouchpadSettings();
+        closeVirtualMouseDispatcherIfUnused();
         ProfileStore.saveSelectedIndex(this, selectedProfileIndex);
         ProfileStore.saveProfiles(this, profiles);
         renderProfiles();
@@ -9871,6 +9545,610 @@ public class AssistantActivity extends Activity {
     private String nonEmpty(String value, String fallback) {
         String trimmed = value == null ? "" : value.trim();
         return trimmed.length() == 0 ? fallback : trimmed;
+    }
+
+    private void showKeyboardPadEditor(WidgetLayout.Item item) {
+        if (item == null || hasUnsavedWidgetLayout()) {
+            showErrorAction(getString(R.string.keyboard_pad_save_layout_first));
+            return;
+        }
+        WidgetLayout.Item profileItem = resolveProfileWidgetItem(
+                item, WidgetLayout.TYPE_KEYBOARD_PAD);
+        if (profileItem == null) {
+            showErrorAction(getString(R.string.keyboard_pad_save_layout_first));
+            return;
+        }
+        if (keyboardPadEditorActive) {
+            return;
+        }
+        parkKeyboardInputSession();
+        keyboardPadEditorActive = true;
+        KeyboardPad draft = item.safeKeyboardPad().copy();
+        final PanelOverlay[] holder = new PanelOverlay[1];
+
+        LinearLayout shell = new LinearLayout(this);
+        shell.setOrientation(LinearLayout.VERTICAL);
+        shell.setPadding(dp(12), dp(8), dp(12), dp(8));
+        shell.setBackground(HeimdallUi.isPearl(this)
+                ? HeimdallUi.cncFlush(this, 14)
+                : HeimdallUi.glass(this, 0xFA0B111B, 0xFF070A10,
+                        0x886A829C, 0x44344150, 14, 2));
+
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        shell.addView(header, new LinearLayout.LayoutParams(-1, dp(50)));
+        TextView title = text(getString(R.string.keyboard_pad_editor_title),
+                HeimdallUi.TYPE_EDITOR_TITLE, TEXT, true);
+        header.addView(title, new LinearLayout.LayoutParams(0, -1, 1));
+        Button close = gridCloseButton(() -> {
+            if (holder[0] != null) dismissPanelAnimated(holder[0]);
+        });
+        close.setContentDescription(getString(R.string.common_close));
+        header.addView(close, new LinearLayout.LayoutParams(dp(42), dp(38)));
+
+        View divider = new View(this);
+        divider.setBackgroundColor(HeimdallUi.isPearl(this) ? 0x287B8792 : 0x445F7C9A);
+        shell.addView(divider, new LinearLayout.LayoutParams(-1, dp(1)));
+
+        TextView help = text(getString(R.string.keyboard_pad_editor_help),
+                HeimdallUi.TYPE_META, MUTED, false);
+        help.setGravity(Gravity.CENTER_VERTICAL);
+        help.setPadding(dp(2), 0, dp(2), 0);
+        shell.addView(help, new LinearLayout.LayoutParams(-1, dp(30)));
+
+        final KeyboardPadView[] previewHolder = new KeyboardPadView[1];
+        final Runnable[] refreshEditor = new Runnable[1];
+        LinearLayout toolsRow = new LinearLayout(this);
+        toolsRow.setOrientation(LinearLayout.HORIZONTAL);
+        toolsRow.setGravity(Gravity.CENTER_VERTICAL);
+        toolsRow.setPadding(dp(2), dp(2), dp(2), dp(2));
+        shell.addView(toolsRow, new LinearLayout.LayoutParams(-1, dp(54)));
+
+        LinearLayout countRow = new LinearLayout(this);
+        countRow.setOrientation(LinearLayout.HORIZONTAL);
+        countRow.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout.LayoutParams countRowParams = new LinearLayout.LayoutParams(0, -1, 0.44f);
+        countRowParams.setMargins(0, 0, dp(8), 0);
+        toolsRow.addView(countRow, countRowParams);
+        TextView countLabel = text(getString(R.string.keyboard_pad_key_count),
+                HeimdallUi.TYPE_LABEL, TEXT, true);
+        countLabel.setGravity(Gravity.CENTER_VERTICAL);
+        countRow.addView(countLabel, new LinearLayout.LayoutParams(0, -1, 1));
+        Button removeKey = editorButton("\u2212", () -> {
+            draft.resizeKeyCount(draft.keys.size() - 1);
+            if (refreshEditor[0] != null) refreshEditor[0].run();
+        });
+        countRow.addView(removeKey, new LinearLayout.LayoutParams(dp(44), -1));
+        TextView countValue = text(String.valueOf(draft.keys.size()),
+                HeimdallUi.TYPE_SECTION_TITLE, TEXT, true);
+        countValue.setGravity(Gravity.CENTER);
+        countRow.addView(countValue, new LinearLayout.LayoutParams(dp(42), -1));
+        Button addKey = editorButton("+", () -> {
+            draft.resizeKeyCount(draft.keys.size() + 1);
+            if (refreshEditor[0] != null) refreshEditor[0].run();
+        });
+        countRow.addView(addKey, new LinearLayout.LayoutParams(dp(44), -1));
+
+        LinearLayout layoutRow = new LinearLayout(this);
+        layoutRow.setOrientation(LinearLayout.HORIZONTAL);
+        layoutRow.setGravity(Gravity.CENTER_VERTICAL);
+        toolsRow.addView(layoutRow, new LinearLayout.LayoutParams(0, -1, 0.56f));
+        TextView layoutLabel = text(getString(R.string.keyboard_pad_layout),
+                HeimdallUi.TYPE_LABEL, TEXT, true);
+        layoutLabel.setGravity(Gravity.CENTER_VERTICAL);
+        layoutRow.addView(layoutLabel, new LinearLayout.LayoutParams(0, -1, 1));
+        Button horizontalLayout = editorButton(
+                getString(R.string.keyboard_pad_layout_horizontal), () -> {
+                    draft.setLayoutMode(KeyboardPad.LAYOUT_HORIZONTAL);
+                    if (refreshEditor[0] != null) refreshEditor[0].run();
+                });
+        layoutRow.addView(horizontalLayout, new LinearLayout.LayoutParams(dp(104), -1));
+        Button verticalLayout = editorButton(
+                getString(R.string.keyboard_pad_layout_vertical), () -> {
+                    draft.setLayoutMode(KeyboardPad.LAYOUT_VERTICAL);
+                    if (refreshEditor[0] != null) refreshEditor[0].run();
+                });
+        LinearLayout.LayoutParams verticalLayoutParams =
+                new LinearLayout.LayoutParams(dp(104), -1);
+        verticalLayoutParams.setMargins(dp(4), 0, 0, 0);
+        layoutRow.addView(verticalLayout, verticalLayoutParams);
+
+        KeyboardPadView preview = new KeyboardPadView(this, draft, true, true,
+                new KeyboardPadView.Listener() {
+                    @Override public void onPress(KeyboardPad.Key key) {}
+                    @Override public void onHoldStart(Object token, KeyboardPad.Key key) {}
+                    @Override public void onHoldEnd(Object token) {}
+                    @Override public void onHeimdallAction(String actionId) {}
+                    @Override public void onEditRequested() {}
+
+                    @Override
+                    public void onKeyEditRequested(KeyboardPad.Key key) {
+                        showKeyboardPadKeyEditor(key, () -> {
+                            if (refreshEditor[0] != null) refreshEditor[0].run();
+                        }, draft.keys.size() <= KeyboardPad.MIN_KEY_COUNT ? null : () -> {
+                            draft.keys.remove(key);
+                            draft.applyCompactLayout();
+                            if (refreshEditor[0] != null) refreshEditor[0].run();
+                        });
+                    }
+
+                    @Override public void onInteractionBlocked() {}
+                });
+        previewHolder[0] = preview;
+        refreshEditor[0] = () -> {
+            int keyCount = draft.keys.size();
+            countValue.setText(String.valueOf(keyCount));
+            removeKey.setEnabled(keyCount > KeyboardPad.MIN_KEY_COUNT);
+            addKey.setEnabled(keyCount < KeyboardPad.MAX_KEY_COUNT);
+            HeimdallUi.applyChoiceButton(this, horizontalLayout,
+                    KeyboardPad.LAYOUT_HORIZONTAL.equals(draft.layoutMode));
+            HeimdallUi.applyChoiceButton(this, verticalLayout,
+                    KeyboardPad.LAYOUT_VERTICAL.equals(draft.layoutMode));
+            if (previewHolder[0] != null) previewHolder[0].refresh();
+        };
+        refreshEditor[0].run();
+        LinearLayout.LayoutParams previewParams = new LinearLayout.LayoutParams(-1, 0, 1);
+        previewParams.setMargins(dp(2), dp(4), dp(2), dp(6));
+        shell.addView(preview, previewParams);
+
+        View footerDivider = new View(this);
+        footerDivider.setBackgroundColor(HeimdallUi.isPearl(this) ? 0x287B8792 : 0x445F7C9A);
+        shell.addView(footerDivider, new LinearLayout.LayoutParams(-1, dp(1)));
+
+        LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        actions.setPadding(0, dp(5), 0, 0);
+        shell.addView(actions, new LinearLayout.LayoutParams(-1, dp(58)));
+        actions.addView(editorButton(getString(R.string.common_cancel), () -> {
+            if (holder[0] != null) dismissPanelAnimated(holder[0]);
+        }));
+        Button save = editorButton(getString(R.string.common_save), () -> {
+            KeyboardPad saved = draft.copy();
+            profileItem.keyboardPad = saved.copy();
+            item.keyboardPad = saved.copy();
+            mirrorKeyboardPadIntoEquivalentDraft(profileItem, saved);
+            ProfileStore.saveProfiles(this, profiles);
+            showAction(getString(R.string.keyboard_pad_saved));
+            if (holder[0] != null) {
+                dismissPanelAnimated(holder[0], this::rebuildContent);
+            } else {
+                rebuildContent();
+            }
+        });
+        HeimdallUi.applyPrimaryActionButton(this, save);
+        actions.addView(save);
+
+        DisplayMetrics metrics = getResources().getDisplayMetrics();
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
+                Math.min(dp(760), metrics.widthPixels - dp(40)),
+                Math.min(dp(780), metrics.heightPixels - dp(72)), Gravity.CENTER);
+        holder[0] = showPanelOverlay(shell, params, () -> {
+            keyboardPadEditorActive = false;
+            preview.release();
+        });
+        if (holder[0] == null) {
+            keyboardPadEditorActive = false;
+        }
+    }
+
+    private void showKeyboardPadKeyEditor(KeyboardPad.Key key, Runnable onSaved,
+            Runnable onDeleted) {
+        int[] draftKeyCode = {key.binding.linuxKeyCode};
+        boolean[] draftModifiers = {key.binding.ctrl, key.binding.shift,
+                key.binding.alt, key.binding.win};
+        String[] draftBehavior = {KeyboardPad.normalizeBehavior(key.behavior)};
+        String[] draftIconKey = {key.display.iconKey};
+        String[] draftActionType = {KeyboardPad.normalizeActionType(key.actionType)};
+        String[] draftHeimdallAction = {KeyboardPad.normalizeHeimdallAction(key.heimdallAction)};
+        final PanelOverlay[] holder = new PanelOverlay[1];
+
+        LinearLayout shell = new LinearLayout(this);
+        shell.setOrientation(LinearLayout.VERTICAL);
+        shell.setPadding(dp(14), dp(10), dp(14), dp(10));
+        shell.setBackground(HeimdallUi.isPearl(this)
+                ? HeimdallUi.cncRaised(this, 14, false, false)
+                : HeimdallUi.glass(this, 0xFA0B111B, 0xFF070A10,
+                        0x886A829C, 0x44344150, 14, 2));
+
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        shell.addView(header, new LinearLayout.LayoutParams(-1, dp(50)));
+        TextView title = text(getString(R.string.keyboard_pad_key_editor_title),
+                HeimdallUi.TYPE_EDITOR_TITLE, TEXT, true);
+        header.addView(title, new LinearLayout.LayoutParams(0, -1, 1));
+        Button close = gridCloseButton(() -> {
+            if (holder[0] != null) dismissPanelAnimated(holder[0]);
+        });
+        close.setContentDescription(getString(R.string.common_close));
+        header.addView(close, new LinearLayout.LayoutParams(dp(42), dp(38)));
+
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(false);
+        scroll.setScrollbarFadingEnabled(false);
+        shell.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+        LinearLayout body = new LinearLayout(this);
+        body.setOrientation(LinearLayout.VERTICAL);
+        body.setPadding(dp(2), dp(4), dp(2), dp(10));
+        scroll.addView(body, new ScrollView.LayoutParams(-1, -2));
+
+        body.addView(text(getString(R.string.keyboard_pad_action_type),
+                HeimdallUi.TYPE_LABEL, MUTED, true),
+                new LinearLayout.LayoutParams(-1, dp(28)));
+        LinearLayout actionTypeRow = new LinearLayout(this);
+        actionTypeRow.setOrientation(LinearLayout.HORIZONTAL);
+        body.addView(actionTypeRow, new LinearLayout.LayoutParams(-1, dp(50)));
+        final Button[] actionTypeButtons = new Button[2];
+        Button keyboardBindingAction = editorButton(
+                getString(R.string.keyboard_pad_action_keyboard_binding), () -> {
+                    draftActionType[0] = KeyboardPad.ACTION_KEYBOARD_BINDING;
+                    draftHeimdallAction[0] = "";
+                    HeimdallUi.applyChoiceButton(this, actionTypeButtons[0], true);
+                    HeimdallUi.applyChoiceButton(this, actionTypeButtons[1], false);
+                });
+        actionTypeButtons[0] = keyboardBindingAction;
+        actionTypeRow.addView(keyboardBindingAction,
+                new LinearLayout.LayoutParams(0, -1, 1));
+        Button openFullKeyboardAction = editorButton(
+                getString(R.string.keypad_action_open_full_keyboard), () -> {
+                    draftActionType[0] = KeyboardPad.ACTION_HEIMDALL;
+                    draftHeimdallAction[0] =
+                            HeimdallActionCatalog.ACTION_OPEN_VIRTUAL_KEYBOARD;
+                    HeimdallUi.applyChoiceButton(this, actionTypeButtons[0], false);
+                    HeimdallUi.applyChoiceButton(this, actionTypeButtons[1], true);
+                });
+        actionTypeButtons[1] = openFullKeyboardAction;
+        LinearLayout.LayoutParams internalActionParams =
+                new LinearLayout.LayoutParams(0, -1, 1);
+        internalActionParams.setMargins(dp(4), 0, 0, 0);
+        actionTypeRow.addView(openFullKeyboardAction, internalActionParams);
+        HeimdallUi.applyChoiceButton(this, keyboardBindingAction,
+                KeyboardPad.ACTION_KEYBOARD_BINDING.equals(draftActionType[0]));
+        HeimdallUi.applyChoiceButton(this, openFullKeyboardAction,
+                KeyboardPad.ACTION_HEIMDALL.equals(draftActionType[0]));
+        TextView actionTypeHelp = text(getString(R.string.keyboard_pad_action_help),
+                HeimdallUi.TYPE_META, MUTED, false);
+        actionTypeHelp.setPadding(dp(2), dp(2), dp(2), dp(4));
+        body.addView(actionTypeHelp, new LinearLayout.LayoutParams(-1, dp(42)));
+
+        body.addView(text(getString(R.string.keyboard_pad_keyboard_key),
+                HeimdallUi.TYPE_LABEL, MUTED, true),
+                new LinearLayout.LayoutParams(-1, dp(28)));
+        Button keyButton = editorButton(KeyboardKeyCatalog.labelForCode(draftKeyCode[0]),
+                () -> showKeyboardKeyPicker(draftKeyCode, null));
+        keyButton.setOnClickListener(v -> showKeyboardKeyPicker(draftKeyCode, keyButton));
+        HeimdallUi.applyChoiceButton(this, keyButton, true);
+        body.addView(keyButton, new LinearLayout.LayoutParams(-1, dp(50)));
+
+        body.addView(text(getString(R.string.keyboard_pad_modifiers),
+                HeimdallUi.TYPE_LABEL, MUTED, true),
+                new LinearLayout.LayoutParams(-1, dp(32)));
+        LinearLayout modifierRow = new LinearLayout(this);
+        modifierRow.setOrientation(LinearLayout.HORIZONTAL);
+        body.addView(modifierRow, new LinearLayout.LayoutParams(-1, dp(48)));
+        String[] modifierLabels = {"Ctrl", "Shift", "Alt", "Win"};
+        CheckBox[] modifierInputs = new CheckBox[modifierLabels.length];
+        for (int i = 0; i < modifierLabels.length; i++) {
+            CheckBox input = new CheckBox(this);
+            input.setText(modifierLabels[i]);
+            input.setChecked(draftModifiers[i]);
+            input.setTextSize(12);
+            styleCheckBox(input);
+            final int index = i;
+            input.setOnCheckedChangeListener((button, checked) -> draftModifiers[index] = checked);
+            modifierInputs[i] = input;
+            modifierRow.addView(input, new LinearLayout.LayoutParams(0, -1, 1));
+        }
+
+        body.addView(text(getString(R.string.keyboard_pad_behavior),
+                HeimdallUi.TYPE_LABEL, MUTED, true),
+                new LinearLayout.LayoutParams(-1, dp(32)));
+        LinearLayout behaviorRow = new LinearLayout(this);
+        behaviorRow.setOrientation(LinearLayout.HORIZONTAL);
+        body.addView(behaviorRow, new LinearLayout.LayoutParams(-1, dp(48)));
+        String[] behaviorValues = {KeyboardPad.BEHAVIOR_PRESS,
+                KeyboardPad.BEHAVIOR_WHILE_HELD};
+        String[] behaviorLabels = {getString(R.string.keyboard_pad_behavior_press),
+                getString(R.string.keyboard_pad_behavior_while_held)};
+        Button[] behaviorButtons = new Button[behaviorValues.length];
+        for (int i = 0; i < behaviorValues.length; i++) {
+            final String value = behaviorValues[i];
+            Button button = editorButton(behaviorLabels[i], () -> {
+                draftBehavior[0] = value;
+                for (int j = 0; j < behaviorButtons.length; j++) {
+                    HeimdallUi.applyChoiceButton(this, behaviorButtons[j],
+                            behaviorValues[j].equals(draftBehavior[0]));
+                }
+            });
+            HeimdallUi.applyChoiceButton(this, button, value.equals(draftBehavior[0]));
+            behaviorButtons[i] = button;
+            LinearLayout.LayoutParams buttonParams = new LinearLayout.LayoutParams(0, -1, 1);
+            buttonParams.setMargins(i == 0 ? 0 : dp(4), 0, 0, 0);
+            behaviorRow.addView(button, buttonParams);
+        }
+        TextView behaviorHelp = text(getString(R.string.keyboard_pad_behavior_help),
+                HeimdallUi.TYPE_META, MUTED, false);
+        behaviorHelp.setPadding(dp(2), dp(2), dp(2), dp(6));
+        body.addView(behaviorHelp, new LinearLayout.LayoutParams(-1, dp(54)));
+
+        body.addView(text(getString(R.string.keyboard_pad_display_label),
+                HeimdallUi.TYPE_LABEL, MUTED, true),
+                new LinearLayout.LayoutParams(-1, dp(28)));
+        EditText labelInput = new EditText(this);
+        labelInput.setSingleLine(true);
+        labelInput.setText(key.display.label);
+        labelInput.setHint(KeyboardKeyCatalog.bindingSummary(key.binding));
+        styleDarkEditText(labelInput);
+        body.addView(labelInput, new LinearLayout.LayoutParams(-1, dp(50)));
+
+        body.addView(text(getString(R.string.keyboard_pad_display_icon),
+                HeimdallUi.TYPE_LABEL, MUTED, true),
+                new LinearLayout.LayoutParams(-1, dp(32)));
+        Button iconButton = editorButton(keyboardPadIconLabel(draftIconKey[0]),
+                () -> showKeyboardPadIconPicker(draftIconKey, null));
+        iconButton.setOnClickListener(v -> showKeyboardPadIconPicker(draftIconKey, iconButton));
+        body.addView(iconButton, new LinearLayout.LayoutParams(-1, dp(50)));
+        TextView displayHelp = text(getString(R.string.keyboard_pad_display_hint),
+                HeimdallUi.TYPE_META, MUTED, false);
+        displayHelp.setPadding(dp(2), dp(4), dp(2), dp(4));
+        body.addView(displayHelp, new LinearLayout.LayoutParams(-1, dp(44)));
+
+        View footerDivider = new View(this);
+        footerDivider.setBackgroundColor(HeimdallUi.isPearl(this) ? 0x287B8792 : 0x445F7C9A);
+        shell.addView(footerDivider, new LinearLayout.LayoutParams(-1, dp(1)));
+
+        LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        actions.setPadding(0, dp(5), 0, 0);
+        shell.addView(actions, new LinearLayout.LayoutParams(-1, dp(58)));
+        if (onDeleted != null) {
+            actions.addView(editorButton(getString(R.string.keyboard_pad_delete_key), () -> {
+                if (holder[0] != null) {
+                    dismissPanelAnimated(holder[0], onDeleted);
+                } else {
+                    onDeleted.run();
+                }
+            }));
+        }
+        actions.addView(editorButton(getString(R.string.common_cancel), () -> {
+            if (holder[0] != null) dismissPanelAnimated(holder[0]);
+        }));
+        Button save = editorButton(getString(R.string.common_save), () -> {
+            key.binding.linuxKeyCode = draftKeyCode[0];
+            key.binding.ctrl = draftModifiers[0];
+            key.binding.shift = draftModifiers[1];
+            key.binding.alt = draftModifiers[2];
+            key.binding.win = draftModifiers[3];
+            key.display.label = labelInput.getText().toString().trim();
+            key.display.iconKey = draftIconKey[0] == null ? "" : draftIconKey[0].trim();
+            key.behavior = KeyboardPad.normalizeBehavior(draftBehavior[0]);
+            key.actionType = KeyboardPad.normalizeActionType(draftActionType[0]);
+            key.heimdallAction = KeyboardPad.normalizeHeimdallAction(
+                    draftHeimdallAction[0]);
+            if (holder[0] != null) {
+                dismissPanelAnimated(holder[0], onSaved);
+            } else if (onSaved != null) {
+                onSaved.run();
+            }
+        });
+        HeimdallUi.applyPrimaryActionButton(this, save);
+        actions.addView(save);
+
+        DisplayMetrics metrics = getResources().getDisplayMetrics();
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
+                Math.min(dp(620), metrics.widthPixels - dp(56)),
+                Math.min(dp(820), metrics.heightPixels - dp(72)), Gravity.CENTER);
+        holder[0] = showPanelOverlay(shell, params, null);
+    }
+
+    private void showKeyboardKeyPicker(int[] draftKeyCode, Button valueButton) {
+        final PanelOverlay[] holder = new PanelOverlay[1];
+        LinearLayout shell = new LinearLayout(this);
+        shell.setOrientation(LinearLayout.VERTICAL);
+        shell.setPadding(dp(12), dp(10), dp(12), dp(10));
+        shell.setBackground(HeimdallUi.isPearl(this)
+                ? HeimdallUi.cncRaised(this, 12, false, false)
+                : HeimdallUi.glass(this, 0xF00B111B, 0xFA070A10,
+                        0x884EA1FF, 0x44344150, 12, 1));
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        shell.addView(header, new LinearLayout.LayoutParams(-1, dp(48)));
+        header.addView(text(getString(R.string.keyboard_pad_keyboard_key),
+                HeimdallUi.TYPE_PAGE_TITLE, TEXT, true),
+                new LinearLayout.LayoutParams(0, -1, 1));
+        Button close = gridCloseButton(() -> {
+            if (holder[0] != null) dismissPanelAnimated(holder[0]);
+        });
+        close.setContentDescription(getString(R.string.common_close));
+        header.addView(close, new LinearLayout.LayoutParams(dp(42), dp(38)));
+
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(false);
+        scroll.setScrollbarFadingEnabled(false);
+        shell.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+        LinearLayout list = new LinearLayout(this);
+        list.setOrientation(LinearLayout.VERTICAL);
+        scroll.addView(list, new ScrollView.LayoutParams(-1, -2));
+
+        List<KeyboardKeyCatalog.Option> options = KeyboardKeyCatalog.options();
+        final int columns = 5;
+        for (int start = 0; start < options.size(); start += columns) {
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            list.addView(row, new LinearLayout.LayoutParams(-1, dp(54)));
+            for (int column = 0; column < columns; column++) {
+                int index = start + column;
+                if (index >= options.size()) {
+                    row.addView(new View(this), new LinearLayout.LayoutParams(0, -1, 1));
+                    continue;
+                }
+                KeyboardKeyCatalog.Option option = options.get(index);
+                Button button = editorButton(option.label, () -> {
+                    draftKeyCode[0] = option.linuxKeyCode;
+                    if (valueButton != null) valueButton.setText(option.label);
+                    if (holder[0] != null) dismissPanelAnimated(holder[0]);
+                });
+                button.setTextSize(option.label.length() > 7 ? 9 : 11);
+                HeimdallUi.applyChoiceButton(this, button,
+                        option.linuxKeyCode == draftKeyCode[0]);
+                LinearLayout.LayoutParams buttonParams =
+                        new LinearLayout.LayoutParams(0, -1, 1);
+                buttonParams.setMargins(column == 0 ? 0 : dp(3), dp(2), 0, dp(2));
+                row.addView(button, buttonParams);
+            }
+        }
+
+        DisplayMetrics metrics = getResources().getDisplayMetrics();
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
+                Math.min(dp(720), metrics.widthPixels - dp(48)),
+                Math.min(dp(760), metrics.heightPixels - dp(88)), Gravity.CENTER);
+        holder[0] = showPanelOverlay(shell, params, null);
+    }
+
+    private void showKeyboardPadIconPicker(String[] draftIconKey, Button valueButton) {
+        final PanelOverlay[] holder = new PanelOverlay[1];
+        LinearLayout shell = new LinearLayout(this);
+        shell.setOrientation(LinearLayout.VERTICAL);
+        shell.setPadding(dp(12), dp(10), dp(12), dp(10));
+        shell.setBackground(HeimdallUi.isPearl(this)
+                ? HeimdallUi.cncRaised(this, 12, false, false)
+                : HeimdallUi.glass(this, 0xF00B111B, 0xFA070A10,
+                        0x884EA1FF, 0x44344150, 12, 1));
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        shell.addView(header, new LinearLayout.LayoutParams(-1, dp(48)));
+        header.addView(text(getString(R.string.keyboard_pad_icon_picker_title),
+                HeimdallUi.TYPE_PAGE_TITLE, TEXT, true),
+                new LinearLayout.LayoutParams(0, -1, 1));
+        Button close = gridCloseButton(() -> {
+            if (holder[0] != null) dismissPanelAnimated(holder[0]);
+        });
+        close.setContentDescription(getString(R.string.common_close));
+        header.addView(close, new LinearLayout.LayoutParams(dp(42), dp(38)));
+
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(false);
+        scroll.setScrollbarFadingEnabled(false);
+        shell.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+        LinearLayout list = new LinearLayout(this);
+        list.setOrientation(LinearLayout.VERTICAL);
+        scroll.addView(list, new ScrollView.LayoutParams(-1, -2));
+
+        Button noIcon = editorButton(getString(R.string.keyboard_pad_display_no_icon), () -> {
+            draftIconKey[0] = "";
+            if (valueButton != null) {
+                valueButton.setText(getString(R.string.keyboard_pad_display_no_icon));
+            }
+            if (holder[0] != null) dismissPanelAnimated(holder[0]);
+        });
+        HeimdallUi.applyChoiceButton(this, noIcon,
+                draftIconKey[0] == null || draftIconKey[0].trim().isEmpty());
+        LinearLayout.LayoutParams noIconParams = new LinearLayout.LayoutParams(-1, dp(48));
+        noIconParams.setMargins(0, 0, 0, dp(4));
+        list.addView(noIcon, noIconParams);
+
+        List<MacroIconRepository.MacroIconOption> options =
+                MacroIconRepository.builtInOptions(this);
+        final int columns = 4;
+        for (int start = 0; start < options.size(); start += columns) {
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            list.addView(row, new LinearLayout.LayoutParams(-1, dp(108)));
+            for (int column = 0; column < columns; column++) {
+                int index = start + column;
+                if (index >= options.size()) {
+                    row.addView(new View(this), new LinearLayout.LayoutParams(0, -1, 1));
+                    continue;
+                }
+                MacroIconRepository.MacroIconOption option = options.get(index);
+                View cell = keyboardPadIconPickerCell(option,
+                        option.key.equals(draftIconKey[0]), () -> {
+                    draftIconKey[0] = option.key;
+                    if (valueButton != null) valueButton.setText(option.displayName);
+                    if (holder[0] != null) dismissPanelAnimated(holder[0]);
+                });
+                LinearLayout.LayoutParams buttonParams =
+                        new LinearLayout.LayoutParams(0, -1, 1);
+                buttonParams.setMargins(dp(3), dp(3), dp(3), dp(3));
+                row.addView(cell, buttonParams);
+            }
+        }
+
+        DisplayMetrics metrics = getResources().getDisplayMetrics();
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
+                Math.min(dp(680), metrics.widthPixels - dp(48)),
+                Math.min(dp(760), metrics.heightPixels - dp(88)), Gravity.CENTER);
+        holder[0] = showPanelOverlay(shell, params, null);
+    }
+
+    private View keyboardPadIconPickerCell(MacroIconRepository.MacroIconOption option,
+            boolean selected, Runnable action) {
+        FrameLayout frame = new FrameLayout(this);
+        frame.setBackground(HeimdallUi.isPearl(this)
+                ? HeimdallUi.cncRaised(this, 10, selected, false)
+                : HeimdallUi.glass(this,
+                        selected ? 0xE0182636 : 0xC00E1620,
+                        selected ? 0xED09121D : 0xD0070B11,
+                        selected ? 0xCC70B7FF : 0x665F7184,
+                        selected ? 0x664EA1FF : 0x22344150,
+                        10, selected ? 2 : 1));
+        frame.setPadding(dp(8), dp(7), dp(8), dp(7));
+        frame.setClickable(true);
+        frame.setFocusable(true);
+        frame.setOnClickListener(v -> action.run());
+        frame.setContentDescription(option.displayName);
+
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setGravity(Gravity.CENTER);
+        frame.addView(content, new FrameLayout.LayoutParams(-1, -1));
+
+        ImageView image = new ImageView(this);
+        image.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        Drawable drawable = option.load(this);
+        if (drawable != null) {
+            drawable = drawable.mutate();
+            if (option.tintable) {
+                drawable.setTint(HeimdallUi.textColor(this));
+            } else {
+                drawable.clearColorFilter();
+            }
+        }
+        image.setImageDrawable(drawable);
+        content.addView(image, new LinearLayout.LayoutParams(dp(42), dp(42)));
+
+        TextView label = text(option.displayName, HeimdallUi.TYPE_META,
+                selected ? TEXT : MUTED, selected);
+        label.setGravity(Gravity.CENTER);
+        label.setSingleLine(true);
+        content.addView(label, new LinearLayout.LayoutParams(-1, dp(26)));
+
+        if (selected) {
+            TextView check = text("\u2713", 12, TEXT, true);
+            check.setGravity(Gravity.CENTER);
+            check.setBackground(HeimdallUi.isPearl(this)
+                    ? HeimdallUi.cncRaised(this, 8, true, false)
+                    : HeimdallUi.glass(this, 0xD0142740, 0xE609111D,
+                            0xCC70B7FF, 0x664EA1FF, 8, 1));
+            FrameLayout.LayoutParams checkParams = new FrameLayout.LayoutParams(
+                    dp(20), dp(20), Gravity.TOP | Gravity.RIGHT);
+            frame.addView(check, checkParams);
+        }
+        return frame;
+    }
+
+    private String keyboardPadIconLabel(String iconKey) {
+        if (iconKey == null || iconKey.trim().isEmpty()) {
+            return getString(R.string.keyboard_pad_display_no_icon);
+        }
+        MacroIconRepository.MacroIconOption option =
+                MacroIconRepository.findByKey(this, iconKey.trim());
+        return option == null
+                ? getString(R.string.keyboard_pad_display_no_icon)
+                : option.displayName;
     }
 
     private void showMacroEditor(Macro macro) {
@@ -10052,6 +10330,13 @@ public class AssistantActivity extends Activity {
                 HeimdallUi.textColor(this), dp(18));
         gamepadRecordButton.setCompoundDrawablePadding(dp(7));
         gamepadRow.addView(gamepadRecordButton);
+        Button gamepadComposeButton = editorButton(
+                getString(R.string.macro_editor_compose_controller), () ->
+                showGamepadSequenceEditor(draftSteps, stepsList, -1));
+        setLeftIcon(gamepadComposeButton, R.drawable.ic_macro_gamepad,
+                HeimdallUi.textColor(this), dp(18));
+        gamepadComposeButton.setCompoundDrawablePadding(dp(7));
+        gamepadRow.addView(gamepadComposeButton);
 
         stepsPanel.addView(captureRow, new LinearLayout.LayoutParams(-1, dp(46)));
 
@@ -10484,10 +10769,10 @@ public class AssistantActivity extends Activity {
         }
 
         addMacroIconRows(builtInList, builtInOptions, draftIconKey, iconPreview,
-                macro, overlayHolder);
+                macro, overlayHolder, false);
         if (customList != null) {
             addMacroIconRows(customList, customOptions, draftIconKey, iconPreview,
-                    macro, overlayHolder);
+                    macro, overlayHolder, true);
         }
 
         View footerDivider = new View(this);
@@ -10540,12 +10825,22 @@ public class AssistantActivity extends Activity {
                                   String[] draftIconKey,
                                   ImageView iconPreview,
                                   Macro macro,
-                                  PanelOverlay[] overlayHolder) {
+                                  PanelOverlay[] overlayHolder,
+                                  boolean allowDelete) {
         final int columns = 3;
         for (int start = 0; start < options.size(); start += columns) {
+            boolean rowHasDelete = false;
+            for (int column = 0; column < columns && start + column < options.size(); column++) {
+                if (allowDelete && MacroIconRepository.isUserIconKey(
+                        options.get(start + column).key)) {
+                    rowHasDelete = true;
+                    break;
+                }
+            }
             LinearLayout row = new LinearLayout(this);
             row.setOrientation(LinearLayout.HORIZONTAL);
-            list.addView(row, new LinearLayout.LayoutParams(-1, dp(114)));
+            list.addView(row, new LinearLayout.LayoutParams(
+                    -1, dp(rowHasDelete ? 154 : 114)));
             for (int column = 0; column < columns; column++) {
                 int index = start + column;
                 if (index >= options.size()) {
@@ -10559,7 +10854,10 @@ public class AssistantActivity extends Activity {
                     if (overlayHolder[0] != null) {
                         dismissPanelAnimated(overlayHolder[0]);
                     }
-                });
+                }, allowDelete && MacroIconRepository.isUserIconKey(option.key)
+                        ? () -> confirmDeleteMacroIcon(option, draftIconKey, iconPreview,
+                                macro, overlayHolder[0])
+                        : null);
                 LinearLayout.LayoutParams cellParams = new LinearLayout.LayoutParams(0, -1, 1);
                 cellParams.setMargins(dp(4), dp(4), dp(4), dp(4));
                 row.addView(cell, cellParams);
@@ -10567,7 +10865,9 @@ public class AssistantActivity extends Activity {
         }
     }
 
-    private View macroIconPickerCell(MacroIconRepository.MacroIconOption option, String selectedKey, Runnable action) {
+    private View macroIconPickerCell(MacroIconRepository.MacroIconOption option,
+                                     String selectedKey, Runnable action,
+                                     Runnable deleteAction) {
         String effectiveSelectedKey = selectedKey == null || selectedKey.trim().length() == 0
                 ? MacroIconRepository.defaultOption(this).key : selectedKey;
         boolean selected = sameIconKey(option.key, effectiveSelectedKey);
@@ -10601,12 +10901,36 @@ public class AssistantActivity extends Activity {
             }
         }
         image.setImageDrawable(drawable);
-        content.addView(image, new LinearLayout.LayoutParams(dp(46), dp(46)));
+        content.addView(image, new LinearLayout.LayoutParams(
+                dp(deleteAction == null ? 46 : 42), dp(deleteAction == null ? 46 : 42)));
 
         TextView label = text(option.displayName, HeimdallUi.TYPE_META, selected ? TEXT : MUTED, selected);
         label.setGravity(Gravity.CENTER);
         label.setSingleLine(true);
-        content.addView(label, new LinearLayout.LayoutParams(-1, dp(26)));
+        content.addView(label, new LinearLayout.LayoutParams(
+                -1, dp(deleteAction == null ? 26 : 24)));
+
+        if (deleteAction != null) {
+            Button delete = new Button(this);
+            delete.setAllCaps(false);
+            delete.setText(getString(R.string.common_delete));
+            delete.setTextSize(11);
+            delete.setTextColor(HeimdallUi.isPearl(this) ? 0xFFB34A4F : DANGER);
+            delete.setGravity(Gravity.CENTER);
+            delete.setMinWidth(0);
+            delete.setMinHeight(0);
+            delete.setPadding(0, 0, 0, 0);
+            delete.setBackground(HeimdallUi.isPearl(this)
+                    ? HeimdallUi.pearlMenuControl(this, 8, false, false)
+                    : rounded(DANGER_BG, DANGER, 8));
+            delete.setContentDescription(getString(
+                    R.string.macro_icon_delete_accessibility, option.displayName));
+            delete.setOnClickListener(view -> deleteAction.run());
+            LinearLayout.LayoutParams deleteParams = new LinearLayout.LayoutParams(
+                    -1, dp(40));
+            deleteParams.setMargins(dp(8), dp(4), dp(8), 0);
+            content.addView(delete, deleteParams);
+        }
 
         if (selected) {
             TextView check = text("\u2713", 12, TEXT, true);
@@ -10621,6 +10945,70 @@ public class AssistantActivity extends Activity {
         }
 
         return frame;
+    }
+
+    private void confirmDeleteMacroIcon(MacroIconRepository.MacroIconOption option,
+                                        String[] draftIconKey,
+                                        ImageView iconPreview,
+                                        Macro macro,
+                                        PanelOverlay pickerOverlay) {
+        if (option == null || !MacroIconRepository.isUserIconKey(option.key)) {
+            return;
+        }
+        int usageCount = macroIconUsageCount(option.key);
+        if (draftIconKey != null && draftIconKey.length > 0
+                && sameIconKey(option.key, draftIconKey[0])
+                && (macro == null || !sameIconKey(option.key, macro.iconKey))) {
+            usageCount++;
+        }
+        if (usageCount > 0) {
+            showErrorAction(getResources().getQuantityString(
+                    R.plurals.macro_icon_in_use, usageCount, usageCount));
+            return;
+        }
+        showSettingsDecisionPanel(getString(R.string.macro_icon_delete_title),
+                getString(R.string.macro_icon_delete_message, option.displayName),
+                null, null, getString(R.string.common_delete), () -> {
+                    if (!MacroIconRepository.deleteUserIcon(this, option.key)) {
+                        showErrorAction(getString(R.string.error_macro_icon_delete));
+                        return;
+                    }
+                    showAction(getString(R.string.action_macro_icon_deleted));
+                    Runnable reopen = () -> showMacroIconPicker(
+                            macro, draftIconKey, iconPreview);
+                    if (pickerOverlay != null) {
+                        dismissPanelAnimated(pickerOverlay, reopen);
+                    } else {
+                        reopen.run();
+                    }
+                });
+    }
+
+    private int macroIconUsageCount(String iconKey) {
+        int count = 0;
+        for (GameProfile profile : profiles) {
+            for (Macro candidate : profile.macros) {
+                if (sameIconKey(iconKey, candidate.iconKey)) {
+                    count++;
+                }
+            }
+            if (profile.widgetLayout == null) {
+                continue;
+            }
+            for (WidgetLayout.Item item : profile.widgetLayout.items) {
+                if (item == null || !WidgetLayout.TYPE_KEYBOARD_PAD.equals(item.type)
+                        || item.keyboardPad == null) {
+                    continue;
+                }
+                for (KeyboardPad.Key key : item.keyboardPad.keys) {
+                    if (key != null && key.display != null
+                            && sameIconKey(iconKey, key.display.iconKey)) {
+                        count++;
+                    }
+                }
+            }
+        }
+        return count;
     }
 
     private boolean sameIconKey(String left, String right) {
@@ -10801,6 +11189,184 @@ public class AssistantActivity extends Activity {
             return;
         }
         renderGamepadRecordingPrepare(session);
+    }
+
+    private void showGamepadSequenceEditor(List<MacroStep> draftSteps,
+            LinearLayout stepsList, int replaceIndex) {
+        NativeGamepadPath.Device device = NativeGamepadPath.resolveDevice();
+        if (device == null) {
+            showErrorAction(getString(R.string.gamepad_compose_no_controller));
+            return;
+        }
+
+        LinearLayout shell = new LinearLayout(this);
+        shell.setOrientation(LinearLayout.VERTICAL);
+        shell.setBackground(HeimdallUi.isPearl(this)
+                ? HeimdallUi.cncFlush(this, 14)
+                : HeimdallUi.glass(this, 0xFA0B111B, 0xFF070A10,
+                        0x886A829C, 0x44344150, 14, 2));
+
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.VERTICAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        header.setPadding(dp(18), 0, dp(18), 0);
+        shell.addView(header, new LinearLayout.LayoutParams(-1, dp(58)));
+        header.addView(text(getString(R.string.gamepad_compose_title),
+                HeimdallUi.TYPE_EDITOR_TITLE, TEXT, true),
+                new LinearLayout.LayoutParams(-1, dp(30)));
+        header.addView(text(getString(R.string.gamepad_compose_subtitle),
+                10, MUTED, false), new LinearLayout.LayoutParams(-1, dp(20)));
+
+        View headerDivider = new View(this);
+        headerDivider.setBackgroundColor(HeimdallUi.isPearl(this) ? 0x287B8792 : 0x445F7C9A);
+        shell.addView(headerDivider, new LinearLayout.LayoutParams(-1, dp(1)));
+
+        GamepadSequenceComposer.EditableSequence restoredSequence = null;
+        if (replaceIndex >= 0) {
+            if (replaceIndex >= draftSteps.size()) {
+                showErrorAction(getString(R.string.gamepad_recompose_unavailable));
+                return;
+            }
+            MacroStep existingStep = draftSteps.get(replaceIndex);
+            if (existingStep != null && MacroStep.TYPE_GAMEPAD.equals(existingStep.type)) {
+                restoredSequence = GamepadSequenceComposer.parseEditable(existingStep.value);
+            }
+            if (restoredSequence == null) {
+                showErrorAction(getString(R.string.gamepad_recompose_unavailable));
+                return;
+            }
+        }
+        GamepadSequenceEditorView editor = new GamepadSequenceEditorView(
+                this, device, restoredSequence);
+        editor.bindTextInputs(this::bindTapToEditTextInputFocus);
+        shell.addView(editor, new LinearLayout.LayoutParams(-1, 0, 1));
+
+        View footerDivider = new View(this);
+        footerDivider.setBackgroundColor(HeimdallUi.isPearl(this) ? 0x287B8792 : 0x445F7C9A);
+        shell.addView(footerDivider, new LinearLayout.LayoutParams(-1, dp(1)));
+        LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        actions.setGravity(Gravity.CENTER_VERTICAL);
+        actions.setPadding(dp(12), dp(4), dp(12), dp(4));
+        shell.addView(actions, new LinearLayout.LayoutParams(-1, dp(58)));
+
+        final PanelOverlay[] holder = new PanelOverlay[1];
+        final boolean[] testing = {false};
+        Button cancel = editorButton(getString(R.string.common_cancel), () -> {
+            if (holder[0] != null) {
+                dismissPanelAnimated(holder[0]);
+            }
+        });
+        actions.addView(cancel);
+
+        Button test = editorButton(getString(R.string.gamepad_test), () -> {});
+        Button commit = editorButton(getString(replaceIndex >= 0
+                ? R.string.gamepad_replace_step : R.string.gamepad_add_to_macro), () -> {});
+        HeimdallUi.applyPrimaryActionButton(this, commit);
+        actions.addView(test);
+        actions.addView(commit);
+
+        boolean replayReady = gamepadReplayRouteReady(device);
+        test.setEnabled(replayReady);
+        test.setAlpha(replayReady ? 1f : 0.48f);
+        if (!replayReady) {
+            editor.showStatus(getString(R.string.gamepad_compose_test_ready) + "\n"
+                    + getString(R.string.controller_enhancement_unavailable));
+        }
+
+        test.setOnClickListener(v -> {
+            if (testing[0]) {
+                return;
+            }
+            if (editor.exceedsReplayDurationLimit()) {
+                editor.showStatus(R.string.gamepad_compose_duration_limit);
+                return;
+            }
+            String sequence = editor.buildSequence();
+            if (sequence.length() == 0) {
+                editor.showStatus(R.string.gamepad_compose_action_empty);
+                return;
+            }
+            if (shouldProtectThorMappingFromControllerMacros()) {
+                editor.showStatus(R.string.gamepad_test_enhanced_touch_blocked);
+                showErrorAction(getString(R.string.macro_enhanced_touch_controller_blocked));
+                return;
+            }
+            testing[0] = true;
+            editor.setControlsEnabled(false);
+            test.setEnabled(false);
+            commit.setEnabled(false);
+            test.setAlpha(0.48f);
+            commit.setAlpha(0.48f);
+            editor.showStatus(R.string.gamepad_testing_replay);
+            new Thread(() -> {
+                String result;
+                try {
+                    result = NativeGamepadPath.userFacingError(this,
+                            InputBridge.replayNativeGamepadSequence(this, sequence));
+                } catch (Throwable t) {
+                    result = t.getClass().getSimpleName() + ": "
+                            + nonEmpty(t.getMessage(), "native controller replay failed");
+                }
+                String finalResult = result;
+                runOnUiThread(() -> {
+                    if (holder[0] == null || !panelOverlays.contains(holder[0])) {
+                        return;
+                    }
+                    testing[0] = false;
+                    editor.setControlsEnabled(true);
+                    test.setEnabled(true);
+                    commit.setEnabled(true);
+                    test.setAlpha(1f);
+                    commit.setAlpha(1f);
+                    editor.showStatus(nativeGamepadReplaySucceeded(finalResult)
+                            ? R.string.gamepad_test_complete : R.string.gamepad_test_failed);
+                });
+            }, "composed-gamepad-sequence-preview").start();
+        });
+
+        commit.setOnClickListener(v -> {
+            if (testing[0]) {
+                return;
+            }
+            if (editor.exceedsReplayDurationLimit()) {
+                editor.showStatus(R.string.gamepad_compose_duration_limit);
+                return;
+            }
+            String sequence = editor.buildSequence();
+            GamepadSequenceSummary summary = gamepadSummary(sequence);
+            if (!summary.valid || sequence.length() == 0) {
+                editor.showStatus(R.string.gamepad_compose_action_empty);
+                return;
+            }
+            MacroStep step = new MacroStep(MacroStep.TYPE_GAMEPAD, sequence);
+            boolean replaced = replaceIndex >= 0 && replaceIndex < draftSteps.size();
+            if (replaced) {
+                draftSteps.set(replaceIndex, step);
+            } else {
+                draftSteps.add(step);
+            }
+            renderStepList(draftSteps, stepsList);
+            showAction(getString(replaced ? R.string.gamepad_step_replaced
+                    : R.string.gamepad_step_added, summary.title));
+            if (holder[0] != null) {
+                dismissPanelAnimated(holder[0]);
+            }
+        });
+
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER);
+        params.setMargins(dp(8), dp(8), dp(8), dp(8));
+        holder[0] = showPanelOverlay(shell, params, () -> testing[0] = false);
+    }
+
+    private boolean gamepadReplayRouteReady(NativeGamepadPath.Device device) {
+        if (device == null) {
+            return false;
+        }
+        if (InputBridge.BACKEND_SHIZUKU.equals(InputBridge.selectedBackendId(this))) {
+            return ShizukuNativeController.isReady();
+        }
+        return device.writable;
     }
 
     private void renderGamepadRecordingPrepare(GamepadRecordingSession session) {
@@ -11286,13 +11852,31 @@ public class AssistantActivity extends Activity {
                 subtitle.setMaxLines(2);
                 labels.addView(subtitle, new LinearLayout.LayoutParams(-1, dp(36)));
 
-                row.addView(gamepadStepAction(getString(R.string.gamepad_rerecord), () ->
-                                showGamepadRecordingPanel(steps, stepsList, index)),
-                        new LinearLayout.LayoutParams(dp(60), dp(48)));
-                row.addView(gamepadStepAction(getString(R.string.gamepad_delete_short), () -> {
+                boolean composed = GamepadSequenceComposer.parseEditable(step.value) != null;
+                String editDescription = getString(composed
+                        ? R.string.gamepad_recompose : R.string.gamepad_rerecord);
+                ImageButton edit = iconButton(composed
+                                ? R.drawable.ic_edit : R.drawable.ic_refresh,
+                        editDescription, false, () -> {
+                            if (composed) {
+                                showGamepadSequenceEditor(steps, stepsList, index);
+                            } else {
+                                showGamepadRecordingPanel(steps, stepsList, index);
+                            }
+                        });
+                LinearLayout.LayoutParams editParams =
+                        new LinearLayout.LayoutParams(dp(48), dp(48));
+                editParams.setMargins(dp(2), 0, dp(2), 0);
+                row.addView(edit, editParams);
+                ImageButton delete = iconButton(R.drawable.ic_trash,
+                        getString(R.string.gamepad_delete_short), true, () -> {
                     steps.remove(index);
                     renderStepList(steps, stepsList);
-                }), new LinearLayout.LayoutParams(dp(60), dp(48)));
+                });
+                LinearLayout.LayoutParams deleteParams =
+                        new LinearLayout.LayoutParams(dp(48), dp(48));
+                deleteParams.setMargins(dp(2), 0, 0, 0);
+                row.addView(delete, deleteParams);
                 stepsList.addView(row, new LinearLayout.LayoutParams(-1, dp(80)));
                 if (i < steps.size() - 1) {
                     View divider = new View(this);
@@ -11310,26 +11894,14 @@ public class AssistantActivity extends Activity {
             TextView label = text((i + 1) + ". " + stepDisplayText(steps.get(i)), 13, TEXT, false);
             row.addView(label, new LinearLayout.LayoutParams(0, dp(42), 1));
 
-            Button delete = new Button(this);
-            delete.setText(R.string.gamepad_delete_short);
-            delete.setTextSize(12);
-            delete.setAllCaps(false);
-            HeimdallUi.applySecondaryButton(this, delete);
-            delete.setOnClickListener(v -> {
+            ImageButton delete = iconButton(R.drawable.ic_trash,
+                    getString(R.string.gamepad_delete_short), true, () -> {
                 steps.remove(index);
                 renderStepList(steps, stepsList);
             });
-            row.addView(delete, new LinearLayout.LayoutParams(dp(58), dp(42)));
-            stepsList.addView(row, new LinearLayout.LayoutParams(-1, dp(46)));
+            row.addView(delete, new LinearLayout.LayoutParams(dp(48), dp(48)));
+            stepsList.addView(row, new LinearLayout.LayoutParams(-1, dp(52)));
         }
-    }
-
-    private Button gamepadStepAction(String label, Runnable action) {
-        Button button = actionButton(label, action);
-        button.setTextSize(11);
-        button.setPadding(dp(2), 0, dp(2), 0);
-        HeimdallUi.applySecondaryButton(this, button);
-        return button;
     }
 
     private String stepDisplayText(MacroStep step) {
@@ -11370,7 +11942,7 @@ public class AssistantActivity extends Activity {
             MacroStep step = steps.get(i);
             boolean gamepadSequence = MacroStep.TYPE_GAMEPAD.equals(step.type)
                     && step.value != null && step.value.startsWith("seq:");
-            heightDp += gamepadSequence ? 80 : 46;
+            heightDp += gamepadSequence ? 80 : 52;
             if (gamepadSequence && i < count - 1) {
                 heightDp += 1;
             }
@@ -11644,6 +12216,9 @@ public class AssistantActivity extends Activity {
                     : HeimdallUi.surfacePanel(this, 8));
         }
         button.setContentDescription(description);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            button.setTooltipText(description);
+        }
         button.setScaleType(ImageButton.ScaleType.CENTER);
         button.setPadding(dp(16), dp(16), dp(16), dp(16));
         button.setMinimumWidth(dp(48));
@@ -11671,6 +12246,9 @@ public class AssistantActivity extends Activity {
     }
 
     private final class TouchPadView extends View {
+        private static final int LINUX_BTN_LEFT = 272;
+        private static final int LINUX_BTN_RIGHT = 273;
+        private static final long VIRTUAL_MOUSE_TAP_PULSE_MS = 32L;
         private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final RectF rect = new RectF();
         private final Path surfaceClip = new Path();
@@ -11697,6 +12275,52 @@ public class AssistantActivity extends Activity {
         private boolean rightStickGestureActive;
         private boolean rightStickErrorShown;
         private ValueAnimator surfacePressAnimator;
+        private int virtualMouseButton;
+        private int virtualMouseButtonPointerId = -1;
+        private int virtualMouseMotionPointerId = -1;
+        private final int virtualMouseTouchSlop;
+        private final int virtualMouseDoubleTapSlop;
+        private final int virtualMouseDoubleTapTimeoutMs;
+        private float virtualMouseLastX;
+        private float virtualMouseLastY;
+        private float virtualMouseGestureDownX;
+        private float virtualMouseGestureDownY;
+        private boolean virtualMouseTapCandidate;
+        private boolean virtualMouseSecondTapCandidate;
+        private boolean virtualMouseGestureLeftButtonDown;
+        private boolean virtualMouseTapPulseDown;
+        private VirtualMouseDispatcher virtualMouseTapPulseDispatcher;
+        private long virtualMouseLastTapUpTime;
+        private float virtualMouseLastTapX;
+        private float virtualMouseLastTapY;
+        private float virtualMouseScrollLastY;
+        private float virtualMouseScrollAccumulator;
+        private boolean virtualMouseScrolling;
+        private boolean virtualMouseTwoFingerTapCandidate;
+        private int virtualMouseTwoFingerPointerIdA = -1;
+        private int virtualMouseTwoFingerPointerIdB = -1;
+        private float virtualMouseTwoFingerStartAX;
+        private float virtualMouseTwoFingerStartAY;
+        private float virtualMouseTwoFingerStartBX;
+        private float virtualMouseTwoFingerStartBY;
+        private float virtualMouseLeftPressProgress;
+        private float virtualMouseRightPressProgress;
+        private float virtualMouseFeedbackLastX = -1f;
+        private float virtualMouseFeedbackLastY = -1f;
+        private boolean virtualMouseFeedbackButtonsVisible;
+        private ValueAnimator virtualMouseLeftPressAnimator;
+        private ValueAnimator virtualMouseRightPressAnimator;
+        private final View virtualMouseFeedbackView = new View(AssistantActivity.this) {
+            @Override
+            protected void onDraw(Canvas canvas) {
+                super.onDraw(canvas);
+                if (TouchpadSettings.MODE_VIRTUAL_MOUSE.equals(
+                        TouchpadSettings.normalizeMode(touchpadSettings.mode))
+                        && !HeimdallUi.isPearl(AssistantActivity.this)) {
+                    drawVirtualMouseFeedback(canvas);
+                }
+            }
+        };
         private final Runnable relativeMouseNeutralReset = new Runnable() {
             @Override
             public void run() {
@@ -11704,17 +12328,31 @@ public class AssistantActivity extends Activity {
                 invalidate();
             }
         };
+        private final Runnable virtualMouseTapPulseUp =
+                this::finishVirtualMouseTapPulse;
 
         TouchPadView(Activity activity) {
             super(activity);
+            ViewConfiguration viewConfiguration = ViewConfiguration.get(activity);
+            virtualMouseTouchSlop = viewConfiguration.getScaledTouchSlop();
+            virtualMouseDoubleTapSlop = viewConfiguration.getScaledDoubleTapSlop();
+            virtualMouseDoubleTapTimeoutMs = ViewConfiguration.getDoubleTapTimeout();
             setBackground(HeimdallUi.isPearl(AssistantActivity.this)
                     ? null
                     : HeimdallUi.glass(AssistantActivity.this,
                             0x550D1420, 0x77070A10,
                             0x00000000, 0x00000000,
                             HeimdallUi.RADIUS_MODULE, 0));
+            virtualMouseFeedbackView.setClickable(false);
+            virtualMouseFeedbackView.setFocusable(false);
+            virtualMouseFeedbackView.setImportantForAccessibility(
+                    View.IMPORTANT_FOR_ACCESSIBILITY_NO);
             applySystemGestureExclusion(this);
             requestAdvancedInputPreparation();
+        }
+
+        View virtualMouseFeedbackView() {
+            return virtualMouseFeedbackView;
         }
 
         private void requestAdvancedInputPreparation() {
@@ -11723,9 +12361,14 @@ public class AssistantActivity extends Activity {
                     || TouchpadSettings.MODE_RIGHT_STICK.equals(mode))
                     && InputBridge.BACKEND_SHIZUKU.equals(
                             InputBridge.selectedBackendId(AssistantActivity.this));
-            if ((TouchpadSettings.MODE_SHIZUKU_TOUCH.equals(mode) || shizukuControllerMode)
+            if ((TouchpadSettings.MODE_SHIZUKU_TOUCH.equals(mode)
+                    || TouchpadSettings.MODE_VIRTUAL_MOUSE.equals(mode)
+                    || shizukuControllerMode)
                     && ShizukuNativeController.isPermissionGranted()) {
                 ShizukuNativeController.requestServiceBinding(AssistantActivity.this);
+                if (TouchpadSettings.MODE_VIRTUAL_MOUSE.equals(mode)) {
+                    ensureVirtualMouseDispatcher(false);
+                }
             }
         }
 
@@ -11763,6 +12406,11 @@ public class AssistantActivity extends Activity {
             String mode = TouchpadSettings.normalizeMode(touchpadSettings.mode);
             if (TouchpadSettings.MODE_RELATIVE_MOUSE.equals(mode)) {
                 cancelRelativeMousePulse(true);
+            } else if (TouchpadSettings.MODE_VIRTUAL_MOUSE.equals(mode)) {
+                if (virtualMouseDispatcher != null) {
+                    releaseAllVirtualMouseButtons(virtualMouseDispatcher);
+                }
+                clearVirtualMouseGesture();
             } else if (TouchpadSettings.MODE_RIGHT_STICK.equals(mode)) {
                 recenterRightStick(false);
             } else {
@@ -11836,16 +12484,23 @@ public class AssistantActivity extends Activity {
             boolean shizukuTouchMode = TouchpadSettings.MODE_SHIZUKU_TOUCH.equals(mode);
             boolean relativeMouseMode =
                     TouchpadSettings.MODE_RELATIVE_MOUSE.equals(mode);
+            boolean virtualMouseMode = TouchpadSettings.MODE_VIRTUAL_MOUSE.equals(mode);
 
             if (DebugPerformanceDiagnostics.isFlatUi()) {
-                drawFlatControlSurface(canvas, rightStickMode);
+                drawFlatControlSurface(canvas, rightStickMode, virtualMouseMode);
+                if (virtualMouseMode) {
+                    drawVirtualMouseControls(canvas);
+                }
                 return;
             }
 
-            drawControlSurface(canvas, rightStickMode, shizukuTouchMode);
+            drawControlSurface(canvas, rightStickMode, shizukuTouchMode,
+                    virtualMouseMode, !virtualMouseMode);
 
             if (rightStickMode) {
                 drawRightStick(canvas);
+            } else if (virtualMouseMode) {
+                drawVirtualMouseControls(canvas);
             } else if (relativeMouseMode) {
                 drawPrecisionAimReticle(canvas);
             } else {
@@ -11853,7 +12508,8 @@ public class AssistantActivity extends Activity {
             }
         }
 
-        private void drawFlatControlSurface(Canvas canvas, boolean rightStickMode) {
+        private void drawFlatControlSurface(Canvas canvas, boolean rightStickMode,
+                boolean virtualMouseMode) {
             paint.setShader(null);
             paint.setStyle(Paint.Style.FILL);
             paint.setColor(0xFF202A34);
@@ -11862,11 +12518,13 @@ public class AssistantActivity extends Activity {
             paint.setStrokeWidth(dp(1));
             paint.setColor(0xFF6E7E8E);
             canvas.drawRect(rect, paint);
-            float centerX = rightStickMode ? stickCenterX() : rect.centerX();
-            float centerY = rightStickMode ? stickCenterY() : rect.centerY();
-            paint.setStyle(Paint.Style.FILL);
-            paint.setColor(0xFF9AA8B8);
-            canvas.drawCircle(centerX, centerY, dp(4), paint);
+            if (!virtualMouseMode) {
+                float centerX = rightStickMode ? stickCenterX() : rect.centerX();
+                float centerY = rightStickMode ? stickCenterY() : rect.centerY();
+                paint.setStyle(Paint.Style.FILL);
+                paint.setColor(0xFF9AA8B8);
+                canvas.drawCircle(centerX, centerY, dp(4), paint);
+            }
             if (x >= 0f && y >= 0f) {
                 paint.setColor(HeimdallUi.accent(AssistantActivity.this));
                 canvas.drawCircle(x, y, dp(rightStickMode ? 22 : 12), paint);
@@ -11911,31 +12569,40 @@ public class AssistantActivity extends Activity {
             paint.setStrokeCap(Paint.Cap.BUTT);
         }
 
-        private void drawControlSurface(Canvas canvas, boolean rightStickMode, boolean shizukuTouchMode) {
-            float pressProgress = clampFloat(surfacePressProgress, 0f, 1f);
+        private void drawControlSurface(Canvas canvas, boolean rightStickMode,
+                boolean shizukuTouchMode, boolean virtualMouseMode,
+                boolean showFocusCorners) {
+            float pressProgress = virtualMouseMode
+                    ? 0f : clampFloat(surfacePressProgress, 0f, 1f);
             boolean pearl = HeimdallUi.isPearl(AssistantActivity.this);
             if (pearl) {
                 drawPearlInputFrame(canvas);
             }
-            int idleTop = pearl ? 0xFF717B81
-                    : (rightStickMode ? 0x34243D5B
-                            : (shizukuTouchMode ? 0x32234640 : 0x34243D5B));
-            int activeTop = pearl ? 0xFF7C868C
-                    : (rightStickMode ? 0x4A265C94 : 0x4A245A78);
-            int idleBottom = pearl ? 0xFF566168 : 0x8A070A10;
-            int activeBottom = pearl ? 0xFF626C72 : 0xA3070A10;
-            int top = blendColor(idleTop, activeTop, pressProgress);
-            int bottom = blendColor(idleBottom, activeBottom, pressProgress);
             float radius = surfaceRadius();
             paint.setStyle(Paint.Style.FILL);
-            paint.setShader(new LinearGradient(0, rect.top, 0, rect.bottom, top, bottom, Shader.TileMode.CLAMP));
+            if (pearl) {
+                int top = blendColor(0xFF717B81, 0xFF7C868C, pressProgress);
+                int bottom = blendColor(0xFF566168, 0xFF626C72, pressProgress);
+                paint.setShader(new LinearGradient(0, rect.top, 0, rect.bottom,
+                        top, bottom, Shader.TileMode.CLAMP));
+            } else {
+                int idleFace = shizukuTouchMode ? 0xFF0D161B : 0xFF0D1520;
+                int activeFace = rightStickMode ? 0xFF0F1E30 : 0xFF0F1E2A;
+                paint.setShader(null);
+                paint.setColor(blendColor(idleFace, activeFace, pressProgress));
+            }
             canvas.drawRoundRect(rect, radius, radius, paint);
             paint.setShader(null);
 
             drawSurfaceDepth(canvas, pressProgress);
-            drawControlTexture(canvas, rightStickMode, shizukuTouchMode);
-            drawSurfaceGlow(canvas, pressProgress);
-            drawFocusCorners(canvas, pressProgress);
+            drawControlTexture(canvas, rightStickMode, shizukuTouchMode,
+                    virtualMouseMode);
+            if (!virtualMouseMode) {
+                drawSurfaceGlow(canvas, pressProgress);
+            }
+            if (showFocusCorners) {
+                drawFocusCorners(canvas, pressProgress);
+            }
         }
 
         private void drawPearlInputFrame(Canvas canvas) {
@@ -12059,6 +12726,18 @@ public class AssistantActivity extends Activity {
             paint.setShader(null);
         }
 
+        private void drawPearlVirtualMouseOuterEdge(Canvas canvas) {
+            paint.setShader(null);
+            paint.setStyle(Paint.Style.STROKE);
+            float hairline = dp(1);
+            RectF edge = new RectF(rect);
+            edge.inset(hairline / 2f, hairline / 2f);
+            paint.setStrokeWidth(hairline);
+            paint.setColor(0x80616B72);
+            float radius = Math.max(0f, surfaceRadius() - hairline / 2f);
+            canvas.drawRoundRect(edge, radius, radius, paint);
+        }
+
         private void drawFocusCorners(Canvas canvas, float pressProgress) {
             float length = lerp(dp(28), dp(36), pressProgress);
             float inset = dp(12);
@@ -12084,23 +12763,33 @@ public class AssistantActivity extends Activity {
             paint.setStrokeCap(Paint.Cap.BUTT);
         }
 
-        private void drawControlTexture(Canvas canvas, boolean rightStickMode, boolean shizukuTouchMode) {
+        private void drawControlTexture(Canvas canvas, boolean rightStickMode,
+                boolean shizukuTouchMode, boolean virtualMouseMode) {
             canvas.save();
             surfaceClip.reset();
             float radius = surfaceRadius();
             surfaceClip.addRoundRect(rect, radius, radius, Path.Direction.CW);
             canvas.clipPath(surfaceClip);
+            boolean pearl = HeimdallUi.isPearl(AssistantActivity.this);
+            if (virtualMouseMode) {
+                canvas.clipRect(rect.left, rect.top, rect.right,
+                        virtualMouseButtonTop());
+            }
             paint.setStyle(Paint.Style.STROKE);
             paint.setStrokeWidth(1f);
-            paint.setColor(HeimdallUi.isPearl(AssistantActivity.this)
-                    ? HeimdallUi.inputTexture(AssistantActivity.this)
+            paint.setColor(pearl
+                    ? (virtualMouseMode ? 0x16818B91
+                            : HeimdallUi.inputTexture(AssistantActivity.this))
                     : (shizukuTouchMode ? 0x244AE0A9
-                            : (rightStickMode ? 0x265A8DFF : HeimdallUi.inputTexture(AssistantActivity.this))));
+                            : (rightStickMode ? 0x265A8DFF
+                                    : HeimdallUi.inputTexture(AssistantActivity.this))));
             int step = dp(14);
             for (int xLine = -getHeight(); xLine < getWidth(); xLine += step) {
                 canvas.drawLine(xLine, rect.bottom, xLine + getHeight(), rect.top, paint);
             }
-            paint.setColor(HeimdallUi.inputTextureAlt(AssistantActivity.this));
+            paint.setColor(virtualMouseMode && pearl
+                    ? 0x106E787E
+                    : HeimdallUi.inputTextureAlt(AssistantActivity.this));
             int offset = dp(7);
             for (int xLine = -getHeight() + offset; xLine < getWidth(); xLine += step) {
                 canvas.drawLine(xLine, rect.top, xLine + getHeight(), rect.bottom, paint);
@@ -12243,15 +12932,23 @@ public class AssistantActivity extends Activity {
             x = event.getX();
             y = event.getY();
             int action = event.getActionMasked();
-            if (action == MotionEvent.ACTION_DOWN) {
+            String mode = TouchpadSettings.normalizeMode(touchpadSettings.mode);
+            boolean virtualMouseMode = TouchpadSettings.MODE_VIRTUAL_MOUSE.equals(mode);
+            if (virtualMouseMode && action == MotionEvent.ACTION_DOWN) {
+                resetSurfacePressFeedback();
+            } else if (!virtualMouseMode && action == MotionEvent.ACTION_DOWN) {
                 setSurfacePressed(true);
-            } else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+            } else if (!virtualMouseMode
+                    && (action == MotionEvent.ACTION_UP
+                            || action == MotionEvent.ACTION_CANCEL)) {
                 setSurfacePressed(false);
             }
-            String mode = TouchpadSettings.normalizeMode(touchpadSettings.mode);
             boolean shizukuTouchMode = TouchpadSettings.MODE_SHIZUKU_TOUCH.equals(mode);
             if (TouchpadSettings.MODE_RIGHT_STICK.equals(mode)) {
                 return handleRightStickTouch(event);
+            }
+            if (virtualMouseMode) {
+                return handleVirtualMouseTouch(event);
             }
             if (TouchpadSettings.MODE_RELATIVE_MOUSE.equals(mode)) {
                 return handleRelativeMouseTouch(event);
@@ -12455,6 +13152,654 @@ public class AssistantActivity extends Activity {
             return sign * curved * sensitivity;
         }
 
+        private void drawVirtualMouseControls(Canvas canvas) {
+            float buttonTop = virtualMouseButtonTop();
+            float middle = rect.centerX();
+            boolean pearl = HeimdallUi.isPearl(AssistantActivity.this);
+
+            if (!virtualMouseUsesButtonStrip()) {
+                if (pearl) {
+                    drawPearlVirtualMouseOuterEdge(canvas);
+                } else {
+                    drawSurfaceGlow(canvas, 0f);
+                }
+                if (pearl && virtualMouseMotionPointerId >= 0 && x >= 0f && y >= 0f
+                        && y < buttonTop) {
+                    drawVirtualMouseTouchPoint(canvas);
+                }
+                return;
+            }
+
+            canvas.save();
+            surfaceClip.reset();
+            float radius = surfaceRadius();
+            surfaceClip.addRoundRect(rect, radius, radius, Path.Direction.CW);
+            canvas.clipPath(surfaceClip);
+
+            paint.setStyle(Paint.Style.FILL);
+            if (pearl) {
+                paint.setShader(new LinearGradient(0f, buttonTop, 0f, rect.bottom,
+                        0xFF59636A, 0xFF485259, Shader.TileMode.CLAMP));
+            } else {
+                paint.setShader(new LinearGradient(0f, buttonTop, 0f, rect.bottom,
+                        new int[]{0xFF1B3247, 0xFF122638, 0xFF09141F},
+                        new float[]{0f, 0.46f, 1f}, Shader.TileMode.CLAMP));
+            }
+            canvas.drawRect(rect.left, buttonTop, rect.right, rect.bottom, paint);
+            paint.setShader(null);
+
+            if (pearl) {
+                drawVirtualMousePressedState(canvas,
+                        new RectF(rect.left, buttonTop, middle, rect.bottom),
+                        virtualMouseLeftPressProgress, true);
+                drawVirtualMousePressedState(canvas,
+                        new RectF(middle, buttonTop, rect.right, rect.bottom),
+                        virtualMouseRightPressProgress, true);
+            }
+
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(dp(1));
+            paint.setColor(pearl ? 0xB04D575E : 0x7044637D);
+            canvas.drawLine(rect.left, buttonTop, rect.right, buttonTop, paint);
+            paint.setColor(pearl ? 0x52343C42 : 0x344D6478);
+            canvas.drawLine(middle, buttonTop + dp(4), middle,
+                    rect.bottom - dp(4), paint);
+            canvas.restore();
+            if (pearl) {
+                drawPearlVirtualMouseOuterEdge(canvas);
+            } else {
+                drawSurfaceGlow(canvas, 0f);
+            }
+            if (pearl && virtualMouseMotionPointerId >= 0 && x >= 0f && y >= 0f
+                    && y < buttonTop) {
+                drawVirtualMouseTouchPoint(canvas);
+            }
+        }
+
+        private void drawVirtualMouseFeedback(Canvas canvas) {
+            float buttonTop = virtualMouseButtonTop();
+            float middle = rect.centerX();
+            boolean pearl = HeimdallUi.isPearl(AssistantActivity.this);
+            if (virtualMouseUsesButtonStrip()) {
+                canvas.save();
+                surfaceClip.reset();
+                RectF feedbackClip = new RectF(rect);
+                float frameGuard = dp(4);
+                feedbackClip.inset(frameGuard, frameGuard);
+                float radius = Math.max(0f, surfaceRadius() - frameGuard);
+                surfaceClip.addRoundRect(feedbackClip, radius, radius, Path.Direction.CW);
+                canvas.clipPath(surfaceClip);
+                drawVirtualMousePressedState(canvas,
+                        new RectF(rect.left, buttonTop, middle, rect.bottom),
+                        virtualMouseLeftPressProgress, pearl);
+                drawVirtualMousePressedState(canvas,
+                        new RectF(middle, buttonTop, rect.right, rect.bottom),
+                        virtualMouseRightPressProgress, pearl);
+                canvas.restore();
+            }
+            if (virtualMouseMotionPointerId >= 0 && x >= 0f && y >= 0f
+                    && y < buttonTop) {
+                drawVirtualMouseTouchPoint(canvas);
+            }
+        }
+
+        private void drawVirtualMousePressedState(Canvas canvas, RectF hotArea,
+                float rawProgress, boolean pearl) {
+            float progress = clampFloat(rawProgress, 0f, 1f);
+            if (progress <= 0.001f) {
+                return;
+            }
+            paint.setShader(null);
+            if (!pearl) {
+                boolean left = hotArea.centerX() <= rect.centerX();
+                Path buttonPath = virtualMouseButtonPath(hotArea, left, 0f);
+                paint.setStyle(Paint.Style.FILL);
+                paint.setShader(new LinearGradient(0f, hotArea.top, 0f, hotArea.bottom,
+                        new int[]{
+                                scaleColorAlpha(0x303E91D6, progress),
+                                scaleColorAlpha(0x1E2D70B8, progress),
+                                scaleColorAlpha(0x0C0C3C68, progress)},
+                        new float[]{0f, 0.48f, 1f}, Shader.TileMode.CLAMP));
+                canvas.drawPath(buttonPath, paint);
+                paint.setShader(null);
+
+                paint.setStyle(Paint.Style.STROKE);
+                float glowInset = dp(4);
+                Path glowPath = virtualMouseButtonPath(hotArea, left, glowInset);
+                paint.setStrokeWidth(dp(2));
+                paint.setColor(scaleColorAlpha(
+                        HeimdallUi.inputGlow(AssistantActivity.this, true),
+                        progress * 0.46f));
+                canvas.drawPath(glowPath, paint);
+
+                paint.setStrokeWidth(dp(1));
+                paint.setColor(scaleColorAlpha(
+                        HeimdallUi.inputEdge(AssistantActivity.this, true),
+                        progress * 0.72f));
+                canvas.drawPath(glowPath, paint);
+                return;
+            }
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(scaleColorAlpha(
+                    0x24F08A2A, progress));
+            canvas.drawRect(hotArea, paint);
+
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(dp(2));
+            paint.setColor(scaleColorAlpha(
+                    0x52000000, progress));
+            canvas.drawLine(hotArea.left, hotArea.top + dp(2),
+                    hotArea.right, hotArea.top + dp(2), paint);
+
+            RectF insetEdge = new RectF(hotArea);
+            insetEdge.inset(dp(2), dp(2));
+            paint.setStrokeWidth(dp(1));
+            paint.setColor(scaleColorAlpha(
+                    0xB8F08A2A, progress));
+            canvas.drawRect(insetEdge, paint);
+        }
+
+        private Path virtualMouseButtonPath(RectF hotArea, boolean left, float inset) {
+            RectF pathRect = new RectF(hotArea);
+            pathRect.inset(inset, inset);
+            float radius = Math.max(0f, surfaceRadius() - inset);
+            float[] radii = left
+                    ? new float[]{0f, 0f, 0f, 0f, 0f, 0f, radius, radius}
+                    : new float[]{0f, 0f, 0f, 0f, radius, radius, 0f, 0f};
+            Path path = new Path();
+            path.addRoundRect(pathRect, radii, Path.Direction.CW);
+            return path;
+        }
+
+        private void invalidateVirtualMouseFeedback() {
+            if (HeimdallUi.isPearl(AssistantActivity.this)) {
+                invalidate();
+            } else {
+                Rect dirty = new Rect();
+                int cursorPadding = dp(22);
+                if (virtualMouseFeedbackLastX >= 0f && virtualMouseFeedbackLastY >= 0f) {
+                    dirty.set(
+                            Math.round(virtualMouseFeedbackLastX) - cursorPadding,
+                            Math.round(virtualMouseFeedbackLastY) - cursorPadding,
+                            Math.round(virtualMouseFeedbackLastX) + cursorPadding,
+                            Math.round(virtualMouseFeedbackLastY) + cursorPadding);
+                }
+                boolean cursorVisible = virtualMouseMotionPointerId >= 0
+                        && x >= 0f && y >= 0f && y < virtualMouseButtonTop();
+                if (cursorVisible) {
+                    Rect currentCursor = new Rect(
+                            Math.round(x) - cursorPadding,
+                            Math.round(y) - cursorPadding,
+                            Math.round(x) + cursorPadding,
+                            Math.round(y) + cursorPadding);
+                    if (dirty.isEmpty()) {
+                        dirty.set(currentCursor);
+                    } else {
+                        dirty.union(currentCursor);
+                    }
+                    virtualMouseFeedbackLastX = x;
+                    virtualMouseFeedbackLastY = y;
+                } else {
+                    virtualMouseFeedbackLastX = -1f;
+                    virtualMouseFeedbackLastY = -1f;
+                }
+                boolean buttonsVisible = virtualMouseUsesButtonStrip()
+                        && (virtualMouseLeftPressAnimator != null
+                                || virtualMouseRightPressAnimator != null
+                                || virtualMouseLeftPressProgress > 0.001f
+                                || virtualMouseRightPressProgress > 0.001f);
+                if (buttonsVisible || virtualMouseFeedbackButtonsVisible) {
+                    Rect buttons = new Rect(
+                            Math.round(rect.left),
+                            Math.round(virtualMouseButtonTop()),
+                            Math.round(rect.right),
+                            Math.round(rect.bottom));
+                    if (dirty.isEmpty()) {
+                        dirty.set(buttons);
+                    } else {
+                        dirty.union(buttons);
+                    }
+                }
+                virtualMouseFeedbackButtonsVisible = buttonsVisible;
+                if (!dirty.isEmpty()) {
+                    virtualMouseFeedbackView.invalidate(dirty);
+                }
+            }
+        }
+
+        private void setVirtualMouseButtonFeedback(int button, boolean pressed) {
+            boolean left = button == LINUX_BTN_LEFT;
+            ValueAnimator current = left
+                    ? virtualMouseLeftPressAnimator : virtualMouseRightPressAnimator;
+            if (current != null) {
+                current.cancel();
+            }
+            float start = left
+                    ? virtualMouseLeftPressProgress : virtualMouseRightPressProgress;
+            float target = pressed ? 1f : 0f;
+            if (!shouldAnimateUi() || Math.abs(start - target) < 0.001f) {
+                if (left) {
+                    virtualMouseLeftPressProgress = target;
+                    virtualMouseLeftPressAnimator = null;
+                } else {
+                    virtualMouseRightPressProgress = target;
+                    virtualMouseRightPressAnimator = null;
+                }
+                invalidateVirtualMouseFeedback();
+                return;
+            }
+            ValueAnimator animator = ValueAnimator.ofFloat(start, target);
+            if (left) {
+                virtualMouseLeftPressAnimator = animator;
+            } else {
+                virtualMouseRightPressAnimator = animator;
+            }
+            animator.setDuration(pressed
+                    ? TOUCH_SURFACE_PRESS_IN_MS : TOUCH_SURFACE_PRESS_OUT_MS);
+            animator.setInterpolator(UI_EASE_OUT);
+            animator.addUpdateListener(valueAnimator -> {
+                float value = (float) valueAnimator.getAnimatedValue();
+                if (left) {
+                    virtualMouseLeftPressProgress = value;
+                } else {
+                    virtualMouseRightPressProgress = value;
+                }
+                invalidateVirtualMouseFeedback();
+            });
+            animator.addListener(new AnimatorListenerAdapter() {
+                @Override
+                public void onAnimationEnd(Animator animation) {
+                    if (left && virtualMouseLeftPressAnimator == animation) {
+                        virtualMouseLeftPressAnimator = null;
+                    } else if (!left && virtualMouseRightPressAnimator == animation) {
+                        virtualMouseRightPressAnimator = null;
+                    }
+                    invalidateVirtualMouseFeedback();
+                }
+            });
+            animator.start();
+        }
+
+        private void resetVirtualMouseButtonFeedback() {
+            if (virtualMouseLeftPressAnimator != null) {
+                virtualMouseLeftPressAnimator.cancel();
+                virtualMouseLeftPressAnimator = null;
+            }
+            if (virtualMouseRightPressAnimator != null) {
+                virtualMouseRightPressAnimator.cancel();
+                virtualMouseRightPressAnimator = null;
+            }
+            virtualMouseLeftPressProgress = 0f;
+            virtualMouseRightPressProgress = 0f;
+        }
+
+        private void drawVirtualMouseTouchPoint(Canvas canvas) {
+            paint.setShader(null);
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(HeimdallUi.isPearl(AssistantActivity.this)
+                    ? 0xCCF08A2A : 0xCC70B7FF);
+            canvas.drawCircle(x, y, dp(18), paint);
+            paint.setColor(HeimdallUi.textColor(AssistantActivity.this));
+            canvas.drawCircle(x, y, dp(3), paint);
+        }
+
+        private float virtualMouseButtonTop() {
+            return virtualMouseUsesButtonStrip()
+                    ? rect.top + rect.height() * 0.76f
+                    : rect.bottom;
+        }
+
+        private boolean virtualMouseUsesButtonStrip() {
+            return !touchpadSettings.virtualMouseFullGestureArea;
+        }
+
+        private boolean handleVirtualMouseTouch(MotionEvent event) {
+            int action = event.getActionMasked();
+            int actionIndex = event.getActionIndex();
+            int actionPointerId = event.getPointerId(actionIndex);
+            if (!ShizukuNativeController.isReady()) {
+                if (action == MotionEvent.ACTION_DOWN && !virtualMouseErrorShown) {
+                    virtualMouseErrorShown = true;
+                    showErrorAction(getString(R.string.virtual_mouse_unavailable));
+                }
+                if (virtualMouseDispatcher != null) {
+                    closeVirtualMouseDispatcher();
+                }
+                clearVirtualMouseGesture();
+                return true;
+            }
+            VirtualMouseDispatcher dispatcher = ensureVirtualMouseDispatcher(
+                    action == MotionEvent.ACTION_DOWN);
+            if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN) {
+                float pointerX = event.getX(actionIndex);
+                float pointerY = event.getY(actionIndex);
+                boolean firstPointerWasTapCandidate = virtualMouseTapCandidate;
+                if (action == MotionEvent.ACTION_POINTER_DOWN) {
+                    cancelVirtualMouseTapCandidate();
+                }
+                if (pointerY >= virtualMouseButtonTop() && virtualMouseButtonPointerId < 0) {
+                    virtualMouseButtonPointerId = actionPointerId;
+                    virtualMouseButton = pointerX < rect.centerX()
+                            ? LINUX_BTN_LEFT : LINUX_BTN_RIGHT;
+                    setVirtualMouseButtonFeedback(virtualMouseButton, true);
+                    dispatcher.button(virtualMouseButton, true);
+                } else if (virtualMouseMotionPointerId < 0) {
+                    virtualMouseMotionPointerId = actionPointerId;
+                    virtualMouseLastX = pointerX;
+                    virtualMouseLastY = pointerY;
+                    x = pointerX;
+                    y = pointerY;
+                    if (action == MotionEvent.ACTION_DOWN) {
+                        beginVirtualMouseTapCandidate(event.getEventTime(), pointerX, pointerY);
+                    }
+                }
+                if (event.getPointerCount() == 2 && virtualMouseButtonPointerId < 0
+                        && startVirtualMouseTwoFingerGesture(event, actionPointerId,
+                                firstPointerWasTapCandidate)) {
+                    virtualMouseScrolling = true;
+                    virtualMouseScrollLastY = averagePointerY(event, -1);
+                    virtualMouseScrollAccumulator = 0f;
+                } else if (event.getPointerCount() > 2) {
+                    clearVirtualMouseTwoFingerTapCandidate();
+                }
+                invalidateVirtualMouseFeedback();
+                return true;
+            }
+            if (action == MotionEvent.ACTION_MOVE) {
+                if (virtualMouseScrolling && event.getPointerCount() >= 2) {
+                    if (virtualMouseTwoFingerTapCandidate
+                            && virtualMouseTwoFingerMovedBeyondTouchSlop(event)) {
+                        virtualMouseTwoFingerTapCandidate = false;
+                    }
+                    float averageY = averagePointerY(event, -1);
+                    virtualMouseScrollAccumulator += averageY - virtualMouseScrollLastY;
+                    virtualMouseScrollLastY = averageY;
+                    float step = Math.max(16f, touchpadSettings.virtualMouseScrollDistance);
+                    int wheel = 0;
+                    while (Math.abs(virtualMouseScrollAccumulator) >= step) {
+                        int direction = virtualMouseScrollAccumulator > 0f ? -1 : 1;
+                        wheel += direction;
+                        virtualMouseScrollAccumulator -= Math.signum(
+                                virtualMouseScrollAccumulator) * step;
+                    }
+                    if (wheel != 0) {
+                        virtualMouseTwoFingerTapCandidate = false;
+                        dispatcher.wheel(wheel);
+                    }
+                } else {
+                    int pointerIndex = event.findPointerIndex(virtualMouseMotionPointerId);
+                    if (pointerIndex >= 0) {
+                        float pointerX = event.getX(pointerIndex);
+                        float pointerY = event.getY(pointerIndex);
+                        if (virtualMouseTapCandidate
+                                && movedBeyondSlop(pointerX, pointerY,
+                                        virtualMouseGestureDownX, virtualMouseGestureDownY,
+                                        virtualMouseTouchSlop)) {
+                            boolean startDoubleTapDrag = virtualMouseSecondTapCandidate;
+                            cancelVirtualMouseTapCandidate();
+                            if (startDoubleTapDrag) {
+                                virtualMouseGestureLeftButtonDown = true;
+                                dispatcher.button(LINUX_BTN_LEFT, true);
+                            }
+                        }
+                        float dx = (pointerX - virtualMouseLastX)
+                                * touchpadSettings.virtualMouseSensitivity;
+                        float dy = (pointerY - virtualMouseLastY)
+                                * touchpadSettings.virtualMouseSensitivity;
+                        if (touchpadSettings.virtualMouseInvertY) {
+                            dy = -dy;
+                        }
+                        virtualMouseLastX = pointerX;
+                        virtualMouseLastY = pointerY;
+                        x = pointerX;
+                        y = pointerY;
+                        dispatcher.move(dx, dy);
+                    }
+                }
+                invalidateVirtualMouseFeedback();
+                return true;
+            }
+            if (action == MotionEvent.ACTION_CANCEL) {
+                releaseAllVirtualMouseButtons(dispatcher);
+                clearVirtualMouseGesture();
+                invalidateVirtualMouseFeedback();
+                return true;
+            }
+            if (action == MotionEvent.ACTION_POINTER_UP || action == MotionEvent.ACTION_UP) {
+                boolean singleTap = action == MotionEvent.ACTION_UP
+                        && actionPointerId == virtualMouseMotionPointerId
+                        && virtualMouseTapCandidate
+                        && !movedBeyondSlop(event.getX(actionIndex), event.getY(actionIndex),
+                                virtualMouseGestureDownX, virtualMouseGestureDownY,
+                                virtualMouseTouchSlop);
+                boolean completedDoubleTap = singleTap && virtualMouseSecondTapCandidate;
+                if (actionPointerId == virtualMouseButtonPointerId
+                        || action == MotionEvent.ACTION_UP) {
+                    if (virtualMouseButton != 0) {
+                        setVirtualMouseButtonFeedback(virtualMouseButton, false);
+                        dispatcher.button(virtualMouseButton, false);
+                    }
+                    virtualMouseButton = 0;
+                    virtualMouseButtonPointerId = -1;
+                }
+                if (virtualMouseGestureLeftButtonDown
+                        && (actionPointerId == virtualMouseMotionPointerId
+                                || action == MotionEvent.ACTION_UP)) {
+                    dispatcher.button(LINUX_BTN_LEFT, false);
+                    virtualMouseGestureLeftButtonDown = false;
+                }
+                if (virtualMouseTwoFingerTapCandidate
+                        && event.getPointerCount() - 1 < 2
+                        && virtualMouseTwoFingerTapStillValid(event)) {
+                    clickVirtualMouseButton(dispatcher, LINUX_BTN_RIGHT);
+                }
+                if (event.getPointerCount() - 1 < 2) {
+                    clearVirtualMouseTwoFingerTapCandidate();
+                }
+                if (actionPointerId == virtualMouseMotionPointerId) {
+                    virtualMouseMotionPointerId = -1;
+                }
+                if (singleTap) {
+                    pulseVirtualMouseLeftButton(dispatcher);
+                }
+                if (action == MotionEvent.ACTION_UP) {
+                    long tapUpTime = event.getEventTime();
+                    float tapX = event.getX(actionIndex);
+                    float tapY = event.getY(actionIndex);
+                    clearVirtualMouseGesture();
+                    if (singleTap && !completedDoubleTap) {
+                        virtualMouseLastTapUpTime = tapUpTime;
+                        virtualMouseLastTapX = tapX;
+                        virtualMouseLastTapY = tapY;
+                    }
+                } else if (event.getPointerCount() - 1 < 2) {
+                    virtualMouseScrolling = false;
+                    virtualMouseScrollAccumulator = 0f;
+                    selectRemainingMotionPointer(event, actionIndex);
+                } else if (virtualMouseScrolling) {
+                    virtualMouseScrollLastY = averagePointerY(event, actionPointerId);
+                }
+                invalidateVirtualMouseFeedback();
+                return true;
+            }
+            return true;
+        }
+
+        private void beginVirtualMouseTapCandidate(long eventTime, float pointerX, float pointerY) {
+            virtualMouseGestureDownX = pointerX;
+            virtualMouseGestureDownY = pointerY;
+            virtualMouseTapCandidate = true;
+            long sinceLastTap = eventTime - virtualMouseLastTapUpTime;
+            virtualMouseSecondTapCandidate = virtualMouseLastTapUpTime > 0L
+                    && sinceLastTap >= 0L
+                    && sinceLastTap <= virtualMouseDoubleTapTimeoutMs
+                    && !movedBeyondSlop(pointerX, pointerY,
+                            virtualMouseLastTapX, virtualMouseLastTapY,
+                            virtualMouseDoubleTapSlop);
+            if (!virtualMouseSecondTapCandidate
+                    && sinceLastTap > virtualMouseDoubleTapTimeoutMs) {
+                virtualMouseLastTapUpTime = 0L;
+            }
+        }
+
+        private void cancelVirtualMouseTapCandidate() {
+            virtualMouseTapCandidate = false;
+            virtualMouseSecondTapCandidate = false;
+            virtualMouseLastTapUpTime = 0L;
+        }
+
+        private boolean startVirtualMouseTwoFingerGesture(
+                MotionEvent event, int secondPointerId, boolean tapCandidate) {
+            int firstIndex = event.findPointerIndex(virtualMouseMotionPointerId);
+            int secondIndex = event.findPointerIndex(secondPointerId);
+            if (firstIndex < 0 || secondIndex < 0
+                    || event.getY(firstIndex) >= virtualMouseButtonTop()
+                    || event.getY(secondIndex) >= virtualMouseButtonTop()) {
+                clearVirtualMouseTwoFingerTapCandidate();
+                return false;
+            }
+            virtualMouseTwoFingerPointerIdA = virtualMouseMotionPointerId;
+            virtualMouseTwoFingerPointerIdB = secondPointerId;
+            virtualMouseTwoFingerStartAX = event.getX(firstIndex);
+            virtualMouseTwoFingerStartAY = event.getY(firstIndex);
+            virtualMouseTwoFingerStartBX = event.getX(secondIndex);
+            virtualMouseTwoFingerStartBY = event.getY(secondIndex);
+            virtualMouseTwoFingerTapCandidate = tapCandidate;
+            return true;
+        }
+
+        private boolean virtualMouseTwoFingerMovedBeyondTouchSlop(MotionEvent event) {
+            int firstIndex = event.findPointerIndex(virtualMouseTwoFingerPointerIdA);
+            int secondIndex = event.findPointerIndex(virtualMouseTwoFingerPointerIdB);
+            if (firstIndex < 0 || secondIndex < 0
+                    || event.getY(firstIndex) >= virtualMouseButtonTop()
+                    || event.getY(secondIndex) >= virtualMouseButtonTop()) {
+                return true;
+            }
+            return movedBeyondSlop(event.getX(firstIndex), event.getY(firstIndex),
+                    virtualMouseTwoFingerStartAX, virtualMouseTwoFingerStartAY,
+                    virtualMouseTouchSlop)
+                    || movedBeyondSlop(event.getX(secondIndex), event.getY(secondIndex),
+                            virtualMouseTwoFingerStartBX, virtualMouseTwoFingerStartBY,
+                            virtualMouseTouchSlop);
+        }
+
+        private boolean virtualMouseTwoFingerTapStillValid(MotionEvent event) {
+            return !virtualMouseTwoFingerMovedBeyondTouchSlop(event);
+        }
+
+        private void clearVirtualMouseTwoFingerTapCandidate() {
+            virtualMouseTwoFingerTapCandidate = false;
+            virtualMouseTwoFingerPointerIdA = -1;
+            virtualMouseTwoFingerPointerIdB = -1;
+        }
+
+        private boolean movedBeyondSlop(float pointerX, float pointerY,
+                float startX, float startY, int slop) {
+            float dx = pointerX - startX;
+            float dy = pointerY - startY;
+            return dx * dx + dy * dy > (float) slop * slop;
+        }
+
+        private void clickVirtualMouseButton(
+                VirtualMouseDispatcher dispatcher, int linuxButtonCode) {
+            dispatcher.button(linuxButtonCode, true);
+            dispatcher.button(linuxButtonCode, false);
+        }
+
+        private void pulseVirtualMouseLeftButton(VirtualMouseDispatcher dispatcher) {
+            uiHandler.removeCallbacks(virtualMouseTapPulseUp);
+            if (!virtualMouseTapPulseDown
+                    || virtualMouseTapPulseDispatcher != dispatcher) {
+                dispatcher.button(LINUX_BTN_LEFT, true);
+            }
+            virtualMouseTapPulseDown = true;
+            virtualMouseTapPulseDispatcher = dispatcher;
+            uiHandler.postDelayed(virtualMouseTapPulseUp, VIRTUAL_MOUSE_TAP_PULSE_MS);
+        }
+
+        private void finishVirtualMouseTapPulse() {
+            if (!virtualMouseTapPulseDown) {
+                return;
+            }
+            VirtualMouseDispatcher dispatcher = virtualMouseTapPulseDispatcher;
+            virtualMouseTapPulseDown = false;
+            virtualMouseTapPulseDispatcher = null;
+            if (dispatcher != null
+                    && virtualMouseButton != LINUX_BTN_LEFT
+                    && !virtualMouseGestureLeftButtonDown) {
+                dispatcher.button(LINUX_BTN_LEFT, false);
+            }
+        }
+
+        private void cancelVirtualMouseTapPulse() {
+            uiHandler.removeCallbacks(virtualMouseTapPulseUp);
+            if (virtualMouseTapPulseDown && virtualMouseTapPulseDispatcher != null) {
+                virtualMouseTapPulseDispatcher.button(LINUX_BTN_LEFT, false);
+            }
+            virtualMouseTapPulseDown = false;
+            virtualMouseTapPulseDispatcher = null;
+        }
+
+        private void releaseAllVirtualMouseButtons(VirtualMouseDispatcher dispatcher) {
+            cancelVirtualMouseTapPulse();
+            dispatcher.button(LINUX_BTN_LEFT, false);
+            dispatcher.button(LINUX_BTN_RIGHT, false);
+            virtualMouseButton = 0;
+            virtualMouseButtonPointerId = -1;
+            virtualMouseGestureLeftButtonDown = false;
+            resetVirtualMouseButtonFeedback();
+        }
+
+        private float averagePointerY(MotionEvent event, int excludedPointerId) {
+            float total = 0f;
+            int count = 0;
+            for (int i = 0; i < event.getPointerCount(); i++) {
+                if (event.getPointerId(i) == excludedPointerId) {
+                    continue;
+                }
+                total += event.getY(i);
+                count++;
+            }
+            return count == 0 ? 0f : total / count;
+        }
+
+        private void selectRemainingMotionPointer(MotionEvent event, int liftedIndex) {
+            virtualMouseMotionPointerId = -1;
+            for (int i = 0; i < event.getPointerCount(); i++) {
+                if (i == liftedIndex
+                        || event.getPointerId(i) == virtualMouseButtonPointerId) {
+                    continue;
+                }
+                virtualMouseMotionPointerId = event.getPointerId(i);
+                virtualMouseLastX = event.getX(i);
+                virtualMouseLastY = event.getY(i);
+                x = virtualMouseLastX;
+                y = virtualMouseLastY;
+                break;
+            }
+        }
+
+        private void clearVirtualMouseGesture() {
+            if (virtualMouseButton != 0) {
+                setVirtualMouseButtonFeedback(virtualMouseButton, false);
+            }
+            virtualMouseButton = 0;
+            virtualMouseButtonPointerId = -1;
+            virtualMouseMotionPointerId = -1;
+            virtualMouseScrolling = false;
+            virtualMouseScrollAccumulator = 0f;
+            virtualMouseTapCandidate = false;
+            virtualMouseSecondTapCandidate = false;
+            virtualMouseGestureLeftButtonDown = false;
+            virtualMouseLastTapUpTime = 0L;
+            clearVirtualMouseTwoFingerTapCandidate();
+            x = -1f;
+            y = -1f;
+            resetSurfacePressFeedback();
+            invalidateVirtualMouseFeedback();
+        }
+
         private boolean handleRelativeMouseTouch(MotionEvent event) {
             int action = event.getActionMasked();
             if (action == MotionEvent.ACTION_DOWN) {
@@ -12554,6 +13899,11 @@ public class AssistantActivity extends Activity {
             String mode = TouchpadSettings.normalizeMode(touchpadSettings.mode);
             if (TouchpadSettings.MODE_RELATIVE_MOUSE.equals(mode)) {
                 cancelRelativeMousePulse(true);
+            } else if (TouchpadSettings.MODE_VIRTUAL_MOUSE.equals(mode)) {
+                if (virtualMouseDispatcher != null) {
+                    releaseAllVirtualMouseButtons(virtualMouseDispatcher);
+                }
+                clearVirtualMouseGesture();
             } else if (TouchpadSettings.MODE_RIGHT_STICK.equals(mode)) {
                 if (rightStickGestureStarted) {
                     recenterRightStick(false);

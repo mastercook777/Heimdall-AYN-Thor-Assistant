@@ -12,6 +12,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
+import java.io.InputStream;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.nio.charset.StandardCharsets;
@@ -26,6 +27,7 @@ final class HeimdallStabilityDiagnostics {
     static final String TAG = "HeimdallStability";
     private static final String JOURNAL_FILE = "heimdall-stability.log";
     private static final long MAX_JOURNAL_BYTES = 128L * 1024L;
+    private static final int MAX_EXIT_TRACE_BYTES = 64 * 1024;
     private static boolean crashHandlerInstalled;
 
     private final ThorPerformanceCompatibility performanceCompatibility;
@@ -163,6 +165,8 @@ final class HeimdallStabilityDiagnostics {
                 .append("screenRecordingActive=")
                 .append(ScreenRecordingService.isRecording()).append('\n')
                 .append("previousExit=").append(previousExitSummary(context)).append('\n')
+                .append("\nPrevious exit trace\n")
+                .append(previousExitTrace(context))
                 .append("\nPrivate stability journal\n")
                 .append(readJournal(context));
         return report.toString();
@@ -223,6 +227,43 @@ final class HeimdallStabilityDiagnostics {
                     + ",rssKb=" + exit.getRss();
         } catch (RuntimeException error) {
             return "read-failed:" + error.getClass().getSimpleName();
+        }
+    }
+
+    private static String previousExitTrace(Context context) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            return "unsupported\n";
+        }
+        ActivityManager manager = (ActivityManager) context.getSystemService(
+                Context.ACTIVITY_SERVICE);
+        if (manager == null) {
+            return "unavailable\n";
+        }
+        try {
+            List<ApplicationExitInfo> exits = manager.getHistoricalProcessExitReasons(
+                    context.getPackageName(), 0, 1);
+            if (exits == null || exits.isEmpty()) {
+                return "none\n";
+            }
+            try (InputStream input = exits.get(0).getTraceInputStream();
+                 ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+                if (input == null) {
+                    return "none\n";
+                }
+                byte[] buffer = new byte[4096];
+                int read;
+                while (output.size() < MAX_EXIT_TRACE_BYTES
+                        && (read = input.read(buffer, 0,
+                        Math.min(buffer.length, MAX_EXIT_TRACE_BYTES - output.size()))) != -1) {
+                    output.write(buffer, 0, read);
+                }
+                if (output.size() == 0) {
+                    return "none\n";
+                }
+                return output.toString(StandardCharsets.UTF_8.name()) + "\n";
+            }
+        } catch (Exception error) {
+            return "read-failed:" + error.getClass().getSimpleName() + "\n";
         }
     }
 

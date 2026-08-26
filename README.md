@@ -47,8 +47,9 @@ Heimdall keeps the game on Thor's upper screen while the lower screen becomes a 
 | Area | What Heimdall provides |
 | --- | --- |
 | Profiles and Grid | Separate game layouts, App bindings, touch settings, maps, guides, and Canvases. Drag and resize modules on a visible 6 x 8 Grid, then save explicitly. |
-| Macros | Structured tap, hold, swipe, wait, and physical-controller sequences. No free-form command editing is required. |
-| Touch and aiming | Basic Touch, touchpad drag, Virtual Right Stick, Precision Aim, and mapping-compatible Shizuku Touch when the required route is available. |
+| Macros | Structured tap, hold, swipe, wait, and physical-controller sequences, including a controller composer with chords, charge holds, recomposition, mirroring, cloning, and bounded cancellation. No free-form command editing is required. |
+| Touch and aiming | Basic Touch, touchpad drag, Virtual Right Stick, Precision Aim, a real relative Virtual Mouse, and mapping-compatible Shizuku Touch when the required route is available. |
+| PC keyboard | A temporary complete US ANSI keyboard plus Profile-owned configurable Keypad modules through Shizuku/uinput. This is active-play PC input, not Android IME text entry. |
 | Reference tools | Local maps, PDFs, guides, Interactive Map links, and multiple independent static-image Canvases per Profile. |
 | Upper-screen tools | Screenshot, screen recording, and one live region magnifier per Profile. |
 
@@ -71,7 +72,7 @@ Heimdall keeps the game on Thor's upper screen while the lower screen becomes a 
 | --- | --- |
 | Profiles, Grid, maps, guides, Canvas, and normal UI | Install Heimdall only. No Developer options or Shizuku required. |
 | Upper-screen taps, holds, swipes, and compatible touchpad drag | Enable the Heimdall Accessibility service for **Basic Touch**. |
-| Physical-controller recording/replay, Virtual Right Stick, Precision Aim, or mapping-compatible Enhanced Touch | Install, start, and authorize **Shizuku**. This route needs Developer options for wireless debugging. |
+| Physical-controller recording/replay, Virtual Right Stick, Precision Aim, Virtual Mouse, PC Keyboard, or mapping-compatible Enhanced Touch | Install, start, and authorize **Shizuku**. This route needs Developer options for wireless debugging. |
 | Live magnifier or screen recording | Accept Android's screen-capture consent when Heimdall requests it. |
 
 You do not need to enable every permission during first launch. Start with one Profile and one route, test it, then add features as needed.

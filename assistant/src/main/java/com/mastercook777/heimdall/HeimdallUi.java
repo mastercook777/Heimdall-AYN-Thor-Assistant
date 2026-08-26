@@ -121,6 +121,7 @@ final class HeimdallUi {
 
     static final float MACRO_ICON_SHARE_STANDARD = 0.44f;
     static final float MACRO_ICON_SHARE_UTILITY = 0.40f;
+    static final float MACRO_ICON_SIZE_SCALE = 1.15f;
     static final int MACRO_ICON_MIN = 34;
     static final int MACRO_ICON_MAX = 58;
     static final int MACRO_ICON_LABEL_GAP = 6;
@@ -388,7 +389,7 @@ final class HeimdallUi {
 
     static void applyQuickActionPanel(Context context, LinearLayout view) {
         view.setBackground(isPearl(context)
-                ? cncRaised(context, RADIUS_MODULE, false, false)
+                ? cncKeyboardShell(context, RADIUS_MODULE)
                 : glass(context,
                         COLOR_QUICK_ACTION_FILL_TOP, COLOR_QUICK_ACTION_FILL_BOTTOM,
                         COLOR_QUICK_ACTION_EDGE_TOP, COLOR_QUICK_ACTION_EDGE_BOTTOM,
@@ -486,7 +487,7 @@ final class HeimdallUi {
         button.setGravity(Gravity.CENTER);
         button.setIncludeFontPadding(false);
         if (isPearl(context)) {
-            button.setBackground(cncRaised(context, RADIUS_CARD,
+            button.setBackground(cncMacroControl(context, RADIUS_CARD,
                     focused || primary, utility));
         } else {
             button.setBackground(glass(context,
@@ -677,6 +678,25 @@ final class HeimdallUi {
                 CncSurfaceDrawable.INPUT_FRAME, false, false, circular);
     }
 
+    /** Keyboard-shell layers with vertical lighting that stays optically level at any width. */
+    private static Drawable cncKeyboardShell(Context context, int radiusDp) {
+        if (DebugPerformanceDiagnostics.isFlatUi()) {
+            return flatSurface(context, radiusDp, false);
+        }
+        return new CncSurfaceDrawable(context, radiusDp,
+                CncSurfaceDrawable.INPUT_FRAME, false, false, false, true);
+    }
+
+    /** A slightly raised keyboard-shell derivative for independently pressable Macro controls. */
+    private static Drawable cncMacroControl(Context context, int radiusDp,
+            boolean accent, boolean muted) {
+        if (DebugPerformanceDiagnostics.isFlatUi()) {
+            return flatSurface(context, radiusDp, accent);
+        }
+        return new CncSurfaceDrawable(context, radiusDp,
+                CncSurfaceDrawable.RAISED, accent, muted, false, true);
+    }
+
     private static Drawable flatSurface(Context context, int radiusDp, boolean selected) {
         return flatSurface(context, radiusDp, selected, false);
     }
@@ -717,6 +737,7 @@ final class HeimdallUi {
         private final boolean accent;
         private final boolean muted;
         private final boolean circular;
+        private final boolean aspectInvariantLighting;
         private int alpha = 255;
 
         CncSurfaceDrawable(Context context, int radiusDp, int mode, boolean accent, boolean muted) {
@@ -725,12 +746,18 @@ final class HeimdallUi {
 
         CncSurfaceDrawable(Context context, int radiusDp, int mode, boolean accent, boolean muted,
                 boolean circular) {
+            this(context, radiusDp, mode, accent, muted, circular, false);
+        }
+
+        CncSurfaceDrawable(Context context, int radiusDp, int mode, boolean accent, boolean muted,
+                boolean circular, boolean aspectInvariantLighting) {
             density = context.getResources().getDisplayMetrics().density;
             radius = radiusDp * density;
             this.mode = mode;
             this.accent = accent;
             this.muted = muted;
             this.circular = circular;
+            this.aspectInvariantLighting = aspectInvariantLighting;
         }
 
         @Override
@@ -782,7 +809,7 @@ final class HeimdallUi {
             if (mode == INPUT_FRAME) {
                 drawGradientLayer(canvas, shell, radius - px(0.35f),
                         new int[]{0xFF6D7880, 0xFFADB5BA, 0xFFF9FAF9},
-                        new float[]{0f, 0.50f, 1f}, true);
+                        new float[]{0f, 0.50f, 1f}, !aspectInvariantLighting);
             } else if (mode == INSET) {
                 drawGradientLayer(canvas, shell, radius - px(0.35f),
                         new int[]{0xFF77818A, 0xFFAAB1B6, 0xFFF7F8F7},
@@ -802,7 +829,7 @@ final class HeimdallUi {
             } else {
                 drawGradientLayer(canvas, shell, radius - px(0.35f),
                         new int[]{0xFFF9FAF9, 0xFFBBC2C7, 0xFF717C85},
-                        new float[]{0f, 0.52f, 1f}, true);
+                        new float[]{0f, 0.52f, 1f}, !aspectInvariantLighting);
             }
 
             float rimInset = mode == INPUT_FRAME ? px(1.55f)
@@ -816,7 +843,7 @@ final class HeimdallUi {
             if (mode == INPUT_FRAME) {
                 drawGradientLayer(canvas, rim, rimRadius,
                         new int[]{0xFFFFFFFF, 0xFFFDFDFC, 0xFFC3CACF},
-                        new float[]{0f, 0.64f, 1f}, true);
+                        new float[]{0f, 0.64f, 1f}, !aspectInvariantLighting);
             } else if (mode == INSET) {
                 drawGradientLayer(canvas, rim, rimRadius,
                         new int[]{0xFF8A949C, 0xFFD7DBDD, 0xFFFFFFFF},
@@ -836,7 +863,7 @@ final class HeimdallUi {
             } else {
                 drawGradientLayer(canvas, rim, rimRadius,
                         new int[]{0xFFFFFFFF, 0xFFF2F3F2, 0xFFB8C0C5},
-                        new float[]{0f, 0.58f, 1f}, true);
+                        new float[]{0f, 0.58f, 1f}, !aspectInvariantLighting);
             }
 
             float faceInset = mode == INPUT_FRAME ? px(1.45f)

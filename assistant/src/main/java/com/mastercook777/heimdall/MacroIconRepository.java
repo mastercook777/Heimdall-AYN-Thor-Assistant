@@ -9,6 +9,7 @@ import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.Rect;
 import android.graphics.RectF;
+import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
 import android.net.Uri;
 
@@ -181,6 +182,40 @@ final class MacroIconRepository {
         return options;
     }
 
+    static boolean isUserIconKey(String key) {
+        if (key == null) {
+            return false;
+        }
+        String normalized = key.trim();
+        if (!normalized.startsWith(USER_PREFIX)) {
+            return false;
+        }
+        String fileName = normalized.substring(USER_PREFIX.length());
+        return fileName.length() > 0
+                && fileName.toLowerCase(Locale.US).endsWith(".png")
+                && fileName.indexOf('/') < 0
+                && fileName.indexOf('\\') < 0
+                && !".".equals(fileName)
+                && !"..".equals(fileName);
+    }
+
+    static boolean deleteUserIcon(Context context, String key) {
+        if (context == null || !isUserIconKey(key)) {
+            return false;
+        }
+        String fileName = key.trim().substring(USER_PREFIX.length());
+        try {
+            File directory = userDirectory(context).getCanonicalFile();
+            File target = new File(directory, fileName).getCanonicalFile();
+            if (!directory.equals(target.getParentFile()) || !target.isFile()) {
+                return false;
+            }
+            return target.delete();
+        } catch (IOException ignored) {
+            return false;
+        }
+    }
+
     static MacroIconOption importUserIcon(Context context, Uri uri) throws IOException {
         if (context == null || uri == null) {
             throw new IOException("Missing icon source");
@@ -205,10 +240,7 @@ final class MacroIconRepository {
 
         BitmapFactory.Options decode = new BitmapFactory.Options();
         decode.inPreferredConfig = Bitmap.Config.ARGB_8888;
-        decode.inSampleSize = 1;
-        while (Math.max(bounds.outWidth, bounds.outHeight) / decode.inSampleSize > 1024) {
-            decode.inSampleSize *= 2;
-        }
+        decode.inSampleSize = importSampleSize(bounds.outWidth, bounds.outHeight);
         Bitmap source;
         try (InputStream stream = context.getContentResolver().openInputStream(uri)) {
             source = stream == null ? null : BitmapFactory.decodeStream(stream, null, decode);
@@ -253,6 +285,17 @@ final class MacroIconRepository {
         }
         return MacroIconOption.file(USER_PREFIX + fileName, output.getAbsolutePath(),
                 context.getString(R.string.macro_icon_custom));
+    }
+
+    static int importSampleSize(int width, int height) {
+        int longest = Math.max(width, height);
+        int shortest = Math.min(width, height);
+        int sampleSize = 1;
+        while (longest / sampleSize > 1024
+                && shortest / (sampleSize * 2) >= NORMALIZED_SIZE) {
+            sampleSize *= 2;
+        }
+        return sampleSize;
     }
 
     static synchronized String installBundledIcon(Context context, File source,
@@ -397,18 +440,25 @@ final class MacroIconRepository {
         Drawable load(Context context) {
             if (assetPath != null) {
                 try (InputStream stream = context.getAssets().open(assetPath)) {
-                    return Drawable.createFromStream(stream, assetPath);
+                    return withBitmapFiltering(Drawable.createFromStream(stream, assetPath));
                 } catch (IOException ignored) {
                     return null;
                 }
             }
             if (filePath != null) {
-                return Drawable.createFromPath(filePath);
+                return withBitmapFiltering(Drawable.createFromPath(filePath));
             }
             if (drawableRes == 0) {
                 return null;
             }
             return context.getDrawable(drawableRes);
+        }
+
+        private Drawable withBitmapFiltering(Drawable drawable) {
+            if (drawable instanceof BitmapDrawable) {
+                ((BitmapDrawable) drawable).setFilterBitmap(true);
+            }
+            return drawable;
         }
     }
 }

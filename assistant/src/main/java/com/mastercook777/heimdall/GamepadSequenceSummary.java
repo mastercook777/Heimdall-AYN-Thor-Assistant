@@ -4,6 +4,7 @@ import android.content.Context;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -16,6 +17,7 @@ import java.util.Set;
 public final class GamepadSequenceSummary {
     private static final int EV_KEY = 1;
     private static final int EV_ABS = 3;
+    private static final int EV_SYN = 0;
     private static final int MAX_CAPTURED_EVENTS = 1024;
 
     private static final int ABS_X = 0;
@@ -55,6 +57,9 @@ public final class GamepadSequenceSummary {
         }
 
         String[] tokens = raw.substring(4).split(";");
+        if (containsFrameMarkers(tokens)) {
+            return summarizeFramed(context, tokens, rightStickAxisX, rightStickAxisY);
+        }
         List<List<String>> groups = new ArrayList<>();
         Map<Integer, String> activeButtons = new HashMap<>();
         Set<String> seenAnalogInputs = new LinkedHashSet<>();
@@ -62,6 +67,9 @@ public final class GamepadSequenceSummary {
         long replayDurationMs = 0L;
         int eventCount = 0;
         boolean containsAnalog = false;
+        int dpadX = 0;
+        int dpadY = 0;
+        String lastDpadAction = "";
 
         for (String token : tokens) {
             int[] item = parseItem(token);
@@ -97,9 +105,17 @@ public final class GamepadSequenceSummary {
                 continue;
             }
 
-            String dpad = dpadLabel(code, value);
-            if (dpad != null) {
-                activeGroup = appendAction(groups, activeGroup, activeButtons, dpad);
+            if (code == ABS_HAT0X || code == ABS_HAT0Y) {
+                if (code == ABS_HAT0X) {
+                    dpadX = normalizeDirection(value);
+                } else {
+                    dpadY = normalizeDirection(value);
+                }
+                String dpad = directionLabel(dpadX, dpadY);
+                if (dpad != null && !dpad.equals(lastDpadAction)) {
+                    activeGroup = appendAction(groups, activeGroup, activeButtons, dpad);
+                }
+                lastDpadAction = dpad == null ? "" : dpad;
                 continue;
             }
 
@@ -135,6 +151,124 @@ public final class GamepadSequenceSummary {
         return new GamepadSequenceSummary(false,
                 context.getString(R.string.gamepad_summary_empty), "", 0, 0L,
                 false, false);
+    }
+
+    private static boolean containsFrameMarkers(String[] tokens) {
+        for (String token : tokens) {
+            int[] item = parseItem(token);
+            if (item != null && item[0] == EV_SYN) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static GamepadSequenceSummary summarizeFramed(Context context, String[] tokens,
+            int rightStickAxisX, int rightStickAxisY) {
+        List<List<String>> groups = new ArrayList<>();
+        Map<Integer, String> activeButtons = new LinkedHashMap<>();
+        Set<String> seenAnalogInputs = new LinkedHashSet<>();
+        long replayDurationMs = 0L;
+        int eventCount = 0;
+        boolean containsAnalog = false;
+        boolean frameDirty = false;
+        int dpadX = 0;
+        int dpadY = 0;
+
+        for (String token : tokens) {
+            int[] item = parseItem(token);
+            if (item == null) {
+                continue;
+            }
+            int type = item[0];
+            int code = item[1];
+            int value = item[2];
+            eventCount++;
+            replayDurationMs += Math.max(0, item[3]);
+
+            if (type == EV_SYN) {
+                if (frameDirty) {
+                    appendFramedAction(groups, dpadX, dpadY, activeButtons);
+                    frameDirty = false;
+                }
+                continue;
+            }
+            frameDirty = true;
+            if (type == EV_KEY) {
+                if (isDpadKey(code)) {
+                    if (code == GamepadSequenceComposer.BTN_DPAD_LEFT
+                            || code == GamepadSequenceComposer.BTN_DPAD_RIGHT) {
+                        dpadX = value == 0 ? 0
+                                : (code == GamepadSequenceComposer.BTN_DPAD_LEFT ? -1 : 1);
+                    } else {
+                        dpadY = value == 0 ? 0
+                                : (code == GamepadSequenceComposer.BTN_DPAD_UP ? -1 : 1);
+                    }
+                } else if (value == 0) {
+                    activeButtons.remove(code);
+                } else {
+                    activeButtons.put(code, keyLabel(context, code));
+                }
+                continue;
+            }
+            if (type != EV_ABS) {
+                continue;
+            }
+            if (code == ABS_HAT0X) {
+                dpadX = normalizeDirection(value);
+                continue;
+            }
+            if (code == ABS_HAT0Y) {
+                dpadY = normalizeDirection(value);
+                continue;
+            }
+            String analog = analogLabel(context, code, rightStickAxisX, rightStickAxisY);
+            if (analog != null && value != 0) {
+                containsAnalog = true;
+                seenAnalogInputs.add(analog);
+            }
+        }
+        if (frameDirty) {
+            appendFramedAction(groups, dpadX, dpadY, activeButtons);
+        }
+        for (String analog : seenAnalogInputs) {
+            List<String> action = new ArrayList<>();
+            action.add(analog);
+            groups.add(action);
+        }
+        if (eventCount == 0) {
+            return empty(context);
+        }
+
+        String title = renderGroups(context, groups);
+        if (title.length() == 0) {
+            title = context.getString(R.string.gamepad_summary_generic);
+        }
+        String kind = sequenceKind(context, groups, containsAnalog);
+        String duration = replayDurationLabel(context, replayDurationMs);
+        String events = context.getResources().getQuantityString(
+                R.plurals.gamepad_summary_event_count, eventCount, eventCount);
+        boolean hitLimit = eventCount >= MAX_CAPTURED_EVENTS;
+        String subtitle = context.getString(hitLimit
+                ? R.string.gamepad_summary_subtitle_many
+                : R.string.gamepad_summary_subtitle, kind, duration, events);
+        return new GamepadSequenceSummary(true, title, subtitle, eventCount,
+                replayDurationMs, containsAnalog, hitLimit);
+    }
+
+    private static void appendFramedAction(List<List<String>> groups, int dpadX, int dpadY,
+            Map<Integer, String> activeButtons) {
+        List<String> action = new ArrayList<>();
+        String direction = directionLabel(dpadX, dpadY);
+        if (direction != null) {
+            action.add(direction);
+        }
+        for (String label : activeButtons.values()) {
+            addOnce(action, label);
+        }
+        if (!action.isEmpty()) {
+            groups.add(action);
+        }
     }
 
     private static int[] parseItem(String token) {
@@ -263,17 +397,20 @@ public final class GamepadSequenceSummary {
         }
     }
 
-    private static String dpadLabel(int code, int value) {
-        if (value == 0) {
-            return null;
-        }
-        if (code == ABS_HAT0X) {
-            return value < 0 ? "\u2190" : "\u2192";
-        }
-        if (code == ABS_HAT0Y) {
-            return value < 0 ? "\u2191" : "\u2193";
-        }
-        return null;
+    private static boolean isDpadKey(int code) {
+        return code == GamepadSequenceComposer.BTN_DPAD_UP
+                || code == GamepadSequenceComposer.BTN_DPAD_DOWN
+                || code == GamepadSequenceComposer.BTN_DPAD_LEFT
+                || code == GamepadSequenceComposer.BTN_DPAD_RIGHT;
+    }
+
+    private static String directionLabel(int x, int y) {
+        String label = GamepadSequenceComposer.directionLabel(x, y);
+        return label.length() == 0 ? null : label;
+    }
+
+    private static int normalizeDirection(int value) {
+        return Integer.compare(value, 0);
     }
 
     private static String analogLabel(Context context, int code,

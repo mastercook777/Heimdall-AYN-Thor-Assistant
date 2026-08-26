@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Replays upper-screen touch macros through Thor's mapping-compatible touch slot.
@@ -27,6 +28,7 @@ final class ShizukuTouchMacroReplay {
     private final ExecutorService executor;
     private final AtomicBoolean running = new AtomicBoolean();
     private final AtomicBoolean cancelled = new AtomicBoolean();
+    private final AtomicReference<Thread> replayThread = new AtomicReference<>();
 
     ShizukuTouchMacroReplay(ExecutorService executor) {
         this.executor = executor;
@@ -56,10 +58,16 @@ final class ShizukuTouchMacroReplay {
             return;
         }
         cancelled.set(true);
+        Thread worker = replayThread.get();
+        if (worker != null) {
+            worker.interrupt();
+        }
     }
 
     private void execute(Context context, String label, ReplayPlan plan,
             InputBridge.Callback callback) {
+        Thread worker = Thread.currentThread();
+        replayThread.set(worker);
         boolean touchDown = false;
         String error = null;
         try {
@@ -79,6 +87,7 @@ final class ShizukuTouchMacroReplay {
                     String result = NativeGamepadPath.userFacingError(context,
                             InputBridge.replayNativeGamepadSequence(
                                     context, step.gamepadSequence));
+                    ensureNotCancelled();
                     if (!NativeGamepadPath.operationSucceeded(result)) {
                         throw new ReplayFailure(result);
                     }
@@ -108,14 +117,25 @@ final class ShizukuTouchMacroReplay {
                 ShizukuNativeController.releaseMappedTouch(context);
             }
             boolean wasCancelled = cancelled.get();
+            replayThread.compareAndSet(worker, null);
             cancelled.set(false);
             running.set(false);
+            Thread.interrupted();
             if (error != null) {
                 String finalError = error;
                 AssistantMainHandler.post(() -> callback.onError(finalError));
-            } else if (!wasCancelled) {
-                AssistantMainHandler.post(() -> callback.onStatus(
-                        context.getString(R.string.macro_status_completed, label)));
+            } else if (wasCancelled) {
+                AssistantMainHandler.post(() -> {
+                    callback.onStatus(context.getString(
+                            R.string.macro_status_cancelled, label));
+                    callback.onMacroFinished(true);
+                });
+            } else {
+                AssistantMainHandler.post(() -> {
+                    callback.onStatus(context.getString(
+                            R.string.macro_status_completed, label));
+                    callback.onMacroFinished(false);
+                });
             }
         }
     }

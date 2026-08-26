@@ -19,4 +19,19 @@ public final class UinputNativeProbe {
             int action, int x, int y, int width, int height, int rotation);
 
     public static native void releaseThorMappedTouch();
+
+    public static native String openVirtualMouse();
+
+    public static native String emitVirtualMouseFrame(
+            int dx, int dy, int wheel, int button, int buttonValue);
+
+    public static native String releaseVirtualMouse();
+
+    public static native String openVirtualKeyboard();
+
+    public static native String emitVirtualKeyboardKey(int keyCode, int keyValue);
+
+    public static native String releaseVirtualKeyboardKeys();
+
+    public static native String releaseVirtualKeyboard();
 }

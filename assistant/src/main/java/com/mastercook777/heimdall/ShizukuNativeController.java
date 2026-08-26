@@ -13,6 +13,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.CopyOnWriteArraySet;
 
 import rikka.shizuku.Shizuku;
 
@@ -32,6 +33,8 @@ public final class ShizukuNativeController {
     private static boolean binding;
     private static CountDownLatch bindLatch;
     private static int bindGeneration;
+    private static final CopyOnWriteArraySet<Runnable> SERVICE_LOSS_LISTENERS =
+            new CopyOnWriteArraySet<>();
 
     private static final IBinder.DeathRecipient SERVICE_DEATH_RECIPIENT =
             ShizukuNativeController::clearService;
@@ -87,6 +90,14 @@ public final class ShizukuNativeController {
 
     public static boolean isReady() {
         return isPermissionGranted();
+    }
+
+    static void addServiceLossListener(Runnable listener) {
+        if (listener != null) SERVICE_LOSS_LISTENERS.add(listener);
+    }
+
+    static void removeServiceLossListener(Runnable listener) {
+        if (listener != null) SERVICE_LOSS_LISTENERS.remove(listener);
     }
 
     public static boolean isServiceBound() {
@@ -270,6 +281,110 @@ public final class ShizukuNativeController {
         }
     }
 
+    public static String openVirtualMouse(Context context) {
+        return virtualMouseTransaction(context,
+                ShizukuNativeUserService.TRANSACTION_OPEN_VIRTUAL_MOUSE,
+                0, 0, 0, 0, 0, 1500);
+    }
+
+    public static String emitVirtualMouse(Context context,
+            int dx, int dy, int wheel, int button, int buttonValue) {
+        return virtualMouseTransaction(context,
+                ShizukuNativeUserService.TRANSACTION_EMIT_VIRTUAL_MOUSE,
+                dx, dy, wheel, button, buttonValue, 0);
+    }
+
+    public static String releaseVirtualMouse(Context context) {
+        return virtualMouseTransaction(context,
+                ShizukuNativeUserService.TRANSACTION_RELEASE_VIRTUAL_MOUSE,
+                0, 0, 0, 0, 0, 0);
+    }
+
+    public static String openVirtualKeyboard(Context context) {
+        return virtualKeyboardTransaction(context,
+                ShizukuNativeUserService.TRANSACTION_OPEN_VIRTUAL_KEYBOARD,
+                0, 0, 1500);
+    }
+
+    public static String emitVirtualKeyboard(Context context, int keyCode, int keyValue) {
+        return virtualKeyboardTransaction(context,
+                ShizukuNativeUserService.TRANSACTION_EMIT_VIRTUAL_KEYBOARD,
+                keyCode, keyValue, 0);
+    }
+
+    public static String releaseVirtualKeyboardKeys(Context context) {
+        return virtualKeyboardTransaction(context,
+                ShizukuNativeUserService.TRANSACTION_RELEASE_VIRTUAL_KEYBOARD_KEYS,
+                0, 0, 0);
+    }
+
+    public static String releaseVirtualKeyboard(Context context) {
+        return virtualKeyboardTransaction(context,
+                ShizukuNativeUserService.TRANSACTION_RELEASE_VIRTUAL_KEYBOARD,
+                0, 0, 0);
+    }
+
+    private static String virtualKeyboardTransaction(Context context, int transaction,
+            int keyCode, int keyValue, long waitMs) {
+        IBinder bound = getService(context, waitMs);
+        if (bound == null) {
+            return context.getString(R.string.virtual_keyboard_unavailable);
+        }
+        Parcel data = Parcel.obtain();
+        Parcel reply = Parcel.obtain();
+        try {
+            data.writeInterfaceToken(ShizukuNativeUserService.DESCRIPTOR);
+            if (transaction == ShizukuNativeUserService.TRANSACTION_EMIT_VIRTUAL_KEYBOARD) {
+                data.writeInt(keyCode);
+                data.writeInt(keyValue);
+            }
+            if (!bound.transact(transaction, data, reply, 0)) {
+                clearService();
+                return context.getString(R.string.virtual_keyboard_unavailable);
+            }
+            reply.readException();
+            return reply.readString();
+        } catch (RemoteException | RuntimeException e) {
+            clearService();
+            return context.getString(R.string.virtual_keyboard_unavailable);
+        } finally {
+            data.recycle();
+            reply.recycle();
+        }
+    }
+
+    private static String virtualMouseTransaction(Context context, int transaction,
+            int dx, int dy, int wheel, int button, int buttonValue, long waitMs) {
+        IBinder bound = getService(context, waitMs);
+        if (bound == null) {
+            return context.getString(R.string.virtual_mouse_unavailable);
+        }
+        Parcel data = Parcel.obtain();
+        Parcel reply = Parcel.obtain();
+        try {
+            data.writeInterfaceToken(ShizukuNativeUserService.DESCRIPTOR);
+            if (transaction == ShizukuNativeUserService.TRANSACTION_EMIT_VIRTUAL_MOUSE) {
+                data.writeInt(dx);
+                data.writeInt(dy);
+                data.writeInt(wheel);
+                data.writeInt(button);
+                data.writeInt(buttonValue);
+            }
+            if (!bound.transact(transaction, data, reply, 0)) {
+                clearService();
+                return context.getString(R.string.virtual_mouse_unavailable);
+            }
+            reply.readException();
+            return reply.readString();
+        } catch (RemoteException | RuntimeException e) {
+            clearService();
+            return context.getString(R.string.virtual_mouse_unavailable);
+        } finally {
+            data.recycle();
+            reply.recycle();
+        }
+    }
+
     public static boolean warmUp(Context context, long waitMs) {
         return getService(context, waitMs) != null;
     }
@@ -377,7 +492,7 @@ public final class ShizukuNativeController {
         }
         try {
             Shizuku.UserServiceArgs args = userServiceArgs(
-                    context, "heimdall_native_controller_v10", 10);
+                    context, "heimdall_native_controller_v12", 12);
             Shizuku.bindUserService(args, CONNECTION);
         } catch (Throwable error) {
             failBinding(generation);
@@ -406,12 +521,19 @@ public final class ShizukuNativeController {
     }
 
     private static void clearService() {
+        boolean notify;
         synchronized (LOCK) {
+            notify = service != null;
             unlinkDeathRecipientLocked(service);
             service = null;
             binding = false;
             bindGeneration++;
             releaseBindLatchLocked();
+        }
+        if (notify) {
+            for (Runnable listener : SERVICE_LOSS_LISTENERS) {
+                AssistantMainHandler.post(listener);
+            }
         }
     }
 

@@ -39,6 +39,11 @@ public final class ThorAccessibilityService extends AccessibilityService {
     private float touchpadY;
     private float pendingTouchpadDx;
     private float pendingTouchpadDy;
+    private int macroGeneration;
+    private InputBridge.Callback activeMacroCallback;
+    private Thread activeMacroGamepadThread;
+    private String activeMacroLabel = "";
+    private boolean activeMacroCancelRequested;
 
     public static ThorAccessibilityService getInstance() {
         return instance;
@@ -125,6 +130,7 @@ public final class ThorAccessibilityService extends AccessibilityService {
     @Override
     public void onDestroy() {
         handler.removeCallbacks(foregroundRefresh);
+        cancelMacro();
         if (instance == this) {
             instance = null;
         }
@@ -291,8 +297,68 @@ public final class ThorAccessibilityService extends AccessibilityService {
             callback.onError(getString(R.string.macro_status_no_steps, macro.label));
             return;
         }
+        int generation;
+        synchronized (this) {
+            macroGeneration++;
+            generation = macroGeneration;
+            activeMacroCallback = callback;
+            activeMacroGamepadThread = null;
+            activeMacroLabel = macro.label == null ? "" : macro.label;
+            activeMacroCancelRequested = false;
+        }
         callback.onStatus(getString(R.string.macro_status_started, macro.label));
-        runStep(macro, callback, 0);
+        runStep(macro, callback, 0, generation);
+    }
+
+    public void cancelMacro() {
+        InputBridge.Callback callback;
+        Thread worker;
+        String label;
+        boolean finishImmediately;
+        synchronized (this) {
+            callback = activeMacroCallback;
+            worker = activeMacroGamepadThread;
+            label = activeMacroLabel;
+            finishImmediately = callback != null && worker == null;
+            if (finishImmediately) {
+                macroGeneration++;
+                activeMacroCallback = null;
+                activeMacroLabel = "";
+            } else if (callback != null) {
+                activeMacroCancelRequested = true;
+            }
+        }
+        if (worker != null) {
+            worker.interrupt();
+        }
+        if (finishImmediately) {
+            callback.onStatus(getString(R.string.macro_status_cancelled,
+                    label.length() == 0
+                            ? getString(R.string.common_macro_fallback) : label));
+            callback.onMacroFinished(true);
+        }
+    }
+
+    private synchronized boolean isMacroActive(
+            int generation, InputBridge.Callback callback) {
+        return generation == macroGeneration && activeMacroCallback == callback;
+    }
+
+    private synchronized void finishMacro(
+            int generation, InputBridge.Callback callback) {
+        if (generation == macroGeneration && activeMacroCallback == callback) {
+            activeMacroCallback = null;
+            activeMacroGamepadThread = null;
+            activeMacroLabel = "";
+            activeMacroCancelRequested = false;
+        }
+    }
+
+    private synchronized boolean isMacroCancellationRequested(
+            int generation, InputBridge.Callback callback) {
+        return generation == macroGeneration
+                && activeMacroCallback == callback
+                && activeMacroCancelRequested;
     }
 
     public void dispatchTouchMove(int displayId, int width, int height, float dx, float dy, InputBridge.Callback callback) {
@@ -304,7 +370,8 @@ public final class ThorAccessibilityService extends AccessibilityService {
         float startY = height / 2f;
         float endX = clamp(startX + dx, 1f, width - 1f);
         float endY = clamp(startY + dy, 1f, height - 1f);
-        dispatchPath(null, callback, -1, displayId, startX, startY, endX, endY, 55L);
+        dispatchPath(null, callback, -1, 0,
+                displayId, startX, startY, endX, endY, 55L);
     }
 
     public void startTouchpadDrag(int displayId, int width, int height, float anchorX, float anchorY,
@@ -447,50 +514,67 @@ public final class ThorAccessibilityService extends AccessibilityService {
         pendingTouchpadDy = 0f;
     }
 
-    private void runStep(Macro macro, InputBridge.Callback callback, int index) {
+    private void runStep(Macro macro, InputBridge.Callback callback,
+            int index, int generation) {
+        if (!isMacroActive(generation, callback)) {
+            return;
+        }
         if (index >= macro.steps.size()) {
             callback.onStatus(getString(R.string.macro_status_completed, macro.label));
+            finishMacro(generation, callback);
+            callback.onMacroFinished(false);
             return;
         }
 
         MacroStep step = macro.steps.get(index);
         if (MacroStep.TYPE_WAIT.equals(step.type)) {
-            handler.postDelayed(() -> runStep(macro, callback, index + 1), parseDuration(step.value, 80));
+            handler.postDelayed(() -> runStep(
+                    macro, callback, index + 1, generation),
+                    parseDuration(step.value, 80));
             return;
         }
 
         if (MacroStep.TYPE_TAP.equals(step.type)) {
             GestureTarget target = parseTapTarget(step.value);
             if (target == null) {
+                finishMacro(generation, callback);
                 callback.onError(getString(R.string.macro_status_invalid_tap, step.value));
                 return;
             }
-            dispatchPath(macro, callback, index, target.displayId, target.startX, target.startY, target.endX, target.endY, 1L);
+            dispatchPath(macro, callback, index, generation,
+                    target.displayId, target.startX, target.startY,
+                    target.endX, target.endY, 1L);
             return;
         }
 
         if (MacroStep.TYPE_HOLD.equals(step.type)) {
             GestureTarget target = parseHoldTarget(step.value);
             if (target == null) {
+                finishMacro(generation, callback);
                 callback.onError(getString(R.string.macro_status_invalid_hold, step.value));
                 return;
             }
-            dispatchPath(macro, callback, index, target.displayId, target.startX, target.startY, target.endX, target.endY, target.durationMs);
+            dispatchPath(macro, callback, index, generation,
+                    target.displayId, target.startX, target.startY,
+                    target.endX, target.endY, target.durationMs);
             return;
         }
 
         if (MacroStep.TYPE_SWIPE.equals(step.type)) {
             GestureTarget target = parseSwipeTarget(step.value);
             if (target == null) {
+                finishMacro(generation, callback);
                 callback.onError(getString(R.string.macro_status_invalid_swipe, step.value));
                 return;
             }
-            dispatchPath(macro, callback, index, target.displayId, target.startX, target.startY, target.endX, target.endY, target.durationMs);
+            dispatchPath(macro, callback, index, generation,
+                    target.displayId, target.startX, target.startY,
+                    target.endX, target.endY, target.durationMs);
             return;
         }
 
         if (MacroStep.TYPE_GAMEPAD.equals(step.type)) {
-            new Thread(() -> {
+            Thread worker = new Thread(() -> {
                 String result;
                 try {
                     result = NativeGamepadPath.userFacingError(this,
@@ -500,23 +584,53 @@ public final class ThorAccessibilityService extends AccessibilityService {
                 }
                 String finalResult = result;
                 handler.post(() -> {
+                    if (!isMacroActive(generation, callback)) {
+                        return;
+                    }
+                    synchronized (ThorAccessibilityService.this) {
+                        if (generation == macroGeneration
+                                && activeMacroCallback == callback) {
+                            activeMacroGamepadThread = null;
+                        }
+                    }
+                    if (isMacroCancellationRequested(generation, callback)) {
+                        finishMacro(generation, callback);
+                        callback.onStatus(getString(
+                                R.string.macro_status_cancelled, macro.label));
+                        callback.onMacroFinished(true);
+                        return;
+                    }
                     if (NativeGamepadPath.operationSucceeded(finalResult)) {
                         callback.onStatus(getString(R.string.native_controller_step_complete));
-                        handler.postDelayed(() -> runStep(macro, callback, index + 1), 60);
+                        handler.postDelayed(() -> runStep(
+                                macro, callback, index + 1, generation), 60);
                     } else {
+                        finishMacro(generation, callback);
                         callback.onError(finalResult);
                     }
                 });
-            }, "macro-gamepad-combo").start();
+            }, "macro-gamepad-combo");
+            synchronized (this) {
+                if (!isMacroActive(generation, callback)) {
+                    return;
+                }
+                activeMacroGamepadThread = worker;
+            }
+            worker.start();
             return;
         }
 
+        finishMacro(generation, callback);
         callback.onError(getString(R.string.macro_status_unknown_step, step.toString()));
     }
 
-    private void dispatchPath(Macro macro, InputBridge.Callback callback, int index,
+    private void dispatchPath(Macro macro, InputBridge.Callback callback,
+            int index, int generation,
             int displayId, float startX, float startY, float endX, float endY, long durationMs) {
         if (displayId != Display.DEFAULT_DISPLAY && Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            if (macro != null) {
+                finishMacro(generation, callback);
+            }
             callback.onError(getString(R.string.touchpad_status_multidisplay_unsupported));
             return;
         }
@@ -537,14 +651,16 @@ public final class ThorAccessibilityService extends AccessibilityService {
         boolean accepted = dispatchGesture(gesture, new GestureResultCallback() {
             @Override
             public void onCompleted(GestureDescription gestureDescription) {
-                if (macro != null) {
-                    runStep(macro, callback, index + 1);
+                if (macro != null && isMacroActive(generation, callback)) {
+                    runStep(macro, callback, index + 1, generation);
                 }
             }
 
             @Override
             public void onCancelled(GestureDescription gestureDescription) {
-                if (macro != null && index >= 0) {
+                if (macro != null && index >= 0
+                        && isMacroActive(generation, callback)) {
+                    finishMacro(generation, callback);
                     callback.onError(getString(R.string.macro_status_gesture_cancelled,
                             macro.steps.get(index).toString()));
                 }
@@ -553,6 +669,7 @@ public final class ThorAccessibilityService extends AccessibilityService {
 
         if (!accepted) {
             if (macro != null && index >= 0) {
+                finishMacro(generation, callback);
                 callback.onError(getString(R.string.macro_status_gesture_submit_failed,
                         macro.steps.get(index).toString()));
             } else {

@@ -347,6 +347,29 @@ bool parse_sequence_item(const std::string& raw, SequenceItem& item) {
     return true;
 }
 
+bool sequence_has_explicit_sync(const std::string& raw) {
+    bool found_sync = false;
+    int last_type = -1;
+    size_t start = 0;
+    while (start < raw.size()) {
+        size_t end = raw.find(';', start);
+        std::string token = raw.substr(start,
+                end == std::string::npos ? std::string::npos : end - start);
+        SequenceItem item;
+        if (parse_sequence_item(token, item)) {
+            last_type = item.type;
+            if (item.type == EV_SYN && item.code == SYN_REPORT) {
+                found_sync = true;
+            }
+        }
+        if (end == std::string::npos) {
+            break;
+        }
+        start = end + 1;
+    }
+    return found_sync && last_type == EV_SYN;
+}
+
 void track_sequence_key(std::vector<int>& pressed_keys, int code, int value) {
     auto existing = std::find(pressed_keys.begin(), pressed_keys.end(), code);
     if (value == 0) {
@@ -358,13 +381,20 @@ void track_sequence_key(std::vector<int>& pressed_keys, int code, int value) {
     }
 }
 
-void release_sequence_keys(int fd, const std::vector<int>& pressed_keys) {
-    if (pressed_keys.empty()) {
+void release_sequence_state(int fd, const std::vector<int>& pressed_keys,
+        int hat_x, int hat_y) {
+    if (pressed_keys.empty() && hat_x == 0 && hat_y == 0) {
         return;
     }
     std::ostringstream ignored;
     for (auto key = pressed_keys.rbegin(); key != pressed_keys.rend(); ++key) {
         emit_event(fd, EV_KEY, *key, 0, ignored, "sequence recovery release");
+    }
+    if (hat_x != 0) {
+        emit_event(fd, EV_ABS, ABS_HAT0X, 0, ignored, "sequence recovery hat x");
+    }
+    if (hat_y != 0) {
+        emit_event(fd, EV_ABS, ABS_HAT0Y, 0, ignored, "sequence recovery hat y");
     }
     emit_event(fd, EV_SYN, SYN_REPORT, 0, ignored, "sequence recovery sync");
 }
@@ -388,9 +418,12 @@ std::string emit_evdev_sequence(const char* path, const char* sequence) {
     if (raw.rfind("seq:", 0) == 0) {
         raw = raw.substr(4);
     }
+    const bool has_explicit_sync = sequence_has_explicit_sync(raw);
 
     int count = 0;
     std::vector<int> pressed_keys;
+    int hat_x = 0;
+    int hat_y = 0;
     size_t start = 0;
     while (start < raw.size()) {
         size_t end = raw.find(';', start);
@@ -401,16 +434,20 @@ std::string emit_evdev_sequence(const char* path, const char* sequence) {
                 usleep(static_cast<useconds_t>(item.delay_ms) * 1000);
             }
             if (!emit_event(fd, item.type, item.code, item.value, out, "sequence event")) {
-                release_sequence_keys(fd, pressed_keys);
+                release_sequence_state(fd, pressed_keys, hat_x, hat_y);
                 close(fd);
                 return out.str();
             }
             if (item.type == EV_KEY) {
                 track_sequence_key(pressed_keys, item.code, item.value);
+            } else if (item.type == EV_ABS && item.code == ABS_HAT0X) {
+                hat_x = item.value;
+            } else if (item.type == EV_ABS && item.code == ABS_HAT0Y) {
+                hat_y = item.value;
             }
-            if (item.type != EV_SYN) {
+            if (!has_explicit_sync && item.type != EV_SYN) {
                 if (!emit_event(fd, EV_SYN, SYN_REPORT, 0, out, "sequence sync")) {
-                    release_sequence_keys(fd, pressed_keys);
+                    release_sequence_state(fd, pressed_keys, hat_x, hat_y);
                     close(fd);
                     return out.str();
                 }
