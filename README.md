@@ -210,13 +210,14 @@ Android platform backup is disabled for this Alpha. Uninstalling the App removes
 
 ## Known Alpha Limitations
 
+- Android streaming clients do not reliably forward external Meta/Win input from Heimdall's uinput keyboard. Full Keyboard shows disabled Win keys and Keypad does not offer Win bindings; use the streaming client's built-in keyboard when Win is required.
 - Mapping-compatible Shizuku Touch is verified only on tested Thor firmware, game, and mapper combinations. Other firmware may report it unavailable.
 - Basic Accessibility touch and Thor's built-in mapper may cancel each other during simultaneous operation.
 - Thor's mapper may hide mapped controller buttons from the Macro recorder.
 - Only one live magnifier is supported per Profile, and magnification cannot share MediaProjection with recording.
 - After a lower-screen Tab round trip, the frozen magnifier's Stop marker can occasionally be missing; stopping can also leave the final retained frame visible. These are known presentation-state issues, not proof that the frame is still live.
 
-Read the [v0.1.1-alpha.1 release notes](docs/releases/v0.1.1-alpha.1.md) for the complete tested scope, migration notes, and known limitations. The [v0.1.0-alpha.1 notes](docs/releases/v0.1.0-alpha.1.md) remain available for the previous public Alpha.
+Read the [v0.2.0-alpha.1 release notes](docs/releases/v0.2.0-alpha.1.md) for the complete tested scope, migration notes, and known limitations. Previous Alpha notes remain available under [`docs/releases`](docs/releases).
 
 ## Helpful Bug Reports
 

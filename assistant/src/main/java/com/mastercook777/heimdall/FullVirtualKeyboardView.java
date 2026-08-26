@@ -218,11 +218,11 @@ final class FullVirtualKeyboardView extends LinearLayout {
                 modifier("Shift", KeyboardKeyCatalog.KEY_RIGHTSHIFT, 2.6f));
         addRow(
                 modifier("Ctrl", KeyboardKeyCatalog.KEY_LEFTCTRL, 1.3f),
-                modifier("Win", KeyboardKeyCatalog.KEY_LEFTMETA, 1.1f),
+                unavailableModifier("Win", KeyboardKeyCatalog.KEY_LEFTMETA, 1.1f),
                 modifier("Alt", KeyboardKeyCatalog.KEY_LEFTALT, 1.1f),
                 key("Space", KeyboardKeyCatalog.KEY_SPACE, 6f),
                 modifier("Alt", KeyboardKeyCatalog.KEY_RIGHTALT, 1.1f),
-                modifier("Win", KeyboardKeyCatalog.KEY_RIGHTMETA, 1.1f),
+                unavailableModifier("Win", KeyboardKeyCatalog.KEY_RIGHTMETA, 1.1f),
                 modifier("Ctrl", KeyboardKeyCatalog.KEY_RIGHTCTRL, 1.3f));
     }
 
@@ -253,7 +253,8 @@ final class FullVirtualKeyboardView extends LinearLayout {
         addGridKey(functions, key("Page Up", KeyboardKeyCatalog.KEY_PAGEUP), 2, 0);
         addGridKey(functions, key("Page Down", KeyboardKeyCatalog.KEY_PAGEDOWN), 2, 1);
         addGridKey(functions, key("Backspace", KeyboardKeyCatalog.KEY_BACKSPACE), 3, 0);
-        addGridKey(functions, modifier("Win", KeyboardKeyCatalog.KEY_LEFTMETA, 1f), 3, 1);
+        addGridKey(functions,
+                unavailableModifier("Win", KeyboardKeyCatalog.KEY_LEFTMETA, 1f), 3, 1);
         addNavigationSection(shell, functions, 0.9f);
 
         GridLayout numpad = navigationGrid(5, 4);
@@ -438,7 +439,8 @@ final class FullVirtualKeyboardView extends LinearLayout {
 
     private void updateEnabledState() {
         for (KeycapView keycap : keycaps) {
-            keycap.setEnabled(inputAvailable || keycap.spec.action != null);
+            keycap.setEnabled(!keycap.spec.unavailable
+                    && (inputAvailable || keycap.spec.action != null));
             keycap.setAlpha(keycap.isEnabled() ? 1f : 0.38f);
         }
     }
@@ -492,6 +494,10 @@ final class FullVirtualKeyboardView extends LinearLayout {
         return new KeySpec(label, code, units, true, null);
     }
 
+    private KeySpec unavailableModifier(String label, int code, float units) {
+        return new KeySpec(label, code, units, true, null, false, true);
+    }
+
     private KeySpec actionKey(String label, float units, Runnable action) {
         return new KeySpec(label, 0, units, false, action);
     }
@@ -521,8 +527,10 @@ final class FullVirtualKeyboardView extends LinearLayout {
             setPadding(dp(3), dp(1), dp(3), dp(1));
             setClickable(true);
             setFocusable(false);
-            setContentDescription(spec.label.replace('\n', ' '));
-            if (spec.modifier) {
+            setContentDescription(spec.unavailable
+                    ? context.getString(R.string.full_keyboard_win_unavailable_description)
+                    : spec.label.replace('\n', ' '));
+            if (spec.modifier && !spec.unavailable) {
                 ModifierState state = new ModifierState(this);
                 modifiers.put(spec.code, state);
             }
@@ -704,19 +712,26 @@ final class FullVirtualKeyboardView extends LinearLayout {
         final boolean modifier;
         final Runnable action;
         final boolean spacer;
+        final boolean unavailable;
 
         KeySpec(String label, int code, float units, boolean modifier, Runnable action) {
-            this(label, code, units, modifier, action, false);
+            this(label, code, units, modifier, action, false, false);
         }
 
         KeySpec(String label, int code, float units, boolean modifier,
                 Runnable action, boolean spacer) {
+            this(label, code, units, modifier, action, spacer, false);
+        }
+
+        KeySpec(String label, int code, float units, boolean modifier,
+                Runnable action, boolean spacer, boolean unavailable) {
             this.label = label;
             this.code = code;
             this.units = units;
             this.modifier = modifier;
             this.action = action;
             this.spacer = spacer;
+            this.unavailable = unavailable;
         }
     }
 }

@@ -122,6 +122,20 @@ final class KeyboardKeyCatalog {
         return OPTIONS;
     }
 
+    static List<Option> configurableOptions() {
+        List<Option> options = new ArrayList<>();
+        for (Option option : OPTIONS) {
+            if (!isWinKeyCode(option.linuxKeyCode)) {
+                options.add(option);
+            }
+        }
+        return Collections.unmodifiableList(options);
+    }
+
+    static boolean isWinKeyCode(int linuxKeyCode) {
+        return linuxKeyCode == KEY_LEFTMETA || linuxKeyCode == KEY_RIGHTMETA;
+    }
+
     static String labelForCode(int code) {
         for (Option option : OPTIONS) {
             if (option.linuxKeyCode == code) {

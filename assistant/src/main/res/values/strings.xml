@@ -77,7 +77,8 @@
     <string name="full_keyboard_menu_description">Full keyboard options</string>
     <string name="full_keyboard_menu_status_description">%1$s. %2$s.</string>
     <string name="full_keyboard_menu_title">Full Keyboard</string>
-    <string name="full_keyboard_menu_message">US ANSI is the fixed V1 layout. The three status lights are gray while connecting, green when the keyboard transport is ready, and red when it is unavailable. This menu is reserved for future full-keyboard settings; it does not change the current Profile, page, or Grid.</string>
+    <string name="full_keyboard_menu_message">US ANSI is the fixed V1 layout. The three status lights are gray while connecting, green when the keyboard transport is ready, and red when it is unavailable. Win keys are dimmed and disabled because Android streaming clients do not reliably forward external Meta input; use the streaming client\'s built-in keyboard when Win is required. This menu does not change the current Profile, page, or Grid.</string>
+    <string name="full_keyboard_win_unavailable_description">Win key. Unavailable for external streaming input.</string>
     <string name="screenshot_saved">Upper-screen screenshot saved to the current Profile folder.</string>
     <string name="screenshot_save_failed">Could not save the upper-screen screenshot.</string>
     <string name="recording_stopped">Screen recording stopped.</string>

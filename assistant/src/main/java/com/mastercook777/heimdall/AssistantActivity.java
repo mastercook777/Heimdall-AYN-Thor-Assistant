@@ -9734,9 +9734,9 @@ public class AssistantActivity extends Activity {
 
     private void showKeyboardPadKeyEditor(KeyboardPad.Key key, Runnable onSaved,
             Runnable onDeleted) {
-        int[] draftKeyCode = {key.binding.linuxKeyCode};
-        boolean[] draftModifiers = {key.binding.ctrl, key.binding.shift,
-                key.binding.alt, key.binding.win};
+        int[] draftKeyCode = {KeyboardKeyCatalog.isWinKeyCode(key.binding.linuxKeyCode)
+                ? KeyboardKeyCatalog.KEY_A : key.binding.linuxKeyCode};
+        boolean[] draftModifiers = {key.binding.ctrl, key.binding.shift, key.binding.alt};
         String[] draftBehavior = {KeyboardPad.normalizeBehavior(key.behavior)};
         String[] draftIconKey = {key.display.iconKey};
         String[] draftActionType = {KeyboardPad.normalizeActionType(key.actionType)};
@@ -9827,7 +9827,7 @@ public class AssistantActivity extends Activity {
         LinearLayout modifierRow = new LinearLayout(this);
         modifierRow.setOrientation(LinearLayout.HORIZONTAL);
         body.addView(modifierRow, new LinearLayout.LayoutParams(-1, dp(48)));
-        String[] modifierLabels = {"Ctrl", "Shift", "Alt", "Win"};
+        String[] modifierLabels = {"Ctrl", "Shift", "Alt"};
         CheckBox[] modifierInputs = new CheckBox[modifierLabels.length];
         for (int i = 0; i < modifierLabels.length; i++) {
             CheckBox input = new CheckBox(this);
@@ -9919,7 +9919,7 @@ public class AssistantActivity extends Activity {
             key.binding.ctrl = draftModifiers[0];
             key.binding.shift = draftModifiers[1];
             key.binding.alt = draftModifiers[2];
-            key.binding.win = draftModifiers[3];
+            key.binding.win = false;
             key.display.label = labelInput.getText().toString().trim();
             key.display.iconKey = draftIconKey[0] == null ? "" : draftIconKey[0].trim();
             key.behavior = KeyboardPad.normalizeBehavior(draftBehavior[0]);
@@ -9972,7 +9972,7 @@ public class AssistantActivity extends Activity {
         list.setOrientation(LinearLayout.VERTICAL);
         scroll.addView(list, new ScrollView.LayoutParams(-1, -2));
 
-        List<KeyboardKeyCatalog.Option> options = KeyboardKeyCatalog.options();
+        List<KeyboardKeyCatalog.Option> options = KeyboardKeyCatalog.configurableOptions();
         final int columns = 5;
         for (int start = 0; start < options.size(); start += columns) {
             LinearLayout row = new LinearLayout(this);
