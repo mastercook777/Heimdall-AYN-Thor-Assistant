@@ -4590,6 +4590,27 @@ public class AssistantActivity extends Activity {
         LinearLayout row = settingsActionRow(content);
         row.addView(editorButton(getString(R.string.diagnostics_export_action),
                 this::requestDiagnosticExport));
+        if (BuildConfig.DEBUG) {
+            addSettingsLabel(content, getString(R.string.rom_context_probe_title));
+            addSettingsHelp(content, getString(R.string.rom_context_probe_settings_help));
+            LinearLayout probeRow = settingsActionRow(content);
+            probeRow.addView(editorButton(getString(R.string.rom_context_probe_open),
+                    this::openRomContextProbe));
+        }
+    }
+
+    private void openRomContextProbe() {
+        if (!BuildConfig.DEBUG) {
+            return;
+        }
+        Intent intent = new Intent();
+        intent.setClassName(this,
+                "com.mastercook777.heimdall.RomContextProbeActivity");
+        try {
+            startActivity(intent);
+        } catch (RuntimeException error) {
+            showErrorAction(getString(R.string.rom_context_probe_open_error));
+        }
     }
 
     private void requestDiagnosticExport() {
