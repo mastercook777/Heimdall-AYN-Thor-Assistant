@@ -20,6 +20,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
@@ -53,6 +54,7 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
             testCanvasRuntimeDecodePolicy();
             testProfileIconDecodePolicy();
             testUserMacroIconDeletionContract();
+            testGameContextIdentityAndResolverContract();
             testSelfContainedRoundTripAfterSourcesAreDeleted();
             testCorruptMissingUnsafeAndOversizedBundlesFailClosed();
             testLegacyProfileJsonRemainsImportable();
@@ -253,6 +255,80 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
         assertEquals(2048, CanvasImageLoader.runtimeDecodeMaxSide(250, 200, 8f));
         assertEquals(1200, CanvasImageLoader.runtimeDecodeMaxSide(
                 600, 400, Float.NaN));
+    }
+
+    public void testGameContextIdentityAndResolverContract() throws Exception {
+        String uriA = "content://com.android.externalstorage.documents/document/"
+                + "primary%3ARoms%2FPS2%2FGame%20A.iso";
+        String uriB = "content://com.android.externalstorage.documents/document/"
+                + "primary%3ARoms%2FPS2%2FGame%20B.iso";
+        String line = "1756270000.100 12467 12500 I EmulationThread: "
+                + "Starting emulation thread (" + uriA + ")";
+        assertEquals(uriA, AetherSx2GameContext.extractUri(line));
+        assertEquals("", AetherSx2GameContext.extractUri(
+                "GameLauncher: ROM URI " + uriA));
+
+        GameContextSnapshot contextA = AetherSx2GameContext.snapshot(12467, uriA, 100L);
+        GameContextSnapshot contextARepeat = AetherSx2GameContext.snapshot(12467, uriA, 200L);
+        GameContextSnapshot contextB = AetherSx2GameContext.snapshot(12467, uriB, 300L);
+        assertEquals(GameContextSnapshot.State.ACTIVE, contextA.state);
+        assertEquals(contextA.identityKey, contextARepeat.identityKey);
+        assertFalse(contextA.identityKey.equals(contextB.identityKey));
+        assertEquals("Game A.iso", contextA.label);
+
+        GameProfile first = new GameProfile("A", "generic",
+                AetherSx2GameContext.PACKAGE_NAME, Collections.emptyList());
+        GameProfile second = new GameProfile("B", "generic",
+                AetherSx2GameContext.PACKAGE_NAME, Collections.emptyList());
+        first.gameContextBinding = bindingFrom(contextA);
+        second.gameContextBinding = bindingFrom(contextB);
+        first.romContextHint = "Game B";
+        List<GameProfile> profiles = Arrays.asList(first, second);
+        ForegroundAppTracker.Snapshot foreground = new ForegroundAppTracker.Snapshot(
+                AetherSx2GameContext.PACKAGE_NAME,
+                AetherSx2GameContext.PACKAGE_NAME + ".EmulationActivity",
+                "Game B", 0, 300L);
+        assertEquals(0, ProfileAutoSwitchResolver.resolve(profiles, 1,
+                foreground, contextA));
+        assertEquals(1, ProfileAutoSwitchResolver.resolve(profiles, 1,
+                foreground, GameContextSnapshot.UNKNOWN));
+
+        first.gameContextBinding = new GameContextBinding();
+        second.gameContextBinding = new GameContextBinding();
+        second.romContextHint = "Game B";
+        assertEquals(ProfileAutoSwitchResolver.NO_MATCH,
+                ProfileAutoSwitchResolver.resolve(profiles, -1,
+                        foreground, GameContextSnapshot.UNKNOWN));
+        first.gameContextBinding = bindingFrom(contextA);
+        second.gameContextBinding = bindingFrom(contextA);
+        assertEquals(1, ProfileAutoSwitchResolver.resolve(profiles, 1,
+                foreground, contextA));
+        assertEquals(ProfileAutoSwitchResolver.NO_MATCH,
+                ProfileAutoSwitchResolver.resolve(profiles, -1, foreground, contextA));
+
+        JSONObject json = first.toJson();
+        GameProfile restored = GameProfile.fromJson(json);
+        assertEquals(first.gameContextBinding.identityKey,
+                restored.gameContextBinding.identityKey);
+        assertFalse(json.toString().contains("content://"));
+        assertEquals("Game B", restored.romContextHint);
+
+        JSONObject legacy = new JSONObject();
+        legacy.put("name", "Legacy");
+        legacy.put("mode", "generic");
+        legacy.put("packageHint", AetherSx2GameContext.PACKAGE_NAME);
+        legacy.put("romContextHint", "old hint");
+        GameProfile restoredLegacy = GameProfile.fromJson(legacy);
+        assertEquals("old hint", restoredLegacy.romContextHint);
+        assertFalse(restoredLegacy.safeGameContextBinding().isBound());
+    }
+
+    private static GameContextBinding bindingFrom(GameContextSnapshot snapshot) {
+        GameContextBinding binding = new GameContextBinding();
+        binding.kind = snapshot.kind;
+        binding.identityKey = snapshot.identityKey;
+        binding.label = snapshot.label;
+        return binding;
     }
 
     public void testControllerSequenceSafetyPolicy() {

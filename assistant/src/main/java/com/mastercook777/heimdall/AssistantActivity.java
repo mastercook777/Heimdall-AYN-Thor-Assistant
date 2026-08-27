@@ -174,7 +174,8 @@ public class AssistantActivity extends Activity {
     private static final String STATE_PROFILE_INPUTS_PRESENT = "heimdall.profile_inputs_present";
     private static final String STATE_PROFILE_NAME_DRAFT = "heimdall.profile_name_draft";
     private static final String STATE_PROFILE_PACKAGE_DRAFT = "heimdall.profile_package_draft";
-    private static final String STATE_PROFILE_ROM_DRAFT = "heimdall.profile_rom_draft";
+    private static final String STATE_PROFILE_CONTEXT_BINDING_DRAFT =
+            "heimdall.profile_context_binding_draft";
     private static final String STATE_PROFILE_DEFAULT_DRAFT = "heimdall.profile_default_draft";
 
     private List<GameProfile> profiles;
@@ -230,7 +231,7 @@ public class AssistantActivity extends Activity {
     private boolean virtualMouseEntryHintPending;
     private EditText settingsProfileNameInput;
     private EditText settingsProfilePackageInput;
-    private EditText settingsProfileRomInput;
+    private GameContextBinding settingsGameContextBindingDraft;
     private CheckBox settingsProfileDefaultInput;
     private WidgetLayout.Item settingsMagnifierDraft;
     private String settingsThemeDraft;
@@ -352,8 +353,12 @@ public class AssistantActivity extends Activity {
             showErrorAction(message);
         }
     };
-    private final ForegroundAppTracker.Listener foregroundAppListener =
-            snapshot -> uiHandler.post(() -> maybeAutoSwitchProfile(snapshot));
+    private ShizukuGameContextController gameContextController;
+    private final ForegroundAppTracker.Listener foregroundAppListener = snapshot ->
+            uiHandler.post(() -> {
+                if (gameContextController != null) gameContextController.refresh(snapshot);
+                maybeAutoSwitchProfile(snapshot);
+            });
     private boolean profileAwarenessActive;
     private boolean activityStarted;
     private boolean upperDisplayFocusHandoffRequested;
@@ -369,7 +374,9 @@ public class AssistantActivity extends Activity {
                 if (service != null) {
                     service.refreshForegroundApp();
                 }
-                maybeAutoSwitchProfile(ForegroundAppTracker.latest());
+                ForegroundAppTracker.Snapshot foreground = ForegroundAppTracker.latest();
+                if (gameContextController != null) gameContextController.refresh(foreground);
+                maybeAutoSwitchProfile(foreground);
             }
             DebugPerformanceDiagnostics.endTask("App-aware upper-window scan", started);
             uiHandler.postDelayed(this, 1200L);
@@ -462,6 +469,8 @@ public class AssistantActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         DebugPerformanceDiagnostics.initialize(this);
+        gameContextController = new ShizukuGameContextController(this,
+                snapshot -> maybeAutoSwitchProfile(ForegroundAppTracker.latest()));
         HeimdallStabilityDiagnostics.reportPreviousExit(this);
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         // Protect the upper-screen focus before the lower-screen content window is attached.
@@ -526,14 +535,20 @@ public class AssistantActivity extends Activity {
         outState.putBoolean(STATE_INPUT_DIAGNOSTICS, showInputDiagnostics);
         outState.putBoolean(STATE_PROFILE_DETAILS, showProfileDetectionDetails);
         if (settingsProfileNameInput != null && settingsProfilePackageInput != null
-                && settingsProfileRomInput != null && settingsProfileDefaultInput != null) {
+                && settingsProfileDefaultInput != null) {
             outState.putBoolean(STATE_PROFILE_INPUTS_PRESENT, true);
             outState.putString(STATE_PROFILE_NAME_DRAFT,
                     settingsProfileNameInput.getText().toString());
             outState.putString(STATE_PROFILE_PACKAGE_DRAFT,
                     settingsProfilePackageInput.getText().toString());
-            outState.putString(STATE_PROFILE_ROM_DRAFT,
-                    settingsProfileRomInput.getText().toString());
+            if (settingsGameContextBindingDraft != null) {
+                try {
+                    outState.putString(STATE_PROFILE_CONTEXT_BINDING_DRAFT,
+                            settingsGameContextBindingDraft.toJson().toString());
+                } catch (JSONException ignored) {
+                    // Profile persistence is unaffected by malformed transient state.
+                }
+            }
             outState.putBoolean(STATE_PROFILE_DEFAULT_DRAFT,
                     settingsProfileDefaultInput.isChecked());
         }
@@ -563,6 +578,11 @@ public class AssistantActivity extends Activity {
                 settingsMagnifierDraft = WidgetLayout.Item.fromJson(
                         new JSONObject(magnifierJson));
             }
+            String bindingJson = state.getString(STATE_PROFILE_CONTEXT_BINDING_DRAFT);
+            if (bindingJson != null) {
+                settingsGameContextBindingDraft = GameContextBinding.fromJson(
+                        new JSONObject(bindingJson));
+            }
         } catch (JSONException ignored) {
             // A malformed transient bundle must never overwrite persisted Profile data.
         }
@@ -583,12 +603,11 @@ public class AssistantActivity extends Activity {
     private void restoreVisibleProfileDraft(Bundle state) {
         if (state == null || !state.getBoolean(STATE_PROFILE_INPUTS_PRESENT, false)
                 || settingsProfileNameInput == null || settingsProfilePackageInput == null
-                || settingsProfileRomInput == null || settingsProfileDefaultInput == null) {
+                || settingsProfileDefaultInput == null) {
             return;
         }
         settingsProfileNameInput.setText(state.getString(STATE_PROFILE_NAME_DRAFT, ""));
         settingsProfilePackageInput.setText(state.getString(STATE_PROFILE_PACKAGE_DRAFT, ""));
-        settingsProfileRomInput.setText(state.getString(STATE_PROFILE_ROM_DRAFT, ""));
         settingsProfileDefaultInput.setChecked(
                 state.getBoolean(STATE_PROFILE_DEFAULT_DRAFT, false));
     }
@@ -656,6 +675,7 @@ public class AssistantActivity extends Activity {
         stabilityDiagnostics.stop();
         thorPerformanceCompatibility.release();
         DebugPerformanceDiagnostics.shutdown();
+        if (gameContextController != null) gameContextController.close();
         super.onDestroy();
     }
 
@@ -722,6 +742,7 @@ public class AssistantActivity extends Activity {
         DebugPerformanceDiagnostics.unregisterRepeatingTask(
                 "App-aware upper-window scan");
         ForegroundAppTracker.clearListener(foregroundAppListener);
+        if (gameContextController != null) gameContextController.setEnabled(false);
         systemStatusController.stop();
         super.onStop();
     }
@@ -935,6 +956,9 @@ public class AssistantActivity extends Activity {
         profileAwarenessActive = activityStarted
                 && !DebugPerformanceDiagnostics.isStaticUi()
                 && ForegroundAppTracker.isEnabled(this);
+        if (gameContextController != null) {
+            gameContextController.setEnabled(profileAwarenessActive);
+        }
         if (!profileAwarenessActive) {
             return;
         }
@@ -943,7 +967,9 @@ public class AssistantActivity extends Activity {
         if (service != null) {
             service.refreshForegroundApp();
         }
-        maybeAutoSwitchProfile(ForegroundAppTracker.latest());
+        ForegroundAppTracker.Snapshot foreground = ForegroundAppTracker.latest();
+        if (gameContextController != null) gameContextController.refresh(foreground);
+        maybeAutoSwitchProfile(foreground);
         DebugPerformanceDiagnostics.registerRepeatingTask(
                 "App-aware upper-window scan", 1200L);
         uiHandler.postDelayed(profileAwarenessTicker, 1200L);
@@ -3045,6 +3071,7 @@ public class AssistantActivity extends Activity {
         draftWidgetLayout = null;
         settingsTouchpadDraft = null;
         settingsMagnifierDraft = null;
+        settingsGameContextBindingDraft = null;
         settingsMacroMappingProtectionInput = null;
         settingsMacroMappingProtectionDraft = null;
         viewingGuideInline = null;
@@ -3084,7 +3111,8 @@ public class AssistantActivity extends Activity {
                 || (widgetGridDialog != null && widgetGridDialog.isShowing())) {
             return;
         }
-        int match = ProfileAutoSwitchResolver.resolve(profiles, selectedProfileIndex, snapshot);
+        int match = ProfileAutoSwitchResolver.resolve(profiles, selectedProfileIndex,
+                snapshot, GameContextTracker.latest());
         if (match != ProfileAutoSwitchResolver.NO_MATCH && match != selectedProfileIndex) {
             selectProfile(match);
         }
@@ -4657,6 +4685,9 @@ public class AssistantActivity extends Activity {
     }
 
     private void populateProfileSettingsContent(LinearLayout content) {
+        if (settingsGameContextBindingDraft == null) {
+            settingsGameContextBindingDraft = selectedProfile.safeGameContextBinding().copy();
+        }
         ThorAccessibilityService detectionService = ThorAccessibilityService.getInstance();
         if (detectionService != null && ForegroundAppTracker.isEnabled(this)) {
             detectionService.refreshForegroundApp();
@@ -4698,9 +4729,6 @@ public class AssistantActivity extends Activity {
                 return;
             }
             settingsProfilePackageInput.setText(latest.packageName);
-            if (hasUsableRomTitle(latest)) {
-                settingsProfileRomInput.setText(latest.windowTitle);
-            }
         }));
         detectionActions.addView(editorButton(showProfileDetectionDetails
                 ? getString(R.string.profile_collapse_recognition_details)
@@ -4732,14 +4760,41 @@ public class AssistantActivity extends Activity {
         recentAppRow.addView(editorButton(getString(R.string.profile_choose_recent_app), () ->
                 showRecentAppPicker(settingsProfilePackageInput)));
 
-        addSettingsLabel(content, getString(R.string.profile_emulator_game_optional));
-
-        settingsProfileRomInput = settingsEditText(selectedProfile.romContextHint);
-        settingsProfileRomInput.setHint(getString(R.string.profile_rom_hint));
-        settingsProfileRomInput.setHintTextColor(HeimdallUi.mutedTextColor(this));
-        LinearLayout.LayoutParams romParams = new LinearLayout.LayoutParams(-1, dp(42));
-        romParams.setMargins(0, 0, 0, dp(4));
-        content.addView(settingsProfileRomInput, romParams);
+        addSettingsLabel(content, getString(R.string.profile_game_context));
+        TextView gameContextStatus = addSettingsInfoCard(content,
+                getString(R.string.profile_game_context_binding),
+                profileGameContextBindingSummary(settingsGameContextBindingDraft),
+                settingsGameContextBindingDraft.isBound()
+                        ? HeimdallUi.SEMANTIC_SUCCESS : HeimdallUi.SEMANTIC_NEUTRAL);
+        LinearLayout gameContextActions = settingsActionRow(content);
+        final Button[] clearGameContext = new Button[1];
+        gameContextActions.addView(editorButton(
+                getString(R.string.profile_bind_current_game), () -> {
+            GameContextSnapshot current = GameContextTracker.latest();
+            if (current.state != GameContextSnapshot.State.ACTIVE) {
+                showErrorAction(getString(R.string.profile_current_game_unavailable));
+                return;
+            }
+            GameContextBinding binding = new GameContextBinding();
+            binding.kind = current.kind;
+            binding.identityKey = current.identityKey;
+            binding.label = current.label;
+            settingsGameContextBindingDraft = binding;
+            settingsProfilePackageInput.setText(current.packageName);
+            updateProfileGameContextStatus(gameContextStatus, binding);
+            if (clearGameContext[0] != null) clearGameContext[0].setEnabled(true);
+            showAction(getString(R.string.profile_game_bound_draft, binding.label));
+        }));
+        clearGameContext[0] = editorButton(
+                getString(R.string.profile_clear_game_binding), () -> {
+            settingsGameContextBindingDraft = new GameContextBinding();
+            updateProfileGameContextStatus(gameContextStatus,
+                    settingsGameContextBindingDraft);
+            clearGameContext[0].setEnabled(false);
+            showAction(getString(R.string.profile_game_binding_cleared_draft));
+        });
+        clearGameContext[0].setEnabled(settingsGameContextBindingDraft.isBound());
+        gameContextActions.addView(clearGameContext[0]);
 
         settingsProfileDefaultInput = new CheckBox(this);
         settingsProfileDefaultInput.setText(getString(R.string.profile_default_for_app));
@@ -4775,8 +4830,6 @@ public class AssistantActivity extends Activity {
                 : settingsProfileNameInput.getText().toString();
         String packageHint = settingsProfilePackageInput == null ? null
                 : settingsProfilePackageInput.getText().toString();
-        String romHint = settingsProfileRomInput == null ? null
-                : settingsProfileRomInput.getText().toString();
         Boolean defaultForPackage = settingsProfileDefaultInput == null ? null
                 : settingsProfileDefaultInput.isChecked();
         showProfileDetectionDetails = !showProfileDetectionDetails;
@@ -4786,9 +4839,6 @@ public class AssistantActivity extends Activity {
         }
         if (packageHint != null && settingsProfilePackageInput != null) {
             settingsProfilePackageInput.setText(packageHint);
-        }
-        if (romHint != null && settingsProfileRomInput != null) {
-            settingsProfileRomInput.setText(romHint);
         }
         if (defaultForPackage != null && settingsProfileDefaultInput != null) {
             settingsProfileDefaultInput.setChecked(defaultForPackage);
@@ -5110,13 +5160,15 @@ public class AssistantActivity extends Activity {
 
     private void applyProfileSettingsInputs() {
         if (settingsProfileNameInput == null || settingsProfilePackageInput == null
-                || settingsProfileRomInput == null || settingsProfileDefaultInput == null) {
+                || settingsProfileDefaultInput == null) {
             return;
         }
         selectedProfile.name = nonEmpty(settingsProfileNameInput.getText().toString(), selectedProfile.name);
         selectedProfile.mode = "\u901a\u7528";
         selectedProfile.packageHint = settingsProfilePackageInput.getText().toString().trim();
-        selectedProfile.romContextHint = settingsProfileRomInput.getText().toString().trim();
+        selectedProfile.gameContextBinding = settingsGameContextBindingDraft == null
+                ? selectedProfile.safeGameContextBinding()
+                : settingsGameContextBindingDraft.copy();
         selectedProfile.defaultForPackage = settingsProfileDefaultInput.isChecked()
                 && selectedProfile.packageHint.length() > 0;
         if (selectedProfile.defaultForPackage) {
@@ -5147,15 +5199,24 @@ public class AssistantActivity extends Activity {
         if (snapshot == null) {
             return getString(R.string.profile_detection_unavailable_summary);
         }
-        if (hasUsableRomTitle(snapshot)) {
-            return getString(R.string.profile_detection_app_and_game_summary);
-        }
         return getString(R.string.profile_detection_app_only_summary);
     }
 
-    private static boolean hasUsableRomTitle(ForegroundAppTracker.Snapshot snapshot) {
-        return snapshot != null && snapshot.windowTitle.length() > 0
-                && snapshot.isUpperOrUnknownDisplay();
+    private String profileGameContextBindingSummary(GameContextBinding binding) {
+        if (binding == null || !binding.isBound()) {
+            return getString(R.string.profile_game_not_bound);
+        }
+        return getString(R.string.profile_game_bound, nonEmpty(binding.label,
+                getString(R.string.profile_game_unknown_label)));
+    }
+
+    private void updateProfileGameContextStatus(TextView status, GameContextBinding binding) {
+        status.setText(profileGameContextBindingSummary(binding));
+        if (status.getParent() instanceof LinearLayout) {
+            HeimdallUi.applySemanticPanel(this, (LinearLayout) status.getParent(),
+                    binding != null && binding.isBound()
+                            ? HeimdallUi.SEMANTIC_SUCCESS : HeimdallUi.SEMANTIC_NEUTRAL);
+        }
     }
 
     private LinearLayout settingsActionRow(LinearLayout content) {
@@ -8396,6 +8457,7 @@ public class AssistantActivity extends Activity {
         selectedProfile = profiles.get(selectedProfileIndex);
         draftWidgetLayout = null;
         settingsTouchpadDraft = null;
+        settingsGameContextBindingDraft = null;
         settingsMacroMappingProtectionInput = null;
         settingsMacroMappingProtectionDraft = null;
         touchpadSettings = selectedProfile.safeTouchpadSettings();
@@ -9463,6 +9525,7 @@ public class AssistantActivity extends Activity {
                 getString(R.string.profile_generic_game),
                 source.packageHint, source.macroCount, macros);
         profile.romContextHint = "";
+        profile.gameContextBinding = new GameContextBinding();
         profile.defaultForPackage = false;
         profile.iconUri = source.iconUri;
         for (GuideEntry guide : source.guides) {
@@ -9490,6 +9553,7 @@ public class AssistantActivity extends Activity {
         selectedProfile = profile;
         draftWidgetLayout = null;
         settingsTouchpadDraft = null;
+        settingsGameContextBindingDraft = null;
         settingsMacroMappingProtectionInput = null;
         settingsMacroMappingProtectionDraft = null;
         touchpadSettings = selectedProfile.safeTouchpadSettings();
@@ -9519,6 +9583,7 @@ public class AssistantActivity extends Activity {
         selectedProfile = profile;
         draftWidgetLayout = null;
         settingsTouchpadDraft = null;
+        settingsGameContextBindingDraft = null;
         settingsMacroMappingProtectionInput = null;
         settingsMacroMappingProtectionDraft = null;
         touchpadSettings = selectedProfile.safeTouchpadSettings();
@@ -9552,6 +9617,7 @@ public class AssistantActivity extends Activity {
         selectedProfile = profiles.get(selectedProfileIndex);
         draftWidgetLayout = null;
         settingsTouchpadDraft = null;
+        settingsGameContextBindingDraft = null;
         settingsMacroMappingProtectionInput = null;
         settingsMacroMappingProtectionDraft = null;
         touchpadSettings = selectedProfile.safeTouchpadSettings();

@@ -11,6 +11,8 @@ public final class GameProfile {
     public String name;
     public String mode;
     public String packageHint;
+    public GameContextBinding gameContextBinding = new GameContextBinding();
+    /** Legacy 0.2.0 field retained for import/export compatibility; no longer resolved. */
     public String romContextHint = "";
     public boolean defaultForPackage;
     public String iconUri = "";
@@ -56,6 +58,9 @@ public final class GameProfile {
         object.put("mode", mode);
         object.put("packageHint", packageHint);
         object.put("romContextHint", romContextHint);
+        if (safeGameContextBinding().isBound()) {
+            object.put("gameContextBinding", safeGameContextBinding().toJson());
+        }
         object.put("defaultForPackage", defaultForPackage);
         object.put("iconUri", iconUri);
         object.put("macroCount", macroCount);
@@ -126,6 +131,8 @@ public final class GameProfile {
         profile.protectThorMappingDuringEnhancedTouch = object.optBoolean(
                 "protectThorMappingDuringEnhancedTouch", true);
         profile.romContextHint = object.optString("romContextHint", "");
+        profile.gameContextBinding = GameContextBinding.fromJson(
+                object.optJSONObject("gameContextBinding"));
         profile.defaultForPackage = object.optBoolean("defaultForPackage", false);
         profile.iconUri = object.optString("iconUri", "");
         profile.mapTitle = object.optString("mapTitle", "");
@@ -177,6 +184,11 @@ public final class GameProfile {
             touchpadSettings = new TouchpadSettings();
         }
         return touchpadSettings;
+    }
+
+    public GameContextBinding safeGameContextBinding() {
+        if (gameContextBinding == null) gameContextBinding = new GameContextBinding();
+        return gameContextBinding;
     }
 
     public WidgetLayout safeWidgetLayout() {

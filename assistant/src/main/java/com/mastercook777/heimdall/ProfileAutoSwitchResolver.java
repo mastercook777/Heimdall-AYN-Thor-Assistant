@@ -12,16 +12,20 @@ final class ProfileAutoSwitchResolver {
 
     static int resolve(List<GameProfile> profiles, int currentIndex,
             ForegroundAppTracker.Snapshot snapshot) {
+        return resolve(profiles, currentIndex, snapshot, GameContextSnapshot.UNKNOWN);
+    }
+
+    static int resolve(List<GameProfile> profiles, int currentIndex,
+            ForegroundAppTracker.Snapshot snapshot, GameContextSnapshot gameContext) {
         if (profiles == null || snapshot == null || snapshot.packageName.length() == 0) {
             return NO_MATCH;
         }
 
         String packageName = normalize(snapshot.packageName);
-        String context = normalize(snapshot.contextText());
         int packageMatches = 0;
         int onlyPackageMatch = NO_MATCH;
         int defaultMatch = NO_MATCH;
-        int contextMatch = NO_MATCH;
+        int identityMatch = NO_MATCH;
 
         for (int i = 0; i < profiles.size(); i++) {
             GameProfile profile = profiles.get(i);
@@ -33,19 +37,17 @@ final class ProfileAutoSwitchResolver {
             if (profile.defaultForPackage) {
                 defaultMatch = defaultMatch == NO_MATCH ? i : AMBIGUOUS;
             }
-            String hint = normalize(profile.romContextHint);
-            if (hint.length() > 0 && context.contains(hint)) {
-                if (contextMatch != NO_MATCH) {
-                    return currentBoundToPackage(profiles, currentIndex, packageName)
-                            ? currentIndex : NO_MATCH;
+            GameContextBinding binding = profile.safeGameContextBinding();
+            if (isExactIdentityMatch(packageName, gameContext, binding)) {
+                if (identityMatch != NO_MATCH) {
+                    return currentHasExactIdentity(profiles, currentIndex,
+                            packageName, gameContext) ? currentIndex : NO_MATCH;
                 }
-                contextMatch = i;
+                identityMatch = i;
             }
         }
 
-        if (contextMatch != NO_MATCH) {
-            return contextMatch;
-        }
+        if (identityMatch != NO_MATCH) return identityMatch;
         if (currentBoundToPackage(profiles, currentIndex, packageName)) {
             return currentIndex;
         }
@@ -53,6 +55,24 @@ final class ProfileAutoSwitchResolver {
             return defaultMatch;
         }
         return packageMatches == 1 ? onlyPackageMatch : NO_MATCH;
+    }
+
+    private static boolean currentHasExactIdentity(List<GameProfile> profiles, int currentIndex,
+            String packageName, GameContextSnapshot context) {
+        return currentIndex >= 0 && currentIndex < profiles.size()
+                && isExactIdentityMatch(packageName, context,
+                profiles.get(currentIndex).safeGameContextBinding());
+    }
+
+    private static boolean isExactIdentityMatch(String packageName, GameContextSnapshot context,
+            GameContextBinding binding) {
+        return context != null
+                && context.state == GameContextSnapshot.State.ACTIVE
+                && packageName.equals(normalize(context.packageName))
+                && binding != null
+                && binding.isBound()
+                && binding.kind.equals(context.kind)
+                && binding.identityKey.equals(context.identityKey);
     }
 
     private static boolean currentBoundToPackage(List<GameProfile> profiles, int currentIndex,
