@@ -46,9 +46,9 @@ public final class ThorAccessibilityService extends AccessibilityService {
     private Thread activeMacroGamepadThread;
     private String activeMacroLabel = "";
     private boolean activeMacroCancelRequested;
-    private boolean focusPulseDispatching;
+    private boolean upperDisplayHandoffDispatching;
 
-    enum FocusPulseDispatchResult {
+    enum SingleTouchHandoffDispatchResult {
         ACCEPTED,
         BUSY,
         REJECTED
@@ -286,10 +286,6 @@ public final class ThorAccessibilityService extends AccessibilityService {
                 || normalized.contains("game-assistant");
     }
 
-    static boolean isPairedDisplayFrontendPackage(String packageName) {
-        return "rip.moth.cocoonshell".equals(packageName);
-    }
-
     private EventWindow resolveEventWindow(int windowId) {
         long started = DebugPerformanceDiagnostics.beginTask(
                 "Accessibility event window lookup");
@@ -367,17 +363,17 @@ public final class ThorAccessibilityService extends AccessibilityService {
         }
     }
 
-    FocusPulseDispatchResult dispatchFocusPulse(
+    SingleTouchHandoffDispatchResult dispatchUpperDisplaySingleTouchHandoff(
             int displayId, float x, float y, long durationMs) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R
                 || displayId != Display.DEFAULT_DISPLAY
                 || x < 0f
                 || y < 0f
                 || durationMs < 1L) {
-            return FocusPulseDispatchResult.REJECTED;
+            return SingleTouchHandoffDispatchResult.REJECTED;
         }
         synchronized (this) {
-            if (focusPulseDispatching
+            if (upperDisplayHandoffDispatching
                     || InputBridge.hasActiveMacroDispatch()
                     || activeMacroCallback != null
                     || activeMacroGamepadThread != null
@@ -385,9 +381,9 @@ public final class ThorAccessibilityService extends AccessibilityService {
                     || touchpadDispatching
                     || activeTouchpadStroke != null
                     || activeTouchpadCallback != null) {
-                return FocusPulseDispatchResult.BUSY;
+                return SingleTouchHandoffDispatchResult.BUSY;
             }
-            focusPulseDispatching = true;
+            upperDisplayHandoffDispatching = true;
         }
 
         Path path = new Path();
@@ -402,46 +398,39 @@ public final class ThorAccessibilityService extends AccessibilityService {
             accepted = dispatchGesture(gesture, new GestureResultCallback() {
                 @Override
                 public void onCompleted(GestureDescription gestureDescription) {
-                    finishFocusPulse("completed");
+                    finishUpperDisplayHandoff("completed");
                 }
 
                 @Override
                 public void onCancelled(GestureDescription gestureDescription) {
-                    // A real touch can cancel an accepted accessibility gesture and already
-                    // provides the required focus handoff. Never launch the Activity fallback
-                    // from this asynchronous callback.
-                    finishFocusPulse("cancelled");
+                    // This deterministic primitive never retries or launches another route.
+                    finishUpperDisplayHandoff("cancelled");
                 }
             }, handler);
         } catch (Throwable throwable) {
             synchronized (this) {
-                focusPulseDispatching = false;
+                upperDisplayHandoffDispatching = false;
             }
-            Log.e(FOCUS_TAG, "upper focus pulse submission failed", throwable);
-            return FocusPulseDispatchResult.REJECTED;
+            Log.e(FOCUS_TAG, "upper display handoff submission failed", throwable);
+            return SingleTouchHandoffDispatchResult.REJECTED;
         }
         if (!accepted) {
             synchronized (this) {
-                focusPulseDispatching = false;
+                upperDisplayHandoffDispatching = false;
             }
-            Log.w(FOCUS_TAG, "upper focus pulse rejected by AccessibilityService");
-            return FocusPulseDispatchResult.REJECTED;
+            Log.w(FOCUS_TAG, "upper display handoff rejected by AccessibilityService");
+            return SingleTouchHandoffDispatchResult.REJECTED;
         }
-        return FocusPulseDispatchResult.ACCEPTED;
+        return SingleTouchHandoffDispatchResult.ACCEPTED;
     }
 
-    private void finishFocusPulse(String outcome) {
+    private void finishUpperDisplayHandoff(String outcome) {
         synchronized (this) {
-            focusPulseDispatching = false;
+            upperDisplayHandoffDispatching = false;
         }
-        Log.i(FOCUS_TAG, "upper focus pulse " + outcome);
+        Log.i(FOCUS_TAG, "upper display handoff " + outcome);
         HeimdallStabilityDiagnostics.recordFocusDiagnostic(
-                this, "recovery pulse-" + outcome);
-        if (!diagnosticScanningSuspended
-                && ForegroundAppTracker.isObservationRequested(this)) {
-            handler.removeCallbacks(foregroundRefresh);
-            handler.postDelayed(foregroundRefresh, 120L);
-        }
+                this, "deterministic handoff-" + outcome);
     }
 
     private synchronized boolean isMacroActive(

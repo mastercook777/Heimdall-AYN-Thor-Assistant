@@ -39,7 +39,6 @@ final class ForegroundAppTracker {
 
     private static volatile Snapshot latest;
     private static volatile Listener listener;
-    private static volatile Listener focusRecoveryListener;
 
     private ForegroundAppTracker() {
     }
@@ -86,19 +85,8 @@ final class ForegroundAppTracker {
         }
     }
 
-    static void setFocusRecoveryListener(Listener value) {
-        focusRecoveryListener = value;
-    }
-
-    static void clearFocusRecoveryListener(Listener value) {
-        if (focusRecoveryListener == value) {
-            focusRecoveryListener = null;
-        }
-    }
-
     static boolean isObservationRequested(Context context) {
-        return isEnabled(context)
-                || focusRecoveryListener != null;
+        return isEnabled(context);
     }
 
     static void publish(Snapshot snapshot) {
@@ -112,23 +100,12 @@ final class ForegroundAppTracker {
                 && previous.windowTitle.equals(snapshot.windowTitle)
                 && previous.displayId == snapshot.displayId) {
             latest = snapshot;
-            // A Companion relaunch can target another ROM in the same emulator Activity.
-            // Keep App-aware switching change-based, but let the one-shot focus gate see
-            // the fresh window observation and decide against its own armed timestamp.
-            Listener focusCurrent = focusRecoveryListener;
-            if (focusCurrent != null) {
-                focusCurrent.onForegroundAppChanged(snapshot);
-            }
             return;
         }
         latest = snapshot;
         Listener current = listener;
         if (current != null) {
             current.onForegroundAppChanged(snapshot);
-        }
-        Listener focusCurrent = focusRecoveryListener;
-        if (focusCurrent != null && focusCurrent != current) {
-            focusCurrent.onForegroundAppChanged(snapshot);
         }
     }
 

@@ -66,11 +66,7 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
             testRetroArchTwoLevelGameContextContract();
             testAssistantActivitySingleTaskContract();
             testSecondaryDisplayLaunchRouterContract();
-            testUpperDisplayFocusRecoveryCoordinateContract();
-            testUpperDisplayFocusTransitionGateContract();
-            testUpperDisplayCompanionHandoffGateContract();
-            testUpperDisplayCompanionConfirmationGateContract();
-            testPairedDisplayFrontendPackageContract();
+            testUpperDisplaySingleTouchHandoffCoordinateContract();
             testStartupCapabilityDefaultContract();
             testSelfContainedRoundTripAfterSourcesAreDeleted();
             testCorruptMissingUnsafeAndOversizedBundlesFailClosed();
@@ -100,13 +96,14 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
                 ShizukuNativeUserService.TRANSACTION_RELEASE_VIRTUAL_KEYBOARD);
     }
 
-    public void testUpperDisplayFocusRecoveryCoordinateContract() {
-        Point thorUpper = UpperDisplayFocusRecovery.resolveMirroredLowerRightPoint(1920, 1080);
+    public void testUpperDisplaySingleTouchHandoffCoordinateContract() {
+        Point thorUpper =
+                UpperDisplaySingleTouchHandoff.resolveMirroredLowerRightPoint(1920, 1080);
         assertNotNull(thorUpper);
         assertEquals(1918, thorUpper.x);
         assertEquals(1079, thorUpper.y);
-        assertNull(UpperDisplayFocusRecovery.resolveMirroredLowerRightPoint(2, 1080));
-        assertNull(UpperDisplayFocusRecovery.resolveMirroredLowerRightPoint(1920, 1));
+        assertNull(UpperDisplaySingleTouchHandoff.resolveMirroredLowerRightPoint(2, 1080));
+        assertNull(UpperDisplaySingleTouchHandoff.resolveMirroredLowerRightPoint(1920, 1));
     }
 
     public void testAssistantActivitySingleTaskContract() throws Exception {
@@ -145,116 +142,6 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
         assertFalse(ForegroundAppTracker.shouldAutoEnable(true, true, true));
         assertFalse(ForegroundAppTracker.shouldAutoEnable(false, false, true));
         assertFalse(ForegroundAppTracker.shouldAutoEnable(false, true, false));
-    }
-
-    public void testUpperDisplayFocusTransitionGateContract() {
-        ForegroundAppTracker.Snapshot frontend = new ForegroundAppTracker.Snapshot(
-                "com.example.frontend", "FrontendActivity", "", 0, 100L);
-        ForegroundAppTracker.Snapshot retroArch = new ForegroundAppTracker.Snapshot(
-                "com.retroarch.aarch64", "RetroActivityFuture", "RetroArch", 0, 200L);
-        ForegroundAppTracker.Snapshot lowerRetroArch = new ForegroundAppTracker.Snapshot(
-                "com.retroarch.aarch64", "RetroActivityFuture", "RetroArch", 4, 200L);
-
-        UpperDisplayFocusTransitionGate gate = new UpperDisplayFocusTransitionGate();
-        gate.arm(frontend);
-        gate.markPrimaryAttempted();
-        assertFalse(gate.shouldRecover(lowerRetroArch));
-        assertTrue(gate.shouldRecover(retroArch));
-        assertFalse(gate.shouldRecover(retroArch));
-
-        gate.arm(frontend);
-        assertFalse(gate.shouldRecover(retroArch));
-        gate.markPrimaryAttempted();
-        assertFalse(gate.shouldRecover(retroArch));
-
-        gate.arm(retroArch);
-        gate.markPrimaryAttempted();
-        assertFalse(gate.shouldRecover(retroArch));
-        gate.cancel();
-        assertFalse(gate.shouldRecover(new ForegroundAppTracker.Snapshot(
-                "dev.eden.eden_emulator", "EmulationActivity", "Eden", 0, 300L)));
-    }
-
-    public void testUpperDisplayCompanionHandoffGateContract() {
-        UpperDisplayCompanionHandoffGate gate = new UpperDisplayCompanionHandoffGate();
-        ForegroundAppTracker.Snapshot staleUpper = new ForegroundAppTracker.Snapshot(
-                "com.retroarch.aarch64", "RetroActivityFuture", "RetroArch", 0, 99L);
-        ForegroundAppTracker.Snapshot freshLower = new ForegroundAppTracker.Snapshot(
-                "com.retroarch.aarch64", "RetroActivityFuture", "RetroArch", 4, 101L);
-        ForegroundAppTracker.Snapshot freshUpper = new ForegroundAppTracker.Snapshot(
-                "com.retroarch.aarch64", "RetroActivityFuture", "RetroArch", 0, 101L);
-        ForegroundAppTracker.Snapshot cocoon = new ForegroundAppTracker.Snapshot(
-                "rip.moth.cocoonshell", "CocoonActivity", "Cocoon", 0, 100L);
-
-        assertFalse(gate.consumeScheduled());
-        gate.arm(100L, false);
-        assertTrue(gate.isArmed());
-        assertFalse(gate.isCompanionConfirmed());
-        assertFalse(gate.scheduleFor(staleUpper));
-        assertFalse(gate.scheduleFor(freshLower));
-        assertFalse(gate.scheduleFor(freshUpper));
-        assertTrue(gate.observePairedFrontend(cocoon));
-        assertTrue(gate.isCompanionConfirmed());
-        assertFalse(gate.scheduleFor(cocoon));
-        assertTrue(gate.scheduleFor(freshUpper));
-        assertTrue(gate.isScheduled());
-        assertFalse(gate.scheduleFor(freshUpper));
-        assertTrue(gate.consumeScheduled());
-        assertFalse(gate.isArmed());
-        assertFalse(gate.consumeScheduled());
-
-        gate.arm(100L, true);
-        assertTrue(gate.scheduleFor(freshUpper));
-        gate.retryAfterInterruptedSchedule();
-        assertTrue(gate.isArmed());
-        assertFalse(gate.isScheduled());
-        assertTrue(gate.scheduleFor(freshUpper));
-        gate.cancel();
-        assertFalse(gate.consumeScheduled());
-    }
-
-    public void testUpperDisplayCompanionConfirmationGateContract() {
-        UpperDisplayCompanionConfirmationGate gate =
-                new UpperDisplayCompanionConfirmationGate();
-        ForegroundAppTracker.Snapshot retroArch = new ForegroundAppTracker.Snapshot(
-                "com.retroarch.aarch64", "RetroActivityFuture", "RetroArch", 0, 100L);
-        ForegroundAppTracker.Snapshot stableRetroArch = new ForegroundAppTracker.Snapshot(
-                "com.retroarch.aarch64", "RetroActivityFuture", "RetroArch", 0, 900L);
-        ForegroundAppTracker.Snapshot other = new ForegroundAppTracker.Snapshot(
-                "org.ppsspp.ppsspp", "PpssppActivity", "PPSSPP", 0, 900L);
-        GameContextSnapshot activeRetroArch = new GameContextSnapshot(
-                GameContextSnapshot.State.ACTIVE, "com.retroarch.aarch64", 100,
-                "retroarch_content", "identity", "Game", 200L, "retroarch");
-
-        gate.arm(retroArch, 100L);
-        assertTrue(gate.isArmed());
-        assertFalse(gate.scheduleFor(retroArch, GameContextSnapshot.UNKNOWN, 200L));
-        assertFalse(gate.scheduleFor(other, activeRetroArch, 900L));
-        assertTrue(gate.scheduleFor(retroArch, activeRetroArch, 200L));
-        assertTrue(gate.consumeScheduled());
-        assertFalse(gate.isArmed());
-
-        gate.arm(retroArch, 100L);
-        assertTrue(gate.scheduleFor(
-                stableRetroArch, GameContextSnapshot.UNKNOWN,
-                100L + UpperDisplayCompanionConfirmationGate.MIN_STABLE_WINDOW_MS));
-        assertTrue(gate.consumeScheduled());
-
-        gate.arm(retroArch, 100L);
-        assertFalse(gate.scheduleFor(
-                stableRetroArch, GameContextSnapshot.UNKNOWN,
-                101L + UpperDisplayCompanionConfirmationGate.MAX_CONFIRMATION_WINDOW_MS));
-        assertFalse(gate.isArmed());
-    }
-
-    public void testPairedDisplayFrontendPackageContract() {
-        assertTrue(ThorAccessibilityService.isPairedDisplayFrontendPackage(
-                "rip.moth.cocoonshell"));
-        assertFalse(ThorAccessibilityService.isPairedDisplayFrontendPackage(
-                "org.es_de.frontend"));
-        assertFalse(ThorAccessibilityService.isPairedDisplayFrontendPackage(
-                "com.retroarch.aarch64"));
-
     }
 
     public void testKeyboardPadModelContract() throws Exception {

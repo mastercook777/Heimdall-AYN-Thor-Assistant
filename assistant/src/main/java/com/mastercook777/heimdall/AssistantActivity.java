@@ -322,17 +322,6 @@ public class AssistantActivity extends Activity {
             new ThorGameFocusProtection();
     private final ThorTextInputFocusLease thorTextInputFocusLease =
             new ThorTextInputFocusLease();
-    private boolean upperDisplayFocusRecoveryRequested;
-    private int upperDisplayFocusRecoveryGeneration;
-    private final UpperDisplayFocusTransitionGate upperDisplayFocusTransitionGate =
-            new UpperDisplayFocusTransitionGate();
-    private static final long COMPANION_FOCUS_PULSE_DELAY_MS = 250L;
-    private final UpperDisplayCompanionHandoffGate upperDisplayCompanionHandoffGate =
-            new UpperDisplayCompanionHandoffGate();
-    private final UpperDisplayCompanionConfirmationGate
-            upperDisplayCompanionConfirmationGate =
-            new UpperDisplayCompanionConfirmationGate();
-    private int companionFocusPulseGeneration;
     private ViewTreeObserver.OnGlobalFocusChangeListener textInputFocusListener;
     private ViewTreeObserver.OnGlobalLayoutListener imeVisibilityListener;
     private boolean textInputFocused;
@@ -380,12 +369,9 @@ public class AssistantActivity extends Activity {
                 if (gameContextController != null) gameContextController.refresh(snapshot);
                 maybeAutoSwitchProfile(snapshot);
             });
-    private final ForegroundAppTracker.Listener upperDisplayFocusWindowListener = snapshot ->
-            uiHandler.post(() -> maybeRecoverFocusAfterUpperWindowTransition(snapshot));
     private boolean profileAwarenessActive;
     private String lastProfileAutoSwitchDiagnostic = "";
     private boolean activityStarted;
-    private boolean activityResumed;
     private final Runnable profileAwarenessTicker = new Runnable() {
         @Override
         public void run() {
@@ -499,14 +485,10 @@ public class AssistantActivity extends Activity {
         gameContextController = new ShizukuGameContextController(this, snapshot -> {
             updateSettingsDetectedGameStatus(snapshot);
             maybeAutoSwitchProfile(ForegroundAppTracker.latest());
-            maybeScheduleCompanionConfirmation(
-                    ForegroundAppTracker.latest(), snapshot, "game-context-active");
         });
         HeimdallStabilityDiagnostics.reportPreviousExit(this);
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         recordFocusBoundary("create-protected");
-        upperDisplayCompanionHandoffGate.arm(System.currentTimeMillis(), false);
-        recordFocusBoundary("initial-upper-window-handoff-armed");
         Intent launchIntent = getIntent();
         recordFocusBoundary("create-intent-flags-"
                 + Integer.toHexString(launchIntent == null ? 0 : launchIntent.getFlags()));
@@ -597,15 +579,6 @@ public class AssistantActivity extends Activity {
         setIntent(intent);
         int flags = intent == null ? 0 : intent.getFlags();
         recordFocusBoundary("new-intent-flags-" + Integer.toHexString(flags));
-        companionFocusPulseGeneration++;
-        upperDisplayCompanionConfirmationGate.cancel();
-        upperDisplayCompanionHandoffGate.arm(System.currentTimeMillis(), true);
-        recordFocusBoundary("companion-window-handoff-armed");
-        upperDisplayFocusTransitionGate.cancel();
-        ThorAccessibilityService accessibilityService = ThorAccessibilityService.getInstance();
-        if (accessibilityService != null) {
-            accessibilityService.refreshForegroundApp();
-        }
     }
 
     private void restoreUiInstanceState(Bundle state) {
@@ -733,9 +706,6 @@ public class AssistantActivity extends Activity {
         stabilityDiagnostics.stop();
         thorPerformanceCompatibility.release();
         DebugPerformanceDiagnostics.shutdown();
-        upperDisplayCompanionHandoffGate.cancel();
-        upperDisplayCompanionConfirmationGate.cancel();
-        ForegroundAppTracker.clearFocusRecoveryListener(upperDisplayFocusWindowListener);
         if (gameContextController != null) gameContextController.close();
         super.onDestroy();
     }
@@ -757,21 +727,6 @@ public class AssistantActivity extends Activity {
             return;
         }
         ThorAccessibilityService.setDiagnosticScanningSuspended(false);
-        if (!upperDisplayCompanionHandoffGate.isArmed()) {
-            ForegroundAppTracker.Snapshot latest = ForegroundAppTracker.latest();
-            if (latest != null
-                    && ThorAccessibilityService.isPairedDisplayFrontendPackage(
-                            latest.packageName)) {
-                upperDisplayCompanionConfirmationGate.cancel();
-                upperDisplayCompanionHandoffGate.arm(
-                        System.currentTimeMillis(), true);
-                recordFocusBoundary("companion-window-handoff-armed-start-after-cocoon");
-                upperDisplayFocusTransitionGate.cancel();
-            } else if (!upperDisplayCompanionConfirmationGate.isArmed()) {
-                armUpperDisplayFocusTransitionRecovery("start");
-            }
-        }
-        ForegroundAppTracker.setFocusRecoveryListener(upperDisplayFocusWindowListener);
         ThorAccessibilityService accessibilityService = ThorAccessibilityService.getInstance();
         if (accessibilityService != null) {
             accessibilityService.refreshForegroundApp();
@@ -783,19 +738,8 @@ public class AssistantActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
-        activityResumed = true;
         updateGameFocusProtection(true);
         recordFocusBoundary("resume-protected");
-        if (upperDisplayCompanionHandoffGate.isArmed()
-                || upperDisplayCompanionConfirmationGate.isArmed()) {
-            ThorAccessibilityService accessibilityService =
-                    ThorAccessibilityService.getInstance();
-            if (accessibilityService != null) {
-                accessibilityService.refreshForegroundApp();
-            }
-        } else {
-            requestUpperDisplayFocusRecoveryOnce();
-        }
         if (!DebugPerformanceDiagnostics.isStaticUi()) {
             resumeMagnifierViews();
         }
@@ -809,9 +753,6 @@ public class AssistantActivity extends Activity {
 
     @Override
     protected void onPause() {
-        activityResumed = false;
-        companionFocusPulseGeneration++;
-        upperDisplayCompanionConfirmationGate.cancel();
         recordFocusBoundary("pause");
         saveGuideReadingPosition();
         dismissFullVirtualKeyboard(false);
@@ -831,9 +772,6 @@ public class AssistantActivity extends Activity {
     @Override
     protected void onStop() {
         activityStarted = false;
-        upperDisplayFocusRecoveryRequested = false;
-        upperDisplayFocusRecoveryGeneration++;
-        upperDisplayFocusTransitionGate.cancel();
         recordFocusBoundary("stop");
         stabilityDiagnostics.stop();
         thorPerformanceCompatibility.release();
@@ -842,7 +780,6 @@ public class AssistantActivity extends Activity {
         DebugPerformanceDiagnostics.unregisterRepeatingTask(
                 "App-aware upper-window scan");
         ForegroundAppTracker.clearListener(foregroundAppListener);
-        ForegroundAppTracker.clearFocusRecoveryListener(upperDisplayFocusWindowListener);
         if (gameContextController != null) gameContextController.suspend();
         systemStatusController.stop();
         super.onStop();
@@ -1026,7 +963,7 @@ public class AssistantActivity extends Activity {
                     textInputFocused = false;
                     updatePerformanceCompatibilityTextInputPause();
                     recordFocusBoundary("text-lease-released");
-                    rearmUpperDisplayFocusRecovery("text-lease-released");
+                    requestDeterministicUpperDisplayHandoff("text-lease-released");
                 },
                 afterRelease);
     }
@@ -1037,183 +974,11 @@ public class AssistantActivity extends Activity {
         }
     }
 
-    private void requestUpperDisplayFocusRecoveryOnce() {
-        if (upperDisplayFocusRecoveryRequested
-                || upperDisplayCompanionHandoffGate.isArmed()
-                || upperDisplayCompanionConfirmationGate.isArmed()
-                || !activityResumed
-                || DebugPerformanceDiagnostics.isStaticUi()
-                || isFinishing()
-                || isDestroyed()) {
-            return;
-        }
-        upperDisplayFocusRecoveryRequested = true;
-        int generation = upperDisplayFocusRecoveryGeneration;
-        getWindow().getDecorView().post(() -> {
-            if (generation != upperDisplayFocusRecoveryGeneration
-                    || !upperDisplayFocusRecoveryRequested) {
-                return;
-            }
-            if (!activityStarted
-                    || !activityResumed
-                    || isFinishing()
-                    || isDestroyed()) {
-                upperDisplayFocusRecoveryRequested = false;
-                return;
-            }
-            UpperDisplayFocusRecovery.Result result =
-                    UpperDisplayFocusRecovery.attempt(this);
-            upperDisplayFocusTransitionGate.markPrimaryAttempted();
-            recordFocusBoundary("focus-recovery-" + result.name().toLowerCase(Locale.US));
-        });
-    }
-
-    private void armUpperDisplayFocusTransitionRecovery(String reason) {
-        upperDisplayFocusTransitionGate.arm(ForegroundAppTracker.latest());
-        recordFocusBoundary("focus-transition-armed-" + reason);
-    }
-
-    private void maybeRecoverFocusAfterUpperWindowTransition(
-            ForegroundAppTracker.Snapshot snapshot) {
-        if (!activityStarted || !activityResumed) {
-            return;
-        }
-        if (upperDisplayCompanionConfirmationGate.isArmed()) {
-            maybeScheduleCompanionConfirmation(
-                    snapshot, GameContextSnapshot.UNKNOWN, "stable-upper-window");
-            return;
-        }
-        if (ThorAccessibilityService.isPairedDisplayFrontendPackage(
-                snapshot == null ? "" : snapshot.packageName)) {
-            if (upperDisplayCompanionHandoffGate.observePairedFrontend(snapshot)) {
-                HeimdallStabilityDiagnostics.recordFocusDiagnostic(this,
-                        "recovery companion-frontend-observed package="
-                                + snapshot.packageName + " display=" + snapshot.displayId);
-            }
-            return;
-        }
-        if (UpperDisplayFocusRecovery.isCurrentUpperFrontend(this, snapshot)) {
-            HeimdallStabilityDiagnostics.recordFocusDiagnostic(this,
-                    "recovery upper-frontend-observed package=" + snapshot.packageName
-                            + " display=" + snapshot.displayId);
-            return;
-        }
-        if (upperDisplayCompanionHandoffGate.isArmed()) {
-            if (!upperDisplayCompanionHandoffGate.isCompanionConfirmed()) {
-                upperDisplayCompanionHandoffGate.cancel();
-                HeimdallStabilityDiagnostics.recordFocusDiagnostic(this,
-                        "recovery initial-handoff-cancelled no-cocoon-boundary package="
-                                + snapshot.packageName);
-                rearmUpperDisplayFocusRecovery("initial-non-cocoon");
-                return;
-            }
-            maybeScheduleCompanionTouchAfterUpperWindow(snapshot, "foreground");
-            return;
-        }
-        if (!upperDisplayFocusTransitionGate.shouldRecover(snapshot)) {
-            return;
-        }
-        HeimdallStabilityDiagnostics.recordFocusDiagnostic(this,
-                "recovery upper-window-transition package=" + snapshot.packageName
-                        + " display=" + snapshot.displayId);
-        rearmUpperDisplayFocusRecovery("upper-window-transition");
-    }
-
-    private void maybeScheduleCompanionTouchAfterUpperWindow(
-            ForegroundAppTracker.Snapshot snapshot, String evidence) {
-        if (!activityStarted || !activityResumed
-                || !upperDisplayCompanionHandoffGate.isArmed()
-                || !upperDisplayCompanionHandoffGate.isCompanionConfirmed()
-                || ThorAccessibilityService.isPairedDisplayFrontendPackage(
-                        snapshot == null ? "" : snapshot.packageName)
-                || UpperDisplayFocusRecovery.isCurrentUpperFrontend(this, snapshot)
-                || !upperDisplayCompanionHandoffGate.scheduleFor(snapshot)) {
-            return;
-        }
-        long observationAgeMs = Math.max(0L,
-                System.currentTimeMillis() - snapshot.observedAtMs);
-        HeimdallStabilityDiagnostics.recordFocusDiagnostic(this,
-                "recovery companion-upper-window evidence=" + evidence
-                        + " package=" + snapshot.packageName
-                        + " display=" + snapshot.displayId
-                        + " observationAgeMs=" + observationAgeMs);
-        requestCompanionTouchPulseOnce(snapshot);
-    }
-
-    private void requestCompanionTouchPulseOnce(ForegroundAppTracker.Snapshot snapshot) {
-        if (!upperDisplayCompanionHandoffGate.isArmed()
-                || !upperDisplayCompanionHandoffGate.isScheduled()
-                || DebugPerformanceDiagnostics.isStaticUi()
-                || isFinishing()
-                || isDestroyed()) {
-            return;
-        }
-        int generation = ++companionFocusPulseGeneration;
-        HeimdallStabilityDiagnostics.recordFocusDiagnostic(this,
-                "recovery companion-touch-pulse scheduled-after-window package="
-                        + snapshot.packageName + " delayMs="
-                        + COMPANION_FOCUS_PULSE_DELAY_MS);
-        // The owner-proven manual macro succeeds after the emulator's real upper window exists.
-        // Keep exactly one bounded attempt, now anchored to that observation instead of the
-        // much earlier Companion Intent.
-        uiHandler.postDelayed(() -> {
-            if (generation != companionFocusPulseGeneration
-                    || !activityStarted
-                    || !activityResumed
-                    || isFinishing()
-                    || isDestroyed()) {
-                upperDisplayCompanionHandoffGate.retryAfterInterruptedSchedule();
-                HeimdallStabilityDiagnostics.recordFocusDiagnostic(this,
-                        "recovery companion-touch-pulse schedule-interrupted");
-                return;
-            }
-            if (!upperDisplayCompanionHandoffGate.consumeScheduled()) {
-                return;
-            }
-            UpperDisplayFocusRecovery.Result result =
-                    UpperDisplayFocusRecovery.attemptCompanionPulse(this);
-            if (result == UpperDisplayFocusRecovery.Result.PULSE_ACCEPTED) {
-                upperDisplayCompanionConfirmationGate.arm(
-                        snapshot, System.currentTimeMillis());
-                HeimdallStabilityDiagnostics.recordFocusDiagnostic(this,
-                        "recovery companion-confirmation-armed package="
-                                + snapshot.packageName);
-            }
-            recordFocusBoundary("companion-touch-pulse-"
-                    + result.name().toLowerCase(Locale.US)
-                    + "-delay-" + COMPANION_FOCUS_PULSE_DELAY_MS + "ms");
-        }, COMPANION_FOCUS_PULSE_DELAY_MS);
-    }
-
-    private void maybeScheduleCompanionConfirmation(
-            ForegroundAppTracker.Snapshot foreground,
-            GameContextSnapshot context,
-            String evidence) {
-        if (!activityStarted || !activityResumed
-                || !upperDisplayCompanionConfirmationGate.isArmed()
-                || !upperDisplayCompanionConfirmationGate.scheduleFor(
-                        foreground, context, System.currentTimeMillis())) {
-            return;
-        }
-        if (!upperDisplayCompanionConfirmationGate.consumeScheduled()) {
-            return;
-        }
-        UpperDisplayFocusRecovery.Result result =
-                UpperDisplayFocusRecovery.attemptCompanionPulse(this);
-        HeimdallStabilityDiagnostics.recordFocusDiagnostic(this,
-                "recovery companion-confirmation evidence=" + evidence
-                        + " package=" + (foreground == null
-                                ? "" : foreground.packageName)
-                        + " result=" + result.name().toLowerCase(Locale.US));
-        recordFocusBoundary("companion-confirmation-"
+    private void requestDeterministicUpperDisplayHandoff(String reason) {
+        UpperDisplaySingleTouchHandoff.Result result =
+                UpperDisplaySingleTouchHandoff.attempt(this);
+        recordFocusBoundary("deterministic-handoff-" + reason + "-"
                 + result.name().toLowerCase(Locale.US));
-    }
-
-    private void rearmUpperDisplayFocusRecovery(String reason) {
-        upperDisplayFocusRecoveryRequested = false;
-        upperDisplayFocusRecoveryGeneration++;
-        recordFocusBoundary("focus-recovery-rearmed-" + reason);
-        requestUpperDisplayFocusRecoveryOnce();
     }
 
     private void updateProfileAwarenessRegistration() {
@@ -1243,12 +1008,33 @@ public class AssistantActivity extends Activity {
         uiHandler.postDelayed(profileAwarenessTicker, 1200L);
     }
 
+    private static boolean isDeterministicLowerFocusActivityResult(int requestCode) {
+        switch (requestCode) {
+            case REQUEST_GUIDE_FILE:
+            case REQUEST_MAP_FILE:
+            case REQUEST_EXPORT_PROFILES:
+            case REQUEST_IMPORT_PROFILES:
+            case REQUEST_GUIDE_TEXT_FILE:
+            case REQUEST_PROFILE_ICON:
+            case REQUEST_MACRO_ICON:
+            case REQUEST_SCREEN_RECORDING:
+            case REQUEST_MAGNIFIER_PROJECTION:
+            case REQUEST_CANVAS_IMAGE:
+            case REQUEST_DIAGNOSTIC_EXPORT:
+                return true;
+            default:
+                return false;
+        }
+    }
+
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
         recordFocusBoundary("activity-result-" + requestCode);
-        rearmUpperDisplayFocusRecovery("activity-result-" + requestCode);
-        uiHandler.post(() -> updateGameFocusProtection(true));
+        updateGameFocusProtection(true);
+        if (isDeterministicLowerFocusActivityResult(requestCode)) {
+            requestDeterministicUpperDisplayHandoff("activity-result-" + requestCode);
+        }
         if (requestCode == REQUEST_MAGNIFIER_PROJECTION) {
             if (resultCode == RESULT_OK && data != null && pendingMagnifierProjectionItem != null) {
                 startApprovedMagnifierProjection(resultCode, data, pendingMagnifierProjectionItem);
@@ -1421,11 +1207,16 @@ public class AssistantActivity extends Activity {
         if (requestCode != REQUEST_RECORD_AUDIO) {
             return;
         }
+        updateGameFocusProtection(true);
         if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-            launchScreenRecordingConsent();
+            if (!launchScreenRecordingConsent()) {
+                requestDeterministicUpperDisplayHandoff(
+                        "record-audio-permission-finished");
+            }
         } else {
             pendingRecordingProfileName = null;
             showErrorAction(getString(R.string.permission_record_audio_required));
+            requestDeterministicUpperDisplayHandoff("record-audio-permission-finished");
         }
     }
 
@@ -2591,13 +2382,13 @@ public class AssistantActivity extends Activity {
         launchScreenRecordingConsent();
     }
 
-    private void launchScreenRecordingConsent() {
+    private boolean launchScreenRecordingConsent() {
         MediaProjectionManager manager =
                 (MediaProjectionManager) getSystemService(MEDIA_PROJECTION_SERVICE);
         if (manager == null) {
             showErrorAction(getString(R.string.error_recording_unsupported));
             pendingRecordingProfileName = null;
-            return;
+            return false;
         }
         Intent consent;
         if (Build.VERSION.SDK_INT >= 34) {
@@ -2606,7 +2397,14 @@ public class AssistantActivity extends Activity {
         } else {
             consent = manager.createScreenCaptureIntent();
         }
-        startActivityForResult(consent, REQUEST_SCREEN_RECORDING);
+        try {
+            startActivityForResult(consent, REQUEST_SCREEN_RECORDING);
+            return true;
+        } catch (RuntimeException error) {
+            pendingRecordingProfileName = null;
+            showErrorAction(getString(R.string.error_recording_unsupported));
+            return false;
+        }
     }
 
     private void startApprovedScreenRecording(int resultCode, Intent resultData) {
