@@ -10,6 +10,7 @@ import android.hardware.HardwareBuffer;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.util.Log;
 import android.view.Display;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
@@ -20,6 +21,7 @@ import java.util.List;
 import java.util.Locale;
 
 public final class ThorAccessibilityService extends AccessibilityService {
+    private static final String FOCUS_TAG = "HeimdallGameFocus";
     private static ThorAccessibilityService instance;
     private static volatile boolean diagnosticScanningSuspended;
     private static String lastExternalPackageName = "";
@@ -44,6 +46,13 @@ public final class ThorAccessibilityService extends AccessibilityService {
     private Thread activeMacroGamepadThread;
     private String activeMacroLabel = "";
     private boolean activeMacroCancelRequested;
+    private boolean focusPulseDispatching;
+
+    enum FocusPulseDispatchResult {
+        ACCEPTED,
+        BUSY,
+        REJECTED
+    }
 
     public static ThorAccessibilityService getInstance() {
         return instance;
@@ -122,7 +131,10 @@ public final class ThorAccessibilityService extends AccessibilityService {
     protected void onServiceConnected() {
         super.onServiceConnected();
         instance = this;
-        if (!diagnosticScanningSuspended && ForegroundAppTracker.isEnabled(this)) {
+        HeimdallStabilityDiagnostics.recordFocusDiagnostic(
+                this, "accessibility service-connected");
+        if (!diagnosticScanningSuspended
+                && ForegroundAppTracker.isObservationRequested(this)) {
             handler.postDelayed(foregroundRefresh, 120L);
         }
     }
@@ -131,6 +143,8 @@ public final class ThorAccessibilityService extends AccessibilityService {
     public void onDestroy() {
         handler.removeCallbacks(foregroundRefresh);
         cancelMacro();
+        HeimdallStabilityDiagnostics.recordFocusDiagnostic(
+                this, "accessibility service-destroyed");
         if (instance == this) {
             instance = null;
         }
@@ -139,7 +153,8 @@ public final class ThorAccessibilityService extends AccessibilityService {
 
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
-        if (diagnosticScanningSuspended || !ForegroundAppTracker.isEnabled(this)) {
+        if (diagnosticScanningSuspended
+                || !ForegroundAppTracker.isObservationRequested(this)) {
             return;
         }
         CharSequence packageName = event.getPackageName();
@@ -155,8 +170,16 @@ public final class ThorAccessibilityService extends AccessibilityService {
             return;
         }
         rememberPackage(value);
-        lastExternalPackageName = value;
         EventWindow window = resolveEventWindow(event.getWindowId());
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+                && window.displayId != Display.DEFAULT_DISPLAY) {
+            // A lower-screen picker or transient unresolved event must not replace
+            // the verified upper-window snapshot. Re-scan display 0 instead.
+            handler.removeCallbacks(foregroundRefresh);
+            handler.post(foregroundRefresh);
+            return;
+        }
+        lastExternalPackageName = value;
         ForegroundAppTracker.publish(new ForegroundAppTracker.Snapshot(
                 value,
                 event.getClassName() == null ? "" : event.getClassName().toString(),
@@ -178,7 +201,8 @@ public final class ThorAccessibilityService extends AccessibilityService {
     }
 
     public void refreshForegroundApp() {
-        if (diagnosticScanningSuspended || !ForegroundAppTracker.isEnabled(this)) {
+        if (diagnosticScanningSuspended
+                || !ForegroundAppTracker.isObservationRequested(this)) {
             return;
         }
         long started = DebugPerformanceDiagnostics.beginTask(
@@ -262,6 +286,10 @@ public final class ThorAccessibilityService extends AccessibilityService {
                 || normalized.contains("game-assistant");
     }
 
+    static boolean isPairedDisplayFrontendPackage(String packageName) {
+        return "rip.moth.cocoonshell".equals(packageName);
+    }
+
     private EventWindow resolveEventWindow(int windowId) {
         long started = DebugPerformanceDiagnostics.beginTask(
                 "Accessibility event window lookup");
@@ -336,6 +364,83 @@ public final class ThorAccessibilityService extends AccessibilityService {
                     label.length() == 0
                             ? getString(R.string.common_macro_fallback) : label));
             callback.onMacroFinished(true);
+        }
+    }
+
+    FocusPulseDispatchResult dispatchFocusPulse(
+            int displayId, float x, float y, long durationMs) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R
+                || displayId != Display.DEFAULT_DISPLAY
+                || x < 0f
+                || y < 0f
+                || durationMs < 1L) {
+            return FocusPulseDispatchResult.REJECTED;
+        }
+        synchronized (this) {
+            if (focusPulseDispatching
+                    || InputBridge.hasActiveMacroDispatch()
+                    || activeMacroCallback != null
+                    || activeMacroGamepadThread != null
+                    || touchpadActive
+                    || touchpadDispatching
+                    || activeTouchpadStroke != null
+                    || activeTouchpadCallback != null) {
+                return FocusPulseDispatchResult.BUSY;
+            }
+            focusPulseDispatching = true;
+        }
+
+        Path path = new Path();
+        path.moveTo(x, y);
+        GestureDescription gesture = new GestureDescription.Builder()
+                .addStroke(new GestureDescription.StrokeDescription(
+                        path, 0L, durationMs))
+                .setDisplayId(displayId)
+                .build();
+        boolean accepted;
+        try {
+            accepted = dispatchGesture(gesture, new GestureResultCallback() {
+                @Override
+                public void onCompleted(GestureDescription gestureDescription) {
+                    finishFocusPulse("completed");
+                }
+
+                @Override
+                public void onCancelled(GestureDescription gestureDescription) {
+                    // A real touch can cancel an accepted accessibility gesture and already
+                    // provides the required focus handoff. Never launch the Activity fallback
+                    // from this asynchronous callback.
+                    finishFocusPulse("cancelled");
+                }
+            }, handler);
+        } catch (Throwable throwable) {
+            synchronized (this) {
+                focusPulseDispatching = false;
+            }
+            Log.e(FOCUS_TAG, "upper focus pulse submission failed", throwable);
+            return FocusPulseDispatchResult.REJECTED;
+        }
+        if (!accepted) {
+            synchronized (this) {
+                focusPulseDispatching = false;
+            }
+            Log.w(FOCUS_TAG, "upper focus pulse rejected by AccessibilityService");
+            return FocusPulseDispatchResult.REJECTED;
+        }
+        return FocusPulseDispatchResult.ACCEPTED;
+    }
+
+    private void finishFocusPulse(String outcome) {
+        synchronized (this) {
+            focusPulseDispatching = false;
+        }
+        Log.i(FOCUS_TAG, "upper focus pulse " + outcome);
+        HeimdallStabilityDiagnostics.recordFocusDiagnostic(
+                this, "recovery pulse-" + outcome);
+        if (!diagnosticScanningSuspended
+                && ForegroundAppTracker.isObservationRequested(this)) {
+            handler.removeCallbacks(foregroundRefresh);
+            handler.postDelayed(foregroundRefresh, 120L);
         }
     }
 

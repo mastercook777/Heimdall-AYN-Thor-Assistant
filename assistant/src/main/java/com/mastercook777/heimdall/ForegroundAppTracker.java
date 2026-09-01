@@ -39,12 +39,33 @@ final class ForegroundAppTracker {
 
     private static volatile Snapshot latest;
     private static volatile Listener listener;
+    private static volatile Listener focusRecoveryListener;
 
     private ForegroundAppTracker() {
     }
 
     static boolean isEnabled(Context context) {
         return preferences(context).getBoolean(KEY_ENABLED, false);
+    }
+
+    static boolean hasExplicitEnabledPreference(Context context) {
+        return preferences(context).contains(KEY_ENABLED);
+    }
+
+    static boolean shouldAutoEnable(boolean explicitlyConfigured,
+            boolean accessibilityReady, boolean shizukuReady) {
+        return !explicitlyConfigured && accessibilityReady && shizukuReady;
+    }
+
+    static boolean enableIfUnset(Context context) {
+        SharedPreferences prefs = preferences(context);
+        synchronized (ForegroundAppTracker.class) {
+            if (prefs.contains(KEY_ENABLED)) {
+                return false;
+            }
+            prefs.edit().putBoolean(KEY_ENABLED, true).apply();
+            return true;
+        }
     }
 
     static void setEnabled(Context context, boolean enabled) {
@@ -65,6 +86,21 @@ final class ForegroundAppTracker {
         }
     }
 
+    static void setFocusRecoveryListener(Listener value) {
+        focusRecoveryListener = value;
+    }
+
+    static void clearFocusRecoveryListener(Listener value) {
+        if (focusRecoveryListener == value) {
+            focusRecoveryListener = null;
+        }
+    }
+
+    static boolean isObservationRequested(Context context) {
+        return isEnabled(context)
+                || focusRecoveryListener != null;
+    }
+
     static void publish(Snapshot snapshot) {
         if (snapshot == null || snapshot.packageName.length() == 0) {
             return;
@@ -76,12 +112,23 @@ final class ForegroundAppTracker {
                 && previous.windowTitle.equals(snapshot.windowTitle)
                 && previous.displayId == snapshot.displayId) {
             latest = snapshot;
+            // A Companion relaunch can target another ROM in the same emulator Activity.
+            // Keep App-aware switching change-based, but let the one-shot focus gate see
+            // the fresh window observation and decide against its own armed timestamp.
+            Listener focusCurrent = focusRecoveryListener;
+            if (focusCurrent != null) {
+                focusCurrent.onForegroundAppChanged(snapshot);
+            }
             return;
         }
         latest = snapshot;
         Listener current = listener;
         if (current != null) {
             current.onForegroundAppChanged(snapshot);
+        }
+        Listener focusCurrent = focusRecoveryListener;
+        if (focusCurrent != null && focusCurrent != current) {
+            focusCurrent.onForegroundAppChanged(snapshot);
         }
     }
 

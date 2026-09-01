@@ -97,9 +97,9 @@ final class RomContextProbeClient implements AutoCloseable {
                         RomContextProbeUserService.class.getName()))
                         .daemon(false)
                         .debuggable(true)
-                        .processNameSuffix("rom_context_probe_v1")
-                        .tag("heimdall_rom_context_probe_v1")
-                        .version(1);
+                        .processNameSuffix("rom_context_probe_v3")
+                        .tag("heimdall_rom_context_probe_v3")
+                        .version(3);
                 bindLatch = new CountDownLatch(1);
                 boundRequested = true;
                 try {

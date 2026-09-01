@@ -22,14 +22,22 @@
         android:theme="@style/AppTheme">
 
         <activity
-            android:name=".AssistantActivity"
-            android:configChanges="keyboardHidden|orientation|screenSize"
-            android:exported="true">
+            android:name=".HeimdallLaunchActivity"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:noHistory="true"
+            android:theme="@style/LaunchRouterTheme">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <activity
+            android:name=".AssistantActivity"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenSize"
+            android:exported="true"
+            android:launchMode="singleTask" />
 
         <activity
             android:name=".CoordinateCaptureActivity"

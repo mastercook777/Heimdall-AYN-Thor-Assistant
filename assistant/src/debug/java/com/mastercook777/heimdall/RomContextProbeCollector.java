@@ -10,11 +10,9 @@ import java.io.InputStream;
 import java.io.RandomAccessFile;
 import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Date;
 import java.util.LinkedHashSet;
-import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.TimeZone;
@@ -24,7 +22,7 @@ import java.util.concurrent.TimeUnit;
 public final class RomContextProbeCollector {
     public static final int TARGET_RETROARCH = 1;
     public static final int TARGET_PPSSPP = 2;
-    public static final int TARGET_NETHERSX2 = 3;
+    public static final int TARGET_EDEN = 3;
 
     private static final int MAX_COMMAND_BYTES = 256 * 1024;
     private static final int MAX_FILE_BYTES = 64 * 1024;
@@ -40,9 +38,9 @@ public final class RomContextProbeCollector {
     private static final String[] PPSSPP_PACKAGES = {
             "org.ppsspp.ppsspp", "org.ppsspp.ppssppgold"
     };
-    private static final String[] NETHERSX2_PACKAGES = {
-            "net.nethersx2.android", "xyz.aethersx2.android",
-            "com.armsx2", "com.armsx2.debug"
+    private static final String[] EDEN_PACKAGES = {
+            "dev.eden.eden_emulator", "dev.eden.eden_emulator.nightly",
+            "dev.eden.eden_emulator.relWithDebInfo", "dev.legacy.eden_emulator"
     };
     private static final String[] RETROARCH_FILES = {
             "/storage/emulated/0/RetroArch/playlists/content_history.lpl",
@@ -53,12 +51,18 @@ public final class RomContextProbeCollector {
     private static final String[] ROM_PATH_MARKERS = {
             ".iso", ".chd", ".cso", ".bin", ".cue", ".m3u", ".pbp", ".elf",
             ".rvz", ".gcz", ".wbfs", ".nes", ".sfc", ".smc", ".gba", ".gbc",
-            ".nds", ".3ds", ".cia", ".n64", ".z64", ".v64", ".zip", ".7z"
+            ".nds", ".3ds", ".cia", ".n64", ".z64", ".v64", ".nsp", ".nsz",
+            ".xci", ".nca", ".nro", ".zip", ".7z"
     };
     private static final String[] LOG_IDENTITY_MARKERS = {
             "bootpath", "content://", "/storage/", "/mnt/media_rw/", "document/",
             "rom path", "game path", "disc path", "amstart", "launch", "serial",
-            ".iso", ".chd", ".cso", ".pbp", ".cue", ".m3u", ".rvz", ".wbfs"
+            "booting", "disc id", "disc_id", "game id", "title id", "program id",
+            "programid", "emulationfragment", "emulationactivity", "rom swap",
+            "loading content", "load content", "booted content", "request_game_boot",
+            "request_game_stop", "psp_shutdown", ".iso", ".chd", ".cso", ".pbp",
+            ".cue", ".m3u", ".rvz", ".wbfs", ".nsp", ".nsz", ".xci", ".nca",
+            ".nro"
     };
 
     private RomContextProbeCollector() {
@@ -70,8 +74,8 @@ public final class RomContextProbeCollector {
         String[] packages = packagesForTarget(target);
         StringBuilder report = new StringBuilder(32 * 1024);
         report.append("Heimdall ROM Context Probe\n")
-                .append("schema=2\n")
-                .append("probePhase=P1-process-evidence\n")
+                .append("schema=4\n")
+                .append("probePhase=P3-ppsspp-lifecycle-evidence\n")
                 .append("buildDebug=").append(BuildConfig.DEBUG).append('\n')
                 .append("readOnly=true\n")
                 .append("resolverConnected=false\n")
@@ -108,20 +112,18 @@ public final class RomContextProbeCollector {
                 runCommand("dumpsys", "uri_grants"), packages);
 
         appendFrontendProcessEvidence(report, sinceEpochMs);
+        appendPackageMetadata(report, packages);
         appendProcessEvidence(report, packages, sinceEpochMs);
         if (target == TARGET_RETROARCH) {
             appendFiles(report, RETROARCH_FILES);
-        } else if (target == TARGET_NETHERSX2) {
-            List<String> files = new ArrayList<>();
-            for (String packageName : NETHERSX2_PACKAGES) {
-                files.add("/storage/emulated/0/Android/data/" + packageName
-                        + "/files/recent_games.json");
-            }
-            appendFiles(report, files.toArray(new String[0]));
-        } else {
+        } else if (target == TARGET_PPSSPP) {
             report.append("\n## emulator_native_state\n")
                     .append("PPSSPP WebSocket was not queried. This read-only probe does not "
                             + "enable or modify RemoteDebugger settings.\n");
+        } else {
+            report.append("\n## emulator_native_state\n")
+                    .append("Eden internal state was not modified or queried through private "
+                            + "app APIs. Activity, PID log, and open-FD evidence only.\n");
         }
         report.append("\n## interpretation_guard\n")
                 .append("History files, recent-game files, task records, and URI grants may be "
@@ -133,14 +135,14 @@ public final class RomContextProbeCollector {
     static String targetName(int target) {
         if (target == TARGET_RETROARCH) return "retroarch";
         if (target == TARGET_PPSSPP) return "ppsspp";
-        if (target == TARGET_NETHERSX2) return "nethersx2";
+        if (target == TARGET_EDEN) return "eden";
         return "invalid";
     }
 
     private static String[] packagesForTarget(int target) {
         if (target == TARGET_RETROARCH) return RETROARCH_PACKAGES.clone();
         if (target == TARGET_PPSSPP) return PPSSPP_PACKAGES.clone();
-        if (target == TARGET_NETHERSX2) return NETHERSX2_PACKAGES.clone();
+        if (target == TARGET_EDEN) return EDEN_PACKAGES.clone();
         throw new IllegalArgumentException("Unknown target " + target);
     }
 
@@ -167,6 +169,26 @@ public final class RomContextProbeCollector {
                 appendFdEvidence(report, token);
                 appendTargetProcessLog(report, token, sinceEpochMs);
             }
+        }
+    }
+
+    private static void appendPackageMetadata(StringBuilder report, String[] packages) {
+        report.append("\n## package_metadata\n");
+        for (String packageName : packages) {
+            String raw = runCommand("dumpsys", "package", packageName);
+            report.append("package=").append(packageName).append('\n');
+            boolean found = false;
+            for (String line : raw.split("\\r?\\n")) {
+                String trimmed = line.trim();
+                if (trimmed.startsWith("versionCode=")
+                        || trimmed.startsWith("versionName=")
+                        || trimmed.startsWith("firstInstallTime=")
+                        || trimmed.startsWith("lastUpdateTime=")) {
+                    report.append("  ").append(trimmed).append('\n');
+                    found = true;
+                }
+            }
+            if (!found) report.append("  unavailable\n");
         }
     }
 

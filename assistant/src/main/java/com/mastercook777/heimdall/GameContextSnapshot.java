@@ -14,9 +14,19 @@ final class GameContextSnapshot {
     final String label;
     final long observedAt;
     final String detectorId;
+    final String platformKind;
+    final String platformIdentityKey;
+    final String platformLabel;
 
     GameContextSnapshot(State state, String packageName, int pid, String kind,
             String identityKey, String label, long observedAt, String detectorId) {
+        this(state, packageName, pid, kind, identityKey, label, observedAt, detectorId,
+                "", "", "");
+    }
+
+    GameContextSnapshot(State state, String packageName, int pid, String kind,
+            String identityKey, String label, long observedAt, String detectorId,
+            String platformKind, String platformIdentityKey, String platformLabel) {
         this.state = state == null ? State.UNKNOWN : state;
         this.packageName = safe(packageName);
         this.pid = pid;
@@ -25,6 +35,9 @@ final class GameContextSnapshot {
         this.label = safe(label);
         this.observedAt = observedAt;
         this.detectorId = safe(detectorId);
+        this.platformKind = safe(platformKind);
+        this.platformIdentityKey = safe(platformIdentityKey);
+        this.platformLabel = safe(platformLabel);
     }
 
     static GameContextSnapshot none(String packageName, int pid, String detectorId) {
@@ -38,7 +51,17 @@ final class GameContextSnapshot {
                 && kind.equals(other.kind)
                 && identityKey.equals(other.identityKey)
                 && label.equals(other.label)
-                && detectorId.equals(other.detectorId);
+                && detectorId.equals(other.detectorId)
+                && platformKind.equals(other.platformKind)
+                && platformIdentityKey.equals(other.platformIdentityKey)
+                && platformLabel.equals(other.platformLabel)
+                && (state != State.ACTIVE || observedAt == other.observedAt);
+    }
+
+    boolean hasPlatformIdentity() {
+        return state == State.ACTIVE
+                && platformKind.length() > 0
+                && platformIdentityKey.length() > 0;
     }
 
     private static String safe(String value) {

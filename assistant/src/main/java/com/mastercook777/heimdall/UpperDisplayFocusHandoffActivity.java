@@ -14,11 +14,9 @@ import android.view.View;
 /**
  * Briefly owns focus on Thor's upper display, then returns it to the existing upper task.
  *
- * <p>Heimdall's lower Activity must remain non-focusable for game performance. Launching that
- * Activity can nevertheless leave Android's global focused display on the lower panel, where no
- * focused window exists. A display-unspecified Back/Home event then has no dispatch target. This
- * transparent one-shot task uses the public multi-display Activity launch path to move focus to
- * display 0 without injecting input or relaunching the user's upper-screen application.</p>
+ * <p>Heimdall's lower Activity remains non-focusable during play. This transparent one-shot task
+ * uses Android's public multi-display Activity launch path to restore an upper-display focus target
+ * without injecting input or relaunching the user's upper application.</p>
  */
 public final class UpperDisplayFocusHandoffActivity extends Activity {
     private static final String TAG = "HeimdallGameFocus";

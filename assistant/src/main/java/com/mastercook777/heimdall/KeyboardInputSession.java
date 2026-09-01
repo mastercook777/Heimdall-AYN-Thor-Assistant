@@ -91,18 +91,6 @@ final class KeyboardInputSession {
         }
     }
 
-    void close() {
-        pressedCodeCounts.clear();
-        activeHolds.clear();
-        VirtualKeyboardDispatcher active = dispatcher;
-        dispatcher = null;
-        if (active != null) {
-            active.close();
-        } else {
-            VirtualKeyboardDispatcher.destroyParkedDevice(context);
-        }
-    }
-
     private void retainCode(int code) {
         int count = pressedCodeCounts.containsKey(code) ? pressedCodeCounts.get(code) : 0;
         pressedCodeCounts.put(code, count + 1);
@@ -151,7 +139,7 @@ final class KeyboardInputSession {
         VirtualKeyboardDispatcher failed = dispatcher;
         dispatcher = null;
         if (failed != null) {
-            failed.close();
+            failed.park();
         }
         listener.onUnavailable();
     }

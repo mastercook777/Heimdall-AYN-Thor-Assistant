@@ -42,7 +42,7 @@ public final class RomContextProbeActivity extends Activity {
     private TextView reportView;
     private Button retroArchButton;
     private Button ppssppButton;
-    private Button netherSx2Button;
+    private Button edenButton;
     private Button startButton;
     private Button captureButton;
     private Button exportButton;
@@ -122,11 +122,11 @@ public final class RomContextProbeActivity extends Activity {
                 RomContextProbeCollector.TARGET_RETROARCH);
         ppssppButton = choiceButton(R.string.rom_context_probe_ppsspp,
                 RomContextProbeCollector.TARGET_PPSSPP);
-        netherSx2Button = choiceButton(R.string.rom_context_probe_nethersx2,
-                RomContextProbeCollector.TARGET_NETHERSX2);
+        edenButton = choiceButton(R.string.rom_context_probe_eden,
+                RomContextProbeCollector.TARGET_EDEN);
         choices.addView(retroArchButton, weightedButtonParams());
         choices.addView(ppssppButton, weightedButtonParams());
-        choices.addView(netherSx2Button, weightedButtonParams());
+        choices.addView(edenButton, weightedButtonParams());
 
         TextView instructions = label(getString(R.string.rom_context_probe_instructions), 11, false);
         instructions.setTextColor(HeimdallUi.mutedTextColor(this));
@@ -183,8 +183,8 @@ public final class RomContextProbeActivity extends Activity {
                 selectedTarget == RomContextProbeCollector.TARGET_RETROARCH);
         HeimdallUi.applyChoiceButton(this, ppssppButton,
                 selectedTarget == RomContextProbeCollector.TARGET_PPSSPP);
-        HeimdallUi.applyChoiceButton(this, netherSx2Button,
-                selectedTarget == RomContextProbeCollector.TARGET_NETHERSX2);
+        HeimdallUi.applyChoiceButton(this, edenButton,
+                selectedTarget == RomContextProbeCollector.TARGET_EDEN);
     }
 
     private void startSession() {
@@ -276,7 +276,7 @@ public final class RomContextProbeActivity extends Activity {
         startButton.setEnabled(!busy);
         retroArchButton.setEnabled(!busy);
         ppssppButton.setEnabled(!busy);
-        netherSx2Button.setEnabled(!busy);
+        edenButton.setEnabled(!busy);
         captureButton.setEnabled(!busy);
         exportButton.setEnabled(!busy && !report.isEmpty());
         captureButton.setAlpha(busy ? 0.5f : 1f);

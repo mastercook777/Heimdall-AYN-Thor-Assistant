@@ -2,9 +2,12 @@ package com.mastercook777.heimdall;
 
 import android.app.Activity;
 import android.app.Instrumentation;
+import android.content.ComponentName;
 import android.content.Context;
+import android.content.pm.ActivityInfo;
 import android.graphics.Bitmap;
 import android.graphics.Color;
+import android.graphics.Point;
 import android.graphics.Rect;
 import android.net.Uri;
 import android.os.Bundle;
@@ -23,6 +26,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.zip.ZipEntry;
@@ -55,6 +59,19 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
             testProfileIconDecodePolicy();
             testUserMacroIconDeletionContract();
             testGameContextIdentityAndResolverContract();
+            testGameContextAppOnlyFallbackAndManualSelectionGuardContract();
+            testRomContextProbeAdapterTargetsAndFiltering();
+            testEdenGameContextIdentityAndResolverContract();
+            testPpssppPositiveLaunchGameContextContract();
+            testRetroArchTwoLevelGameContextContract();
+            testAssistantActivitySingleTaskContract();
+            testSecondaryDisplayLaunchRouterContract();
+            testUpperDisplayFocusRecoveryCoordinateContract();
+            testUpperDisplayFocusTransitionGateContract();
+            testUpperDisplayCompanionHandoffGateContract();
+            testUpperDisplayCompanionConfirmationGateContract();
+            testPairedDisplayFrontendPackageContract();
+            testStartupCapabilityDefaultContract();
             testSelfContainedRoundTripAfterSourcesAreDeleted();
             testCorruptMissingUnsafeAndOversizedBundlesFailClosed();
             testLegacyProfileJsonRemainsImportable();
@@ -81,6 +98,163 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
                 ShizukuNativeUserService.TRANSACTION_RELEASE_VIRTUAL_KEYBOARD_KEYS);
         assertEquals(ShizukuNativeUserService.TRANSACTION_RELEASE_VIRTUAL_KEYBOARD_KEYS + 1,
                 ShizukuNativeUserService.TRANSACTION_RELEASE_VIRTUAL_KEYBOARD);
+    }
+
+    public void testUpperDisplayFocusRecoveryCoordinateContract() {
+        Point thorUpper = UpperDisplayFocusRecovery.resolveMirroredLowerRightPoint(1920, 1080);
+        assertNotNull(thorUpper);
+        assertEquals(1918, thorUpper.x);
+        assertEquals(1079, thorUpper.y);
+        assertNull(UpperDisplayFocusRecovery.resolveMirroredLowerRightPoint(2, 1080));
+        assertNull(UpperDisplayFocusRecovery.resolveMirroredLowerRightPoint(1920, 1));
+    }
+
+    public void testAssistantActivitySingleTaskContract() throws Exception {
+        ActivityInfo info = target.getPackageManager().getActivityInfo(
+                new ComponentName(target, AssistantActivity.class), 0);
+        assertEquals(ActivityInfo.LAUNCH_SINGLE_TASK, info.launchMode);
+    }
+
+    public void testSecondaryDisplayLaunchRouterContract() {
+        assertEquals(4, HeimdallLaunchRouter.selectTargetDisplayId(
+                0, new int[] {0, 4},
+                new int[] {android.view.Display.STATE_ON,
+                        android.view.Display.STATE_ON}));
+        assertEquals(4, HeimdallLaunchRouter.selectTargetDisplayId(
+                4, new int[] {0, 4, 7},
+                new int[] {android.view.Display.STATE_ON,
+                        android.view.Display.STATE_ON,
+                        android.view.Display.STATE_ON}));
+        assertEquals(7, HeimdallLaunchRouter.selectTargetDisplayId(
+                0, new int[] {0, 4, 7},
+                new int[] {android.view.Display.STATE_ON,
+                        android.view.Display.STATE_OFF,
+                        android.view.Display.STATE_ON}));
+        assertEquals(android.view.Display.INVALID_DISPLAY,
+                HeimdallLaunchRouter.selectTargetDisplayId(
+                        0, new int[] {0},
+                        new int[] {android.view.Display.STATE_ON}));
+        assertEquals(android.view.Display.INVALID_DISPLAY,
+                HeimdallLaunchRouter.selectTargetDisplayId(
+                        0, new int[] {0, 4},
+                        new int[] {android.view.Display.STATE_ON}));
+    }
+
+    public void testStartupCapabilityDefaultContract() {
+        assertTrue(ForegroundAppTracker.shouldAutoEnable(false, true, true));
+        assertFalse(ForegroundAppTracker.shouldAutoEnable(true, true, true));
+        assertFalse(ForegroundAppTracker.shouldAutoEnable(false, false, true));
+        assertFalse(ForegroundAppTracker.shouldAutoEnable(false, true, false));
+    }
+
+    public void testUpperDisplayFocusTransitionGateContract() {
+        ForegroundAppTracker.Snapshot frontend = new ForegroundAppTracker.Snapshot(
+                "com.example.frontend", "FrontendActivity", "", 0, 100L);
+        ForegroundAppTracker.Snapshot retroArch = new ForegroundAppTracker.Snapshot(
+                "com.retroarch.aarch64", "RetroActivityFuture", "RetroArch", 0, 200L);
+        ForegroundAppTracker.Snapshot lowerRetroArch = new ForegroundAppTracker.Snapshot(
+                "com.retroarch.aarch64", "RetroActivityFuture", "RetroArch", 4, 200L);
+
+        UpperDisplayFocusTransitionGate gate = new UpperDisplayFocusTransitionGate();
+        gate.arm(frontend);
+        gate.markPrimaryAttempted();
+        assertFalse(gate.shouldRecover(lowerRetroArch));
+        assertTrue(gate.shouldRecover(retroArch));
+        assertFalse(gate.shouldRecover(retroArch));
+
+        gate.arm(frontend);
+        assertFalse(gate.shouldRecover(retroArch));
+        gate.markPrimaryAttempted();
+        assertFalse(gate.shouldRecover(retroArch));
+
+        gate.arm(retroArch);
+        gate.markPrimaryAttempted();
+        assertFalse(gate.shouldRecover(retroArch));
+        gate.cancel();
+        assertFalse(gate.shouldRecover(new ForegroundAppTracker.Snapshot(
+                "dev.eden.eden_emulator", "EmulationActivity", "Eden", 0, 300L)));
+    }
+
+    public void testUpperDisplayCompanionHandoffGateContract() {
+        UpperDisplayCompanionHandoffGate gate = new UpperDisplayCompanionHandoffGate();
+        ForegroundAppTracker.Snapshot staleUpper = new ForegroundAppTracker.Snapshot(
+                "com.retroarch.aarch64", "RetroActivityFuture", "RetroArch", 0, 99L);
+        ForegroundAppTracker.Snapshot freshLower = new ForegroundAppTracker.Snapshot(
+                "com.retroarch.aarch64", "RetroActivityFuture", "RetroArch", 4, 101L);
+        ForegroundAppTracker.Snapshot freshUpper = new ForegroundAppTracker.Snapshot(
+                "com.retroarch.aarch64", "RetroActivityFuture", "RetroArch", 0, 101L);
+        ForegroundAppTracker.Snapshot cocoon = new ForegroundAppTracker.Snapshot(
+                "rip.moth.cocoonshell", "CocoonActivity", "Cocoon", 0, 100L);
+
+        assertFalse(gate.consumeScheduled());
+        gate.arm(100L, false);
+        assertTrue(gate.isArmed());
+        assertFalse(gate.isCompanionConfirmed());
+        assertFalse(gate.scheduleFor(staleUpper));
+        assertFalse(gate.scheduleFor(freshLower));
+        assertFalse(gate.scheduleFor(freshUpper));
+        assertTrue(gate.observePairedFrontend(cocoon));
+        assertTrue(gate.isCompanionConfirmed());
+        assertFalse(gate.scheduleFor(cocoon));
+        assertTrue(gate.scheduleFor(freshUpper));
+        assertTrue(gate.isScheduled());
+        assertFalse(gate.scheduleFor(freshUpper));
+        assertTrue(gate.consumeScheduled());
+        assertFalse(gate.isArmed());
+        assertFalse(gate.consumeScheduled());
+
+        gate.arm(100L, true);
+        assertTrue(gate.scheduleFor(freshUpper));
+        gate.retryAfterInterruptedSchedule();
+        assertTrue(gate.isArmed());
+        assertFalse(gate.isScheduled());
+        assertTrue(gate.scheduleFor(freshUpper));
+        gate.cancel();
+        assertFalse(gate.consumeScheduled());
+    }
+
+    public void testUpperDisplayCompanionConfirmationGateContract() {
+        UpperDisplayCompanionConfirmationGate gate =
+                new UpperDisplayCompanionConfirmationGate();
+        ForegroundAppTracker.Snapshot retroArch = new ForegroundAppTracker.Snapshot(
+                "com.retroarch.aarch64", "RetroActivityFuture", "RetroArch", 0, 100L);
+        ForegroundAppTracker.Snapshot stableRetroArch = new ForegroundAppTracker.Snapshot(
+                "com.retroarch.aarch64", "RetroActivityFuture", "RetroArch", 0, 900L);
+        ForegroundAppTracker.Snapshot other = new ForegroundAppTracker.Snapshot(
+                "org.ppsspp.ppsspp", "PpssppActivity", "PPSSPP", 0, 900L);
+        GameContextSnapshot activeRetroArch = new GameContextSnapshot(
+                GameContextSnapshot.State.ACTIVE, "com.retroarch.aarch64", 100,
+                "retroarch_content", "identity", "Game", 200L, "retroarch");
+
+        gate.arm(retroArch, 100L);
+        assertTrue(gate.isArmed());
+        assertFalse(gate.scheduleFor(retroArch, GameContextSnapshot.UNKNOWN, 200L));
+        assertFalse(gate.scheduleFor(other, activeRetroArch, 900L));
+        assertTrue(gate.scheduleFor(retroArch, activeRetroArch, 200L));
+        assertTrue(gate.consumeScheduled());
+        assertFalse(gate.isArmed());
+
+        gate.arm(retroArch, 100L);
+        assertTrue(gate.scheduleFor(
+                stableRetroArch, GameContextSnapshot.UNKNOWN,
+                100L + UpperDisplayCompanionConfirmationGate.MIN_STABLE_WINDOW_MS));
+        assertTrue(gate.consumeScheduled());
+
+        gate.arm(retroArch, 100L);
+        assertFalse(gate.scheduleFor(
+                stableRetroArch, GameContextSnapshot.UNKNOWN,
+                101L + UpperDisplayCompanionConfirmationGate.MAX_CONFIRMATION_WINDOW_MS));
+        assertFalse(gate.isArmed());
+    }
+
+    public void testPairedDisplayFrontendPackageContract() {
+        assertTrue(ThorAccessibilityService.isPairedDisplayFrontendPackage(
+                "rip.moth.cocoonshell"));
+        assertFalse(ThorAccessibilityService.isPairedDisplayFrontendPackage(
+                "org.es_de.frontend"));
+        assertFalse(ThorAccessibilityService.isPairedDisplayFrontendPackage(
+                "com.retroarch.aarch64"));
+
     }
 
     public void testKeyboardPadModelContract() throws Exception {
@@ -265,8 +439,33 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
         String line = "1756270000.100 12467 12500 I EmulationThread: "
                 + "Starting emulation thread (" + uriA + ")";
         assertEquals(uriA, AetherSx2GameContext.extractUri(line));
+        assertEquals(1756270000100L, AetherSx2GameContext.extractObservedAt(line));
+        assertEquals(0L, AetherSx2GameContext.extractObservedAt(
+                "EmulationThread: Starting emulation thread (" + uriA + ")"));
         assertEquals("", AetherSx2GameContext.extractUri(
                 "GameLauncher: ROM URI " + uriA));
+        assertEquals(AetherSx2GameContext.ACTIVITY_EMULATION,
+                AetherSx2GameContext.classifyResumedActivityLine(
+                        "topResumedActivity=ActivityRecord{4fe4dc0 u0 "
+                                + "xyz.aethersx2.android/.EmulationActivity} t1996}"));
+        assertEquals(AetherSx2GameContext.ACTIVITY_MAIN,
+                AetherSx2GameContext.classifyResumedActivityLine(
+                        "Resumed: ActivityRecord{6a10d33 u0 "
+                                + "xyz.aethersx2.android/.MainActivity} t2004}"));
+        assertEquals(AetherSx2GameContext.ACTIVITY_UNKNOWN,
+                AetherSx2GameContext.classifyResumedActivityLine(
+                        "baseActivity={xyz.aethersx2.android/"
+                                + "xyz.aethersx2.android.MainActivity}"));
+        assertEquals(500L, ShizukuGameContextUserService.activityCacheDurationMillis(
+                AetherSx2GameContext.ACTIVITY_MAIN));
+        assertEquals(3000L, ShizukuGameContextUserService.activityCacheDurationMillis(
+                AetherSx2GameContext.ACTIVITY_EMULATION));
+        assertTrue(ShizukuGameContextUserService.shouldClearForActivity(
+                AetherSx2GameContext.ACTIVITY_MAIN, 2000L, 1500L));
+        assertFalse(ShizukuGameContextUserService.shouldClearForActivity(
+                AetherSx2GameContext.ACTIVITY_MAIN, 2000L, 2500L));
+        assertFalse(ShizukuGameContextUserService.shouldClearForActivity(
+                AetherSx2GameContext.ACTIVITY_EMULATION, 2000L, 1500L));
 
         GameContextSnapshot contextA = AetherSx2GameContext.snapshot(12467, uriA, 100L);
         GameContextSnapshot contextARepeat = AetherSx2GameContext.snapshot(12467, uriA, 200L);
@@ -323,11 +522,496 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
         assertFalse(restoredLegacy.safeGameContextBinding().isBound());
     }
 
+    public void testRomContextProbeAdapterTargetsAndFiltering() {
+        assertEquals("retroarch", RomContextProbeCollector.targetName(
+                RomContextProbeCollector.TARGET_RETROARCH));
+        assertEquals("ppsspp", RomContextProbeCollector.targetName(
+                RomContextProbeCollector.TARGET_PPSSPP));
+        assertEquals("eden", RomContextProbeCollector.targetName(
+                RomContextProbeCollector.TARGET_EDEN));
+        String filtered = RomContextProbeCollector.filterIdentityCandidates(
+                "I Eden: [EmulationActivity] Begin ROM swap: data=content://games/Game.xci\n"
+                        + "I Noise: unrelated renderer frame\n");
+        assertTrue(filtered.contains("content://games/Game.xci"));
+        assertFalse(filtered.contains("unrelated renderer frame"));
+        String ppssppStop = RomContextProbeCollector.filterIdentityCandidates(
+                "I Loader: REQUEST_GAME_STOP: running exit callback before shutdown.\n");
+        assertTrue(ppssppStop.contains("REQUEST_GAME_STOP"));
+    }
+
+    public void testGameContextAppOnlyFallbackAndManualSelectionGuardContract() {
+        String uriA = "content://com.android.externalstorage.documents/document/"
+                + "primary%3AROMs%2Fpsp%2FGame%20A.iso";
+        String uriB = "content://com.android.externalstorage.documents/document/"
+                + "primary%3AROMs%2Fpsp%2FGame%20B.iso";
+        String uriC = "content://com.android.externalstorage.documents/document/"
+                + "primary%3AROMs%2Fpsp%2FGame%20C.iso";
+        GameContextSnapshot contextA = PpssppGameContext.snapshot(
+                PpssppGameContext.PACKAGE_FREE, 4400, uriA, 100L);
+        GameContextSnapshot contextB = PpssppGameContext.snapshot(
+                PpssppGameContext.PACKAGE_FREE, 4400, uriB, 200L);
+        GameContextSnapshot contextC = PpssppGameContext.snapshot(
+                PpssppGameContext.PACKAGE_FREE, 4400, uriC, 300L);
+        ForegroundAppTracker.Snapshot foreground = new ForegroundAppTracker.Snapshot(
+                PpssppGameContext.PACKAGE_FREE,
+                PpssppGameContext.PACKAGE_FREE + ".PpssppActivity", "", 0, 300L);
+
+        GameProfile exactA = new GameProfile("PSP A", "generic",
+                PpssppGameContext.PACKAGE_FREE, Collections.emptyList());
+        GameProfile exactB = new GameProfile("PSP B", "generic",
+                PpssppGameContext.PACKAGE_FREE, Collections.emptyList());
+        GameProfile appOnly = new GameProfile("PSP Default", "generic",
+                PpssppGameContext.PACKAGE_FREE, Collections.emptyList());
+        exactA.gameContextBinding = bindingFrom(contextA);
+        exactB.gameContextBinding = bindingFrom(contextB);
+
+        List<GameProfile> profiles = Arrays.asList(exactA, exactB, appOnly);
+        assertEquals(1, ProfileAutoSwitchResolver.resolve(
+                profiles, 2, foreground, contextB));
+        assertEquals(2, ProfileAutoSwitchResolver.resolve(
+                profiles, 0, foreground, contextC));
+        assertEquals(0, ProfileAutoSwitchResolver.resolve(
+                profiles, 0, foreground, GameContextSnapshot.UNKNOWN));
+
+        GameProfile secondAppOnly = new GameProfile("PSP Alternate", "generic",
+                PpssppGameContext.PACKAGE_FREE, Collections.emptyList());
+        secondAppOnly.defaultForPackage = true;
+        profiles = Arrays.asList(exactA, exactB, appOnly, secondAppOnly);
+        assertEquals(3, ProfileAutoSwitchResolver.resolve(
+                profiles, 0, foreground, contextC));
+        assertEquals(2, ProfileAutoSwitchResolver.resolve(
+                profiles, 2, foreground, contextC));
+        secondAppOnly.defaultForPackage = false;
+        assertEquals(ProfileAutoSwitchResolver.NO_MATCH,
+                ProfileAutoSwitchResolver.resolve(profiles, 0, foreground, contextC));
+
+        GameProfile duplicateA = new GameProfile("PSP A duplicate", "generic",
+                PpssppGameContext.PACKAGE_FREE, Collections.emptyList());
+        duplicateA.gameContextBinding = bindingFrom(contextA);
+        profiles = Arrays.asList(exactA, duplicateA, appOnly);
+        assertEquals(ProfileAutoSwitchResolver.NO_MATCH,
+                ProfileAutoSwitchResolver.resolve(profiles, 2, foreground, contextA));
+        assertEquals(0, ProfileAutoSwitchResolver.resolve(
+                profiles, 0, foreground, contextA));
+
+        ManualProfileSelectionGuard guard = new ManualProfileSelectionGuard();
+        guard.record(foreground, contextB);
+        assertTrue(guard.shouldSuppress(foreground, contextB));
+        assertTrue(guard.shouldSuppress(foreground, GameContextSnapshot.UNKNOWN));
+        assertTrue(guard.shouldSuppress(foreground, GameContextSnapshot.none(
+                PpssppGameContext.PACKAGE_FREE, 4400, PpssppGameContext.DETECTOR_ID)));
+        GameContextSnapshot relaunchedB = PpssppGameContext.snapshot(
+                PpssppGameContext.PACKAGE_FREE, 4400, uriB, 400L);
+        assertFalse(guard.shouldSuppress(foreground, relaunchedB));
+
+        guard.record(foreground, contextB);
+        assertFalse(guard.shouldSuppress(foreground, contextA));
+        guard.record(foreground, GameContextSnapshot.UNKNOWN);
+        assertFalse(guard.shouldSuppress(foreground, contextC));
+
+        guard.record(foreground, contextB);
+        ForegroundAppTracker.Snapshot otherApp = new ForegroundAppTracker.Snapshot(
+                "com.example.frontend", "com.example.frontend.MainActivity", "", 0, 500L);
+        assertFalse(guard.shouldSuppress(otherApp, contextB));
+    }
+
+    public void testEdenGameContextIdentityAndResolverContract() throws Exception {
+        String titleA = "0100FF500E34A000";
+        String titleB = "01007300020FA000";
+        String lineA = "1787890435.204 30590 4696 I YuzuNative: [550.480865] "
+                + "Loader <Info> core/loader/nca.cpp:113:Load: Set pointer buffer size "
+                + "for ProgramID 0x" + titleA + " (Heap size: 0x6e6f69)";
+        String lineB = "1787890458.772 30590 4910 I YuzuNative: [574.048586] "
+                + "Core <Info> core/game_settings.cpp:137:LoadOverrides: Applied game settings "
+                + "for title ID " + titleB + " on OS 4";
+        String labelLine = "1787890457.456 30590 30590 I YuzuNative: [572.733132] "
+                + "Frontend <Info> main/jni/native_log.cpp:22:Log_info: "
+                + "[EmulationFragment] Starting view setup for game: ASTRAL CHAIN";
+        assertEquals(titleA.toLowerCase(Locale.ROOT),
+                EdenGameContext.extractTitleId(lineA));
+        assertEquals(titleB.toLowerCase(Locale.ROOT),
+                EdenGameContext.extractTitleId(lineB));
+        assertEquals("ASTRAL CHAIN", EdenGameContext.extractTitleLabel(labelLine));
+        assertEquals("", EdenGameContext.extractTitleId(
+                "I Frontend: ProgramID 0x" + titleA));
+        assertEquals("", EdenGameContext.extractTitleId(
+                lineA.replace("YuzuNative:", "OtherTag:")));
+
+        assertTrue(ShizukuGameContextController.isSupportedPackage(
+                AetherSx2GameContext.PACKAGE_NAME));
+        assertTrue(ShizukuGameContextController.isSupportedPackage(
+                EdenGameContext.PACKAGE_MAIN));
+        assertTrue(ShizukuGameContextController.isSupportedPackage(
+                EdenGameContext.PACKAGE_NIGHTLY));
+        assertFalse(ShizukuGameContextController.isSupportedPackage(
+                "com.miHoYo.Yuanshen"));
+        assertEquals("YuzuNative", ShizukuGameContextUserService.detectorLogTag(
+                EdenGameContext.PACKAGE_MAIN));
+        assertEquals("EmulationThread", ShizukuGameContextUserService.detectorLogTag(
+                AetherSx2GameContext.PACKAGE_NAME));
+        assertTrue(ShizukuGameContextUserService.processCommandMatchesPackage(
+                EdenGameContext.PACKAGE_MAIN, EdenGameContext.PACKAGE_MAIN));
+        assertTrue(ShizukuGameContextUserService.processCommandMatchesPackage(
+                EdenGameContext.PACKAGE_MAIN, EdenGameContext.PACKAGE_MAIN + ":worker"));
+        assertFalse(ShizukuGameContextUserService.processCommandMatchesPackage(
+                EdenGameContext.PACKAGE_MAIN, EdenGameContext.PACKAGE_MAIN + ".spoof"));
+        assertFalse(ShizukuGameContextUserService.processCommandMatchesPackage(
+                EdenGameContext.PACKAGE_MAIN, ""));
+        assertEquals(EdenGameContext.ACTIVITY_EMULATION,
+                ShizukuGameContextUserService.classifyActivityLine(
+                        EdenGameContext.PACKAGE_MAIN,
+                        "topResumedActivity=ActivityRecord{1ab169a u0 "
+                                + EdenGameContext.PACKAGE_MAIN
+                                + "/org.yuzu.yuzu_emu.activities.EmulationActivity} t2142}"));
+        assertEquals(EdenGameContext.ACTIVITY_MAIN,
+                ShizukuGameContextUserService.classifyActivityLine(
+                        EdenGameContext.PACKAGE_MAIN,
+                        "Resumed: ActivityRecord{c524c0a u0 "
+                                + EdenGameContext.PACKAGE_MAIN
+                                + "/org.yuzu.yuzu_emu.ui.main.MainActivity} t2142}"));
+
+        GameContextSnapshot contextA = EdenGameContext.snapshot(
+                EdenGameContext.PACKAGE_MAIN, 30590, titleA,
+                "Xenoblade Chronicles Definitive Edition", 100L);
+        GameContextSnapshot contextARepeat = EdenGameContext.snapshot(
+                EdenGameContext.PACKAGE_MAIN, 30590, titleA.toLowerCase(Locale.ROOT),
+                "Xenoblade Chronicles Definitive Edition", 200L);
+        GameContextSnapshot contextB = EdenGameContext.snapshot(
+                EdenGameContext.PACKAGE_MAIN, 30590, titleB,
+                "ASTRAL CHAIN", 300L);
+        assertEquals(GameContextSnapshot.State.ACTIVE, contextA.state);
+        assertEquals(GameContextBinding.KIND_EMULATOR_TITLE_ID, contextA.kind);
+        assertEquals(contextA.identityKey, contextARepeat.identityKey);
+        assertFalse(contextA.identityKey.equals(contextB.identityKey));
+        assertEquals("ASTRAL CHAIN", contextB.label);
+
+        GameProfile first = new GameProfile("Xenoblade", "generic",
+                EdenGameContext.PACKAGE_MAIN, Collections.emptyList());
+        GameProfile second = new GameProfile("Astral Chain", "generic",
+                EdenGameContext.PACKAGE_MAIN, Collections.emptyList());
+        first.gameContextBinding = bindingFrom(contextA);
+        second.gameContextBinding = bindingFrom(contextB);
+        assertTrue(first.gameContextBinding.isBound());
+        JSONObject serialized = first.toJson();
+        assertFalse(serialized.toString().contains(titleA));
+        assertFalse(serialized.toString().contains("content://"));
+        GameProfile restored = GameProfile.fromJson(serialized);
+        assertTrue(restored.safeGameContextBinding().isBound());
+        assertEquals(GameContextBinding.KIND_EMULATOR_TITLE_ID,
+                restored.safeGameContextBinding().kind);
+
+        ForegroundAppTracker.Snapshot foreground = new ForegroundAppTracker.Snapshot(
+                EdenGameContext.PACKAGE_MAIN,
+                "org.yuzu.yuzu_emu.activities.EmulationActivity", "", 0, 300L);
+        assertEquals(1, ProfileAutoSwitchResolver.resolve(
+                Arrays.asList(first, second), 0, foreground, contextB));
+    }
+
+    public void testPpssppPositiveLaunchGameContextContract() throws Exception {
+        String uriA = "content://com.android.externalstorage.documents/tree/"
+                + "primary%3AROMs/document/primary%3AROMs%2Fpsp%2FGame%20A.iso";
+        String uriB = "content://com.android.externalstorage.documents/tree/"
+                + "primary%3AROMs/document/primary%3AROMs%2Fpsp%2FGame%20B.cso";
+        String lineA = "1787890363.684 3720 3803 I PPSSPP  : [BOOT] Booted "
+                + uriA + "...";
+        String lineB = "1787899443.571 22246 22305 I PPSSPP  : [BOOT] Booted "
+                + uriB + "...";
+
+        assertEquals(uriA, PpssppGameContext.extractUri(lineA));
+        assertEquals(uriB, PpssppGameContext.extractUri(lineB));
+        assertEquals("", PpssppGameContext.extractUri(
+                lineA.replace("I PPSSPP", "I OtherTag")));
+        assertEquals("", PpssppGameContext.extractUri(
+                "1787890363.684 3720 3803 I PPSSPP  : [BOOT] Loading " + uriA));
+        assertTrue(PpssppGameContext.supportsPackage(PpssppGameContext.PACKAGE_FREE));
+        assertTrue(PpssppGameContext.supportsPackage(PpssppGameContext.PACKAGE_GOLD));
+        assertFalse(PpssppGameContext.supportsPackage("org.ppsspp.fork"));
+        assertTrue(ShizukuGameContextController.isSupportedPackage(
+                PpssppGameContext.PACKAGE_FREE));
+        assertEquals("PPSSPP", ShizukuGameContextUserService.detectorLogTag(
+                PpssppGameContext.PACKAGE_FREE));
+
+        GameContextSnapshot contextA = PpssppGameContext.snapshot(
+                PpssppGameContext.PACKAGE_FREE, 3720, uriA, 100L);
+        GameContextSnapshot contextARepeat = PpssppGameContext.snapshot(
+                PpssppGameContext.PACKAGE_FREE, 3720, uriA, 200L);
+        GameContextSnapshot contextB = PpssppGameContext.snapshot(
+                PpssppGameContext.PACKAGE_FREE, 3720, uriB, 300L);
+        assertEquals(GameContextSnapshot.State.ACTIVE, contextA.state);
+        assertEquals(GameContextBinding.KIND_SAF_DOCUMENT, contextA.kind);
+        assertEquals(contextA.identityKey, contextARepeat.identityKey);
+        assertFalse(contextA.identityKey.equals(contextB.identityKey));
+        assertEquals("Game A.iso", contextA.label);
+        assertEquals(GameContextSnapshot.State.UNKNOWN,
+                PpssppGameContext.snapshot(PpssppGameContext.PACKAGE_FREE,
+                        -1, uriA, 100L).state);
+
+        assertFalse(ShizukuGameContextUserService.shouldClearForPackage(
+                PpssppGameContext.PACKAGE_FREE,
+                AetherSx2GameContext.ACTIVITY_MAIN, 2000L, 1500L));
+        assertTrue(ShizukuGameContextUserService.shouldClearForPackage(
+                AetherSx2GameContext.PACKAGE_NAME,
+                AetherSx2GameContext.ACTIVITY_MAIN, 2000L, 1500L));
+
+        GameProfile first = new GameProfile("PSP A", "generic",
+                PpssppGameContext.PACKAGE_FREE, Collections.emptyList());
+        GameProfile second = new GameProfile("PSP B", "generic",
+                PpssppGameContext.PACKAGE_FREE, Collections.emptyList());
+        first.gameContextBinding = bindingFrom(contextA);
+        second.gameContextBinding = bindingFrom(contextB);
+        List<GameProfile> profiles = Arrays.asList(first, second);
+        ForegroundAppTracker.Snapshot foreground = new ForegroundAppTracker.Snapshot(
+                PpssppGameContext.PACKAGE_FREE,
+                PpssppGameContext.PACKAGE_FREE + ".PpssppActivity", "", 0, 300L);
+        assertEquals(1, ProfileAutoSwitchResolver.resolve(
+                profiles, 0, foreground, contextB));
+        assertEquals(1, ProfileAutoSwitchResolver.resolve(
+                profiles, 1, foreground, GameContextSnapshot.UNKNOWN));
+
+        JSONObject serialized = second.toJson();
+        assertFalse(serialized.toString().contains("content://"));
+        assertTrue(GameProfile.fromJson(serialized).safeGameContextBinding().isBound());
+    }
+
+    public void testRetroArchTwoLevelGameContextContract() throws Exception {
+        String gameAPath = "/storage/emulated/0/ROMs/GBA/Kirby.gba";
+        String gameBPath = "/storage/emulated/0/ROMs/GBA/Metroid.gba";
+        String gameZipPath = "/storage/emulated/0/ROMs/Archives/Archive.zip";
+        String gbaFolderZipPath = "/storage/emulated/0/ROMs/GBA/Archive.zip";
+        JSONObject historyA = new JSONObject();
+        JSONArray itemsA = new JSONArray();
+        JSONObject itemA = new JSONObject();
+        itemA.put("path", gameAPath);
+        itemA.put("label", "Kirby & the Amazing Mirror");
+        itemA.put("core_path", "/data/user/0/com.retroarch.aarch64/cores/mgba.so");
+        itemA.put("core_name", "mGBA");
+        itemA.put("db_name", "");
+        itemsA.put(itemA);
+        historyA.put("items", itemsA);
+
+        RetroArchGameContext.LaunchRecord recordA =
+                RetroArchGameContext.parseHistory(historyA.toString(), 10_000L);
+        assertNotNull(recordA);
+        assertEquals("nintendo_game_boy_advance", recordA.platformCode);
+        assertEquals("Nintendo Game Boy Advance", recordA.platformLabel);
+
+        JSONObject historyB = new JSONObject(historyA.toString());
+        historyB.getJSONArray("items").getJSONObject(0).put("path", gameBPath);
+        historyB.getJSONArray("items").getJSONObject(0).put("label", "Metroid Fusion");
+        RetroArchGameContext.LaunchRecord recordB =
+                RetroArchGameContext.parseHistory(historyB.toString(), 20_000L);
+        assertNotNull(recordB);
+
+        JSONObject ambiguousHistory = new JSONObject(historyA.toString());
+        ambiguousHistory.getJSONArray("items").getJSONObject(0).put("path", gameZipPath);
+        RetroArchGameContext.LaunchRecord ambiguous =
+                RetroArchGameContext.parseHistory(ambiguousHistory.toString(), 30_000L);
+        assertNotNull(ambiguous);
+        assertEquals("", ambiguous.platformCode);
+
+        ambiguousHistory.getJSONArray("items").getJSONObject(0).put("db_name", "DETECT");
+        RetroArchGameContext.LaunchRecord detectMarker =
+                RetroArchGameContext.parseHistory(ambiguousHistory.toString(), 35_000L);
+        assertNotNull(detectMarker);
+        assertEquals("", detectMarker.platformCode);
+
+        ambiguousHistory.getJSONArray("items").getJSONObject(0)
+                .put("db_name", "Nintendo - Game Boy Advance.lpl");
+        RetroArchGameContext.LaunchRecord databaseResolved =
+                RetroArchGameContext.parseHistory(ambiguousHistory.toString(), 40_000L);
+        assertNotNull(databaseResolved);
+        assertEquals(recordA.platformCode, databaseResolved.platformCode);
+
+        ambiguousHistory.getJSONArray("items").getJSONObject(0).put("db_name", "");
+        ambiguousHistory.getJSONArray("items").getJSONObject(0).put("path", gbaFolderZipPath);
+        RetroArchGameContext.LaunchRecord folderResolved =
+                RetroArchGameContext.parseHistory(ambiguousHistory.toString(), 45_000L);
+        assertNotNull(folderResolved);
+        assertEquals("nintendo_game_boy_advance", folderResolved.platformCode);
+        assertFalse(folderResolved.platformAffectsContentIdentity);
+
+        RetroArchGameContext.LaunchRecord legacyUnknownFolderRecord =
+                new RetroArchGameContext.LaunchRecord(gbaFolderZipPath, "Archive",
+                        "", "", false, 45_000L);
+        GameContextSnapshot legacyUnknownFolderContext = RetroArchGameContext.snapshot(
+                RetroArchGameContext.PACKAGE_AARCH64, 7000, legacyUnknownFolderRecord);
+        GameContextSnapshot folderResolvedContext = RetroArchGameContext.snapshot(
+                RetroArchGameContext.PACKAGE_AARCH64, 7000, folderResolved);
+        assertEquals(legacyUnknownFolderContext.identityKey,
+                folderResolvedContext.identityKey);
+
+        ambiguousHistory.getJSONArray("items").getJSONObject(0)
+                .put("path", "/storage/emulated/0/ROMs/SFC/Chrono Trigger.zip");
+        RetroArchGameContext.LaunchRecord sfcFolder =
+                RetroArchGameContext.parseHistory(ambiguousHistory.toString(), 46_000L);
+        assertNotNull(sfcFolder);
+        assertEquals("nintendo_snes", sfcFolder.platformCode);
+
+        ambiguousHistory.getJSONArray("items").getJSONObject(0)
+                .put("path", "/storage/emulated/0/ROMs/Neo Geo/Metal Slug.zip");
+        RetroArchGameContext.LaunchRecord neoGeoFolder =
+                RetroArchGameContext.parseHistory(ambiguousHistory.toString(), 47_000L);
+        assertNotNull(neoGeoFolder);
+        assertEquals("snk_neo_geo", neoGeoFolder.platformCode);
+
+        ambiguousHistory.getJSONArray("items").getJSONObject(0)
+                .put("path", "/storage/emulated/0/ROMs/FBAlpha/1941.zip");
+        RetroArchGameContext.LaunchRecord fbAlphaFolder =
+                RetroArchGameContext.parseHistory(ambiguousHistory.toString(), 48_000L);
+        assertNotNull(fbAlphaFolder);
+        assertEquals("finalburn_alpha", fbAlphaFolder.platformCode);
+
+        ambiguousHistory.getJSONArray("items").getJSONObject(0)
+                .put("path", "/storage/emulated/0/ROMs/megadrive/Sonic.zip");
+        RetroArchGameContext.LaunchRecord megaDriveFolder =
+                RetroArchGameContext.parseHistory(ambiguousHistory.toString(), 48_100L);
+        assertNotNull(megaDriveFolder);
+        assertEquals("sega_mega_drive_genesis", megaDriveFolder.platformCode);
+
+        ambiguousHistory.getJSONArray("items").getJSONObject(0)
+                .put("path", "/storage/emulated/0/ROMs/psx/Ridge Racer.chd");
+        RetroArchGameContext.LaunchRecord playStationFolder =
+                RetroArchGameContext.parseHistory(ambiguousHistory.toString(), 48_200L);
+        assertNotNull(playStationFolder);
+        assertEquals("sony_playstation", playStationFolder.platformCode);
+
+        ambiguousHistory.getJSONArray("items").getJSONObject(0)
+                .put("path", "/storage/emulated/0/ROMs/dreamcast/Crazy Taxi.chd");
+        RetroArchGameContext.LaunchRecord dreamcastFolder =
+                RetroArchGameContext.parseHistory(ambiguousHistory.toString(), 48_300L);
+        assertNotNull(dreamcastFolder);
+        assertEquals("sega_dreamcast", dreamcastFolder.platformCode);
+
+        ambiguousHistory.getJSONArray("items").getJSONObject(0)
+                .put("path", "/storage/emulated/0/ROMs/mame/1942.zip");
+        RetroArchGameContext.LaunchRecord mameFolder =
+                RetroArchGameContext.parseHistory(ambiguousHistory.toString(), 48_400L);
+        assertNotNull(mameFolder);
+        assertEquals("arcade_mame", mameFolder.platformCode);
+
+        ambiguousHistory.getJSONArray("items").getJSONObject(0)
+                .put("path", "/storage/emulated/0/ROMs/n64/Hacks/Mario.z64.zip");
+        RetroArchGameContext.LaunchRecord nestedN64Folder =
+                RetroArchGameContext.parseHistory(ambiguousHistory.toString(), 48_500L);
+        assertNotNull(nestedN64Folder);
+        assertEquals("nintendo_64", nestedN64Folder.platformCode);
+
+        ambiguousHistory.getJSONArray("items").getJSONObject(0)
+                .put("path", "/storage/emulated/0/ROMs/tg-cd/Dracula X.chd");
+        RetroArchGameContext.LaunchRecord turboGrafxCdFolder =
+                RetroArchGameContext.parseHistory(ambiguousHistory.toString(), 48_600L);
+        assertNotNull(turboGrafxCdFolder);
+        assertEquals("nec_pc_engine_cd", turboGrafxCdFolder.platformCode);
+
+        ambiguousHistory.getJSONArray("items").getJSONObject(0).put("path",
+                "content://provider/document/primary%3AROMs%2FSFC%2FGame.zip");
+        RetroArchGameContext.LaunchRecord encodedSfcFolder =
+                RetroArchGameContext.parseHistory(ambiguousHistory.toString(), 49_000L);
+        assertNotNull(encodedSfcFolder);
+        assertEquals("nintendo_snes", encodedSfcFolder.platformCode);
+
+        ambiguousHistory.getJSONArray("items").getJSONObject(0)
+                .put("path", "/storage/emulated/0/ROMs/my-sfc-backups/Game.zip");
+        RetroArchGameContext.LaunchRecord nearMatchFolder =
+                RetroArchGameContext.parseHistory(ambiguousHistory.toString(), 49_500L);
+        assertNotNull(nearMatchFolder);
+        assertEquals("", nearMatchFolder.platformCode);
+
+        ambiguousHistory.getJSONArray("items").getJSONObject(0)
+                .put("path", "/storage/emulated/0/ROMs/steam/Game.zip");
+        RetroArchGameContext.LaunchRecord nonRomFrontendFolder =
+                RetroArchGameContext.parseHistory(ambiguousHistory.toString(), 49_600L);
+        assertNotNull(nonRomFrontendFolder);
+        assertEquals("", nonRomFrontendFolder.platformCode);
+
+        assertTrue(RetroArchGameContext.supportsPackage(
+                RetroArchGameContext.PACKAGE_MAIN));
+        assertTrue(RetroArchGameContext.supportsPackage(
+                RetroArchGameContext.PACKAGE_AARCH64));
+        assertTrue(RetroArchGameContext.supportsPackage(
+                RetroArchGameContext.PACKAGE_RA32));
+        assertFalse(RetroArchGameContext.supportsPackage("org.retroarch"));
+        assertTrue(ShizukuGameContextController.isSupportedPackage(
+                RetroArchGameContext.PACKAGE_AARCH64));
+        assertEquals("RetroArch", ShizukuGameContextUserService.detectorLogTag(
+                RetroArchGameContext.PACKAGE_AARCH64));
+        assertTrue(RetroArchGameContext.isLaunchEvidenceFresh(10_000L, 11_500L));
+        assertFalse(RetroArchGameContext.isLaunchEvidenceFresh(10_000L, 13_000L));
+        assertFalse(ShizukuGameContextUserService.shouldClearForPackage(
+                RetroArchGameContext.PACKAGE_AARCH64,
+                AetherSx2GameContext.ACTIVITY_MAIN, 50_000L, 40_000L));
+
+        GameContextSnapshot contextA = RetroArchGameContext.snapshot(
+                RetroArchGameContext.PACKAGE_AARCH64, 7000, recordA);
+        GameContextSnapshot contextB = RetroArchGameContext.snapshot(
+                RetroArchGameContext.PACKAGE_AARCH64, 7000, recordB);
+        GameContextSnapshot contextZip = RetroArchGameContext.snapshot(
+                RetroArchGameContext.PACKAGE_AARCH64, 7000, ambiguous);
+        assertEquals(GameContextSnapshot.State.ACTIVE, contextA.state);
+        assertEquals(RetroArchGameContext.KIND_CONTENT, contextA.kind);
+        assertTrue(contextA.hasPlatformIdentity());
+        assertEquals(contextA.platformIdentityKey, contextB.platformIdentityKey);
+        assertFalse(contextA.identityKey.equals(contextB.identityKey));
+        assertFalse(contextZip.hasPlatformIdentity());
+
+        RetroArchGameContext.LaunchRecord recordARelaunch =
+                RetroArchGameContext.parseHistory(historyA.toString(), 50_000L);
+        GameContextSnapshot contextARelaunch = RetroArchGameContext.snapshot(
+                RetroArchGameContext.PACKAGE_AARCH64, 7000, recordARelaunch);
+        assertFalse(contextA.sameIdentity(contextARelaunch));
+
+        GameProfile exactA = new GameProfile("Kirby", "generic",
+                RetroArchGameContext.PACKAGE_AARCH64, Collections.emptyList());
+        GameProfile gbaDefault = new GameProfile("GBA", "generic",
+                RetroArchGameContext.PACKAGE_AARCH64, Collections.emptyList());
+        GameProfile appDefault = new GameProfile("RetroArch", "generic",
+                RetroArchGameContext.PACKAGE_AARCH64, Collections.emptyList());
+        exactA.gameContextBinding = bindingFrom(contextA);
+        gbaDefault.gameContextBinding = platformBindingFrom(contextA);
+        List<GameProfile> profiles = Arrays.asList(exactA, gbaDefault, appDefault);
+        ForegroundAppTracker.Snapshot foreground = new ForegroundAppTracker.Snapshot(
+                RetroArchGameContext.PACKAGE_AARCH64,
+                "com.retroarch.browser.retroactivity.RetroActivityFuture", "", 0, 50_000L);
+        assertEquals(0, ProfileAutoSwitchResolver.resolve(
+                profiles, 2, foreground, contextA));
+        assertEquals(1, ProfileAutoSwitchResolver.resolve(
+                profiles, 0, foreground, contextB));
+        assertEquals(2, ProfileAutoSwitchResolver.resolve(
+                profiles, 0, foreground, contextZip));
+
+        GameProfile duplicateGba = new GameProfile("GBA alternate", "generic",
+                RetroArchGameContext.PACKAGE_AARCH64, Collections.emptyList());
+        duplicateGba.gameContextBinding = platformBindingFrom(contextA);
+        profiles = Arrays.asList(exactA, gbaDefault, duplicateGba, appDefault);
+        assertEquals(ProfileAutoSwitchResolver.NO_MATCH,
+                ProfileAutoSwitchResolver.resolve(profiles, 3, foreground, contextB));
+        assertEquals(1, ProfileAutoSwitchResolver.resolve(
+                profiles, 1, foreground, contextB));
+
+        JSONObject serialized = gbaDefault.toJson();
+        assertFalse(serialized.toString().contains(gameAPath));
+        assertEquals(RetroArchGameContext.KIND_PLATFORM,
+                GameProfile.fromJson(serialized).safeGameContextBinding().kind);
+
+        assertEquals(987654L, ShizukuGameContextUserService.parseProcessStartTicks(
+                "123 (retro arch) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 987654 20"));
+        assertEquals(1787900000L, ShizukuGameContextUserService.parseBootEpochSeconds(
+                "cpu 1 2 3 4\nbtime 1787900000\nprocesses 5\n"));
+    }
+
     private static GameContextBinding bindingFrom(GameContextSnapshot snapshot) {
         GameContextBinding binding = new GameContextBinding();
         binding.kind = snapshot.kind;
         binding.identityKey = snapshot.identityKey;
         binding.label = snapshot.label;
+        return binding;
+    }
+
+    private static GameContextBinding platformBindingFrom(GameContextSnapshot snapshot) {
+        GameContextBinding binding = new GameContextBinding();
+        binding.kind = snapshot.platformKind;
+        binding.identityKey = snapshot.platformIdentityKey;
+        binding.label = snapshot.platformLabel;
         return binding;
     }
 

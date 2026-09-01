@@ -34,10 +34,11 @@ final class ShizukuGameContextController implements AutoCloseable {
         @Override
         public void onServiceConnected(ComponentName name, IBinder service) {
             synchronized (lock) {
-                if (closed || !enabled) return;
+                if (closed || !boundRequested) return;
                 binder = service;
                 if (bindLatch != null) bindLatch.countDown();
             }
+            recordDiagnostic("service connected");
         }
 
         @Override
@@ -48,6 +49,7 @@ final class ShizukuGameContextController implements AutoCloseable {
                 if (bindLatch != null) bindLatch.countDown();
                 bindLatch = null;
             }
+            recordDiagnostic("service disconnected");
             publish(GameContextSnapshot.UNKNOWN);
         }
     };
@@ -58,8 +60,7 @@ final class ShizukuGameContextController implements AutoCloseable {
     private boolean boundRequested;
     private volatile boolean enabled;
     private volatile boolean closed;
-    private boolean clearedForMain;
-    private volatile boolean pendingClear;
+    private String lastDiagnostic = "";
 
     ShizukuGameContextController(Context context, Listener listener) {
         appContext = context.getApplicationContext();
@@ -67,99 +68,119 @@ final class ShizukuGameContextController implements AutoCloseable {
     }
 
     void setEnabled(boolean enabled) {
+        boolean changed = this.enabled != enabled;
         this.enabled = enabled;
+        if (changed) recordDiagnostic("controller enabled=" + enabled);
         if (!enabled) {
-            clearedForMain = false;
             publish(GameContextSnapshot.UNKNOWN);
             releaseService();
         }
+    }
+
+    /** Pauses UI-driven queries across a temporary lower-Activity stop without
+     * destroying the detector that still observes the unchanged upper game. */
+    void suspend() {
+        if (!enabled) return;
+        enabled = false;
+        recordDiagnostic("controller suspended; service retained");
     }
 
     void refresh(ForegroundAppTracker.Snapshot foreground) {
         if (!enabled || closed) {
-            clearedForMain = false;
             publish(GameContextSnapshot.UNKNOWN);
             return;
         }
-        if (foreground == null
-                || !AetherSx2GameContext.PACKAGE_NAME.equals(foreground.packageName)) {
-            clearedForMain = false;
+        if (foreground == null || !isSupportedPackage(foreground.packageName)) {
             releaseService();
             publish(GameContextSnapshot.UNKNOWN);
             return;
         }
-        String className = foreground.className == null ? "" : foreground.className;
-        if (className.endsWith(".MainActivity")) {
-            publish(GameContextSnapshot.none(AetherSx2GameContext.PACKAGE_NAME,
-                    -1, AetherSx2GameContext.DETECTOR_ID));
-            if (!clearedForMain) {
-                clearedForMain = true;
-                submit(true);
-            }
-            return;
-        }
-        if (!className.endsWith(".EmulationActivity")) {
-            publish(GameContextSnapshot.UNKNOWN);
-            return;
-        }
-        clearedForMain = false;
-        submit(false);
+        submit(foreground.packageName);
     }
 
-    private void submit(boolean clear) {
-        if (clear) pendingClear = true;
-        if (!requestInFlight.compareAndSet(false, true)) return;
+    private void submit(String packageName) {
+        if (!requestInFlight.compareAndSet(false, true)) {
+            recordDiagnostic("request coalesced package=" + packageName);
+            return;
+        }
         executor.execute(() -> {
             try {
                 IBinder service = awaitService();
                 if (service == null) {
+                    recordDiagnostic("query unavailable package=" + packageName);
                     publish(GameContextSnapshot.UNKNOWN);
                     return;
                 }
-                boolean shouldClear = clear || pendingClear;
-                if (shouldClear) pendingClear = false;
-                if (shouldClear) clearRemote(service);
-                else queryRemote(service);
+                queryRemote(service, packageName);
             } finally {
                 requestInFlight.set(false);
-                if (pendingClear && enabled && !closed) submit(true);
             }
         });
     }
 
-    private void queryRemote(IBinder service) {
+    private void queryRemote(IBinder service, String packageName) {
         Parcel data = Parcel.obtain();
         Parcel reply = Parcel.obtain();
         try {
             data.writeInterfaceToken(ShizukuGameContextUserService.DESCRIPTOR);
-            if (!service.transact(ShizukuGameContextUserService.TRANSACTION_QUERY_AETHER,
+            data.writeString(packageName);
+            if (!service.transact(ShizukuGameContextUserService.TRANSACTION_QUERY_CONTEXT,
                     data, reply, 0)) throw new IllegalStateException("transaction rejected");
             reply.readException();
+            String resolvedPackage = reply.readString();
+            int activityState = reply.readInt();
             int pid = reply.readInt();
-            String uri = reply.readString();
+            String identityValue = reply.readString();
+            String identityLabel = reply.readString();
             long observedAt = reply.readLong();
-            GameContextSnapshot snapshot = AetherSx2GameContext.snapshot(
-                    pid, uri == null ? "" : uri, observedAt);
+            String platformValue = reply.readString();
+            String platformLabel = reply.readString();
+            boolean platformAffectsContentIdentity = reply.readInt() != 0;
+            GameContextSnapshot snapshot;
+            if (!packageName.equals(resolvedPackage)) {
+                snapshot = GameContextSnapshot.UNKNOWN;
+            } else if (AetherSx2GameContext.PACKAGE_NAME.equals(packageName)) {
+                if (activityState == AetherSx2GameContext.ACTIVITY_MAIN) {
+                    snapshot = GameContextSnapshot.none(packageName, pid,
+                            AetherSx2GameContext.DETECTOR_ID);
+                } else if (activityState == AetherSx2GameContext.ACTIVITY_EMULATION) {
+                    snapshot = AetherSx2GameContext.snapshot(pid,
+                            identityValue == null ? "" : identityValue, observedAt);
+                } else {
+                    snapshot = GameContextSnapshot.UNKNOWN;
+                }
+            } else if (RetroArchGameContext.supportsPackage(packageName)) {
+                RetroArchGameContext.LaunchRecord record =
+                        new RetroArchGameContext.LaunchRecord(
+                                identityValue == null ? "" : identityValue,
+                                identityLabel == null ? "" : identityLabel,
+                                platformValue == null ? "" : platformValue,
+                                platformLabel == null ? "" : platformLabel,
+                                platformAffectsContentIdentity,
+                                observedAt);
+                snapshot = RetroArchGameContext.snapshot(packageName, pid, record);
+            } else if (PpssppGameContext.supportsPackage(packageName)) {
+                snapshot = PpssppGameContext.snapshot(packageName, pid,
+                        identityValue == null ? "" : identityValue, observedAt);
+            } else if (EdenGameContext.supportsPackage(packageName)) {
+                if (activityState == EdenGameContext.ACTIVITY_MAIN) {
+                    snapshot = GameContextSnapshot.none(packageName, pid,
+                            EdenGameContext.DETECTOR_ID);
+                } else if (activityState == EdenGameContext.ACTIVITY_EMULATION) {
+                    snapshot = EdenGameContext.snapshot(packageName, pid,
+                            identityValue == null ? "" : identityValue,
+                            identityLabel == null ? "" : identityLabel, observedAt);
+                } else {
+                    snapshot = GameContextSnapshot.UNKNOWN;
+                }
+            } else {
+                snapshot = GameContextSnapshot.UNKNOWN;
+            }
             publish(snapshot);
         } catch (Throwable error) {
+            recordDiagnostic("query failed type=" + error.getClass().getSimpleName());
             invalidateBinder();
             publish(GameContextSnapshot.UNKNOWN);
-        } finally {
-            data.recycle();
-            reply.recycle();
-        }
-    }
-
-    private void clearRemote(IBinder service) {
-        Parcel data = Parcel.obtain();
-        Parcel reply = Parcel.obtain();
-        try {
-            data.writeInterfaceToken(ShizukuGameContextUserService.DESCRIPTOR);
-            service.transact(ShizukuGameContextUserService.TRANSACTION_CLEAR_AETHER,
-                    data, reply, 0);
-            reply.readException();
-        } catch (Throwable error) {
-            invalidateBinder();
         } finally {
             data.recycle();
             reply.recycle();
@@ -167,7 +188,10 @@ final class ShizukuGameContextController implements AutoCloseable {
     }
 
     private IBinder awaitService() {
-        if (!isAuthorized()) return null;
+        if (!isAuthorized()) {
+            recordDiagnostic("authorization unavailable");
+            return null;
+        }
         CountDownLatch latch;
         synchronized (lock) {
             if (closed) return null;
@@ -178,14 +202,17 @@ final class ShizukuGameContextController implements AutoCloseable {
                         ShizukuGameContextUserService.class.getName()))
                         .daemon(false)
                         .debuggable(BuildConfig.DEBUG)
-                        .processNameSuffix("game_context_v1")
-                        .tag("heimdall_game_context_v1")
-                        .version(1);
+                        .processNameSuffix("game_context_v11")
+                        .tag("heimdall_game_context_v11")
+                        .version(10);
                 bindLatch = new CountDownLatch(1);
                 boundRequested = true;
                 try {
+                    recordDiagnostic("service bind requested");
                     Shizuku.bindUserService(serviceArgs, connection);
                 } catch (Throwable error) {
+                    recordDiagnostic("service bind failed type="
+                            + error.getClass().getSimpleName());
                     boundRequested = false;
                     bindLatch = null;
                     return null;
@@ -203,6 +230,7 @@ final class ShizukuGameContextController implements AutoCloseable {
             binder = null;
             boundRequested = false;
             bindLatch = null;
+            recordDiagnostic("service bind timeout");
             return null;
         }
     }
@@ -214,6 +242,13 @@ final class ShizukuGameContextController implements AutoCloseable {
         } catch (Throwable ignored) {
             return false;
         }
+    }
+
+    static boolean isSupportedPackage(String packageName) {
+        return AetherSx2GameContext.PACKAGE_NAME.equals(packageName)
+                || RetroArchGameContext.supportsPackage(packageName)
+                || PpssppGameContext.supportsPackage(packageName)
+                || EdenGameContext.supportsPackage(packageName);
     }
 
     private void invalidateBinder() {
@@ -240,6 +275,7 @@ final class ShizukuGameContextController implements AutoCloseable {
         if (args != null && unbind) {
             try {
                 Shizuku.unbindUserService(args, connection, true);
+                recordDiagnostic("service released");
             } catch (Throwable ignored) {
             }
         }
@@ -247,6 +283,12 @@ final class ShizukuGameContextController implements AutoCloseable {
 
     private void publish(GameContextSnapshot snapshot) {
         if (!GameContextTracker.publish(snapshot)) return;
+        recordDiagnostic("snapshot state=" + snapshot.state
+                + " package=" + snapshot.packageName
+                + " pid=" + snapshot.pid
+                + " detector=" + snapshot.detectorId
+                + " kind=" + snapshot.kind
+                + " platform=" + snapshot.hasPlatformIdentity());
         if (listener != null) {
             AssistantMainHandler.post(() -> listener.onGameContextChanged(
                     GameContextTracker.latest()));
@@ -262,5 +304,13 @@ final class ShizukuGameContextController implements AutoCloseable {
         executor.shutdownNow();
         releaseService();
         GameContextTracker.clear();
+    }
+
+    private void recordDiagnostic(String message) {
+        synchronized (lock) {
+            if (message.equals(lastDiagnostic)) return;
+            lastDiagnostic = message;
+        }
+        HeimdallStabilityDiagnostics.recordGameContextDiagnostic(appContext, message);
     }
 }

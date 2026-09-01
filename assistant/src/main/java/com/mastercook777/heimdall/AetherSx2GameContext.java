@@ -9,7 +9,10 @@ import java.util.Locale;
 
 final class AetherSx2GameContext {
     static final String PACKAGE_NAME = "xyz.aethersx2.android";
-    static final String DETECTOR_ID = "aethersx2_logcat_v1";
+    static final String DETECTOR_ID = "aethersx2_logcat_activity_v4";
+    static final int ACTIVITY_UNKNOWN = 0;
+    static final int ACTIVITY_MAIN = 1;
+    static final int ACTIVITY_EMULATION = 2;
     private static final String LOG_MARKER =
             "EmulationThread: Starting emulation thread (";
 
@@ -25,6 +28,39 @@ final class AetherSx2GameContext {
         if (end <= start) return "";
         String value = line.substring(start, end).trim();
         return value.startsWith("content://") ? value : "";
+    }
+
+    static long extractObservedAt(String line) {
+        if (line == null) return 0L;
+        String trimmed = line.trim();
+        int tokenEnd = trimmed.indexOf(' ');
+        if (tokenEnd <= 0) return 0L;
+        String token = trimmed.substring(0, tokenEnd);
+        int decimal = token.indexOf('.');
+        if (decimal <= 0) return 0L;
+        try {
+            long seconds = Long.parseLong(token.substring(0, decimal));
+            String fraction = token.substring(decimal + 1);
+            if (fraction.length() == 0) return 0L;
+            String millisText = (fraction + "000").substring(0, 3);
+            return Math.addExact(Math.multiplyExact(seconds, 1000L),
+                    Long.parseLong(millisText));
+        } catch (Throwable ignored) {
+            return 0L;
+        }
+    }
+
+    static int classifyResumedActivityLine(String line) {
+        if (line == null) return ACTIVITY_UNKNOWN;
+        String trimmed = line.trim();
+        if (!trimmed.startsWith("topResumedActivity=")
+                && !trimmed.startsWith("mResumedActivity:")
+                && !trimmed.startsWith("Resumed:")) {
+            return ACTIVITY_UNKNOWN;
+        }
+        if (containsActivity(trimmed, "EmulationActivity")) return ACTIVITY_EMULATION;
+        if (containsActivity(trimmed, "MainActivity")) return ACTIVITY_MAIN;
+        return ACTIVITY_UNKNOWN;
     }
 
     static GameContextSnapshot snapshot(int pid, String rawUri, long observedAt) {
@@ -63,5 +99,10 @@ final class AetherSx2GameContext {
 
     private static String safe(String value) {
         return value == null ? "" : value;
+    }
+
+    private static boolean containsActivity(String line, String activity) {
+        return line.contains(PACKAGE_NAME + "/." + activity)
+                || line.contains(PACKAGE_NAME + "/" + PACKAGE_NAME + "." + activity);
     }
 }
