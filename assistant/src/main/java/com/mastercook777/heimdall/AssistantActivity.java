@@ -53,7 +53,6 @@ import android.util.DisplayMetrics;
 import android.view.Gravity;
 import android.view.HapticFeedbackConstants;
 import android.view.Display;
-import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewConfiguration;
@@ -6190,16 +6189,20 @@ public class AssistantActivity extends Activity {
         widgetGridDialog = new AlertDialog.Builder(this)
                 .setView(editor)
                 .create();
+        widgetGridDialog.setCancelable(false);
         widgetGridDialog.setCanceledOnTouchOutside(false);
-        widgetGridDialog.setOnKeyListener((dialog, keyCode, event) -> keyCode == KeyEvent.KEYCODE_BACK);
         widgetGridDialog.setOnDismissListener(dialog -> {
             rebuildContent();
             if (widgetGridDialog == dialog) {
                 widgetGridDialog = null;
             }
         });
-        widgetGridDialog.show();
         Window window = widgetGridDialog.getWindow();
+        if (window != null) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                    | WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM);
+        }
+        widgetGridDialog.show();
         if (window != null) {
             window.getDecorView().setPadding(0, 0, 0, 0);
             applySystemGestureExclusion(window.getDecorView());
