@@ -67,6 +67,7 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
             testAssistantActivitySingleTaskContract();
             testSecondaryDisplayLaunchRouterContract();
             testUpperDisplaySingleTouchHandoffCoordinateContract();
+            testUpperDisplayStartedLifecycleHandoffContract();
             testStartupCapabilityDefaultContract();
             testSelfContainedRoundTripAfterSourcesAreDeleted();
             testCorruptMissingUnsafeAndOversizedBundlesFailClosed();
@@ -107,9 +108,36 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
     }
 
     public void testAssistantActivitySingleTaskContract() throws Exception {
-        ActivityInfo info = target.getPackageManager().getActivityInfo(
+        ActivityInfo assistantInfo = target.getPackageManager().getActivityInfo(
                 new ComponentName(target, AssistantActivity.class), 0);
-        assertEquals(ActivityInfo.LAUNCH_SINGLE_TASK, info.launchMode);
+        ActivityInfo routerInfo = target.getPackageManager().getActivityInfo(
+                new ComponentName(target, HeimdallLaunchActivity.class), 0);
+        ActivityInfo handoffInfo = target.getPackageManager().getActivityInfo(
+                new ComponentName(target, UpperDisplayFocusHandoffActivity.class), 0);
+        assertEquals(ActivityInfo.LAUNCH_SINGLE_TASK, assistantInfo.launchMode);
+        assertEquals(target.getPackageName(), assistantInfo.taskAffinity);
+        assertEquals(target.getPackageName() + ".launch_router", routerInfo.taskAffinity);
+        assertEquals(target.getPackageName() + ".focushandoff", handoffInfo.taskAffinity);
+        assertFalse(handoffInfo.exported);
+        assertTrue((handoffInfo.flags & ActivityInfo.FLAG_EXCLUDE_FROM_RECENTS) != 0);
+        assertTrue((handoffInfo.flags & ActivityInfo.FLAG_NO_HISTORY) != 0);
+        assertFalse(assistantInfo.taskAffinity.equals(routerInfo.taskAffinity));
+    }
+
+    public void testUpperDisplayStartedLifecycleHandoffContract() {
+        UpperDisplayStartedLifecycleHandoff handoff =
+                new UpperDisplayStartedLifecycleHandoff();
+        int firstGeneration = handoff.claim();
+        assertEquals(0, firstGeneration);
+        assertTrue(handoff.isCurrent(firstGeneration));
+        assertEquals(UpperDisplayStartedLifecycleHandoff.NO_CLAIM, handoff.claim());
+
+        handoff.rearmAfterStop();
+        assertFalse(handoff.isCurrent(firstGeneration));
+        int secondGeneration = handoff.claim();
+        assertEquals(1, secondGeneration);
+        assertTrue(handoff.isCurrent(secondGeneration));
+        assertEquals(UpperDisplayStartedLifecycleHandoff.NO_CLAIM, handoff.claim());
     }
 
     public void testSecondaryDisplayLaunchRouterContract() {

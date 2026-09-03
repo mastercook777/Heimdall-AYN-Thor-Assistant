@@ -372,6 +372,9 @@ public class AssistantActivity extends Activity {
     private boolean profileAwarenessActive;
     private String lastProfileAutoSwitchDiagnostic = "";
     private boolean activityStarted;
+    private boolean activityResumed;
+    private final UpperDisplayStartedLifecycleHandoff upperDisplayStartedHandoff =
+            new UpperDisplayStartedLifecycleHandoff();
     private final Runnable profileAwarenessTicker = new Runnable() {
         @Override
         public void run() {
@@ -738,8 +741,10 @@ public class AssistantActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        activityResumed = true;
         updateGameFocusProtection(true);
         recordFocusBoundary("resume-protected");
+        requestUpperDisplayFocusHandoffForStartedLifecycle();
         if (!DebugPerformanceDiagnostics.isStaticUi()) {
             resumeMagnifierViews();
         }
@@ -753,6 +758,7 @@ public class AssistantActivity extends Activity {
 
     @Override
     protected void onPause() {
+        activityResumed = false;
         recordFocusBoundary("pause");
         saveGuideReadingPosition();
         dismissFullVirtualKeyboard(false);
@@ -772,7 +778,9 @@ public class AssistantActivity extends Activity {
     @Override
     protected void onStop() {
         activityStarted = false;
-        recordFocusBoundary("stop");
+        upperDisplayStartedHandoff.rearmAfterStop();
+        recordFocusBoundary("stop-handoff-generation-"
+                + upperDisplayStartedHandoff.generation());
         stabilityDiagnostics.stop();
         thorPerformanceCompatibility.release();
         profileAwarenessActive = false;
@@ -979,6 +987,35 @@ public class AssistantActivity extends Activity {
                 UpperDisplaySingleTouchHandoff.attempt(this);
         recordFocusBoundary("deterministic-handoff-" + reason + "-"
                 + result.name().toLowerCase(Locale.US));
+    }
+
+    private void requestUpperDisplayFocusHandoffForStartedLifecycle() {
+        if (!activityStarted
+                || !activityResumed
+                || DebugPerformanceDiagnostics.isStaticUi()
+                || isFinishing()
+                || isDestroyed()) {
+            return;
+        }
+        int generation = upperDisplayStartedHandoff.claim();
+        if (generation == UpperDisplayStartedLifecycleHandoff.NO_CLAIM) {
+            return;
+        }
+        recordFocusBoundary("explicit-handoff-claimed-generation-" + generation);
+        getWindow().getDecorView().post(() -> {
+            if (!upperDisplayStartedHandoff.isCurrent(generation)
+                    || !activityStarted
+                    || !activityResumed
+                    || isFinishing()
+                    || isDestroyed()) {
+                HeimdallStabilityDiagnostics.recordFocusDiagnostic(this,
+                        "explicit-handoff stale generation=" + generation);
+                return;
+            }
+            boolean launched = UpperDisplayFocusHandoffActivity.launch(this);
+            recordFocusBoundary("explicit-handoff-generation-" + generation + "-"
+                    + (launched ? "launched" : "failed"));
+        });
     }
 
     private void updateProfileAwarenessRegistration() {

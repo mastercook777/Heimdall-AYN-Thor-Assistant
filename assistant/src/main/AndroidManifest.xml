@@ -26,6 +26,7 @@
             android:excludeFromRecents="true"
             android:exported="true"
             android:noHistory="true"
+            android:taskAffinity="${applicationId}.launch_router"
             android:theme="@style/LaunchRouterTheme">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -46,6 +47,14 @@
             android:exported="false"
             android:noHistory="true"
             android:taskAffinity="${applicationId}.capture"
+            android:theme="@style/CaptureTheme" />
+
+        <activity
+            android:name=".UpperDisplayFocusHandoffActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:noHistory="true"
+            android:taskAffinity="${applicationId}.focushandoff"
             android:theme="@style/CaptureTheme" />
 
         <service

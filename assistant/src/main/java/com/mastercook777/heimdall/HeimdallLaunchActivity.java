@@ -27,11 +27,15 @@ public final class HeimdallLaunchActivity extends Activity {
                 | WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM);
         super.onCreate(savedInstanceState);
 
+        Intent sourceIntent = getIntent();
+        int sourceFlags = sourceIntent == null ? 0 : sourceIntent.getFlags();
         int sourceDisplayId = resolveSourceDisplayId();
         int targetDisplayId = resolveTargetDisplayId(sourceDisplayId);
         HeimdallStabilityDiagnostics.recordFocusDiagnostic(this,
                 "launch-router sourceDisplay=" + sourceDisplayId
-                        + " targetDisplay=" + targetDisplayId);
+                        + " targetDisplay=" + targetDisplayId
+                        + " launchTask=" + getTaskId()
+                        + " sourceFlags=0x" + Integer.toHexString(sourceFlags));
         if (targetDisplayId == Display.INVALID_DISPLAY
                 || targetDisplayId == Display.DEFAULT_DISPLAY) {
             HeimdallStabilityDiagnostics.recordFocusDiagnostic(this,
@@ -43,7 +47,7 @@ public final class HeimdallLaunchActivity extends Activity {
         try {
             ActivityOptions options = ActivityOptions.makeBasic();
             options.setLaunchDisplayId(targetDisplayId);
-            startActivity(buildTargetIntent(getIntent()), options.toBundle());
+            startActivity(buildTargetIntent(sourceIntent), options.toBundle());
             HeimdallStabilityDiagnostics.recordFocusDiagnostic(this,
                     "launch-router dispatched targetDisplay=" + targetDisplayId);
         } catch (RuntimeException error) {
