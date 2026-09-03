@@ -1786,40 +1786,44 @@ public class AssistantActivity extends Activity {
         HeimdallUi.applyBottomDockPanel(this, bottomDock);
         root.addView(bottomDock, new LinearLayout.LayoutParams(-1, dp(HeimdallUi.HEIGHT_DOCK)));
 
-        dockNavBar = new DockNavBar(this, dockIndexForScreen(activeScreen));
-        bottomDock.addView(dockNavBar, new LinearLayout.LayoutParams(0, -1, 3));
+        if (activeScreen == SCREEN_MAIN && hasUnsavedWidgetLayout()) {
+            populateWidgetLayoutDraftDock(bottomDock);
+        } else {
+            dockNavBar = new DockNavBar(this, dockIndexForScreen(activeScreen));
+            bottomDock.addView(dockNavBar, new LinearLayout.LayoutParams(0, -1, 3));
 
-        LinearLayout bottomBar = new LinearLayout(this);
-        bottomBar.setOrientation(LinearLayout.HORIZONTAL);
-        dockNavBar.addView(bottomBar, new FrameLayout.LayoutParams(-1, -1));
+            LinearLayout bottomBar = new LinearLayout(this);
+            bottomBar.setOrientation(LinearLayout.HORIZONTAL);
+            dockNavBar.addView(bottomBar, new FrameLayout.LayoutParams(-1, -1));
 
-        addDockItem(bottomBar, navIconButton(getString(R.string.nav_home),
-                R.drawable.ic_overview, SCREEN_MAIN,
-                () -> switchPlayScreen(SCREEN_MAIN)));
-        addDockItem(bottomBar, navIconButton(getString(R.string.nav_map),
-                R.drawable.ic_map, SCREEN_MAP, this::showMapPanel));
-        addDockItem(bottomBar, navIconButton(getString(R.string.nav_guide),
-                R.drawable.ic_guide, SCREEN_GUIDE, this::showGuidePanel));
+            addDockItem(bottomBar, navIconButton(getString(R.string.nav_home),
+                    R.drawable.ic_overview, SCREEN_MAIN,
+                    () -> switchPlayScreen(SCREEN_MAIN)));
+            addDockItem(bottomBar, navIconButton(getString(R.string.nav_map),
+                    R.drawable.ic_map, SCREEN_MAP, this::showMapPanel));
+            addDockItem(bottomBar, navIconButton(getString(R.string.nav_guide),
+                    R.drawable.ic_guide, SCREEN_GUIDE, this::showGuidePanel));
 
-        FrameLayout settingsSlot = new FrameLayout(this);
-        bottomDock.addView(settingsSlot, new LinearLayout.LayoutParams(0, -1, 1));
-        Button settingsButton = navIconButton("", R.drawable.ic_settings, SCREEN_SETTINGS,
-                this::showSettingsPanel);
-        settingsButton.setContentDescription(getString(R.string.nav_settings));
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            settingsButton.setTooltipText(getString(R.string.nav_settings));
+            FrameLayout settingsSlot = new FrameLayout(this);
+            bottomDock.addView(settingsSlot, new LinearLayout.LayoutParams(0, -1, 1));
+            Button settingsButton = navIconButton("", R.drawable.ic_settings, SCREEN_SETTINGS,
+                    this::showSettingsPanel);
+            settingsButton.setContentDescription(getString(R.string.nav_settings));
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                settingsButton.setTooltipText(getString(R.string.nav_settings));
+            }
+            settingsSlot.addView(settingsButton, new FrameLayout.LayoutParams(-1, -1));
+
+            View settingsDivider = new View(this);
+            settingsDivider.setBackgroundColor(HeimdallUi.isPearl(this)
+                    ? 0x40657386
+                    : 0x405F7C9A);
+            FrameLayout.LayoutParams dividerParams = new FrameLayout.LayoutParams(dp(1), -1);
+            dividerParams.gravity = Gravity.LEFT;
+            dividerParams.setMargins(0, dp(10), 0, dp(10));
+            settingsSlot.addView(settingsDivider, dividerParams);
+            updateDockNavSelection(false);
         }
-        settingsSlot.addView(settingsButton, new FrameLayout.LayoutParams(-1, -1));
-
-        View settingsDivider = new View(this);
-        settingsDivider.setBackgroundColor(HeimdallUi.isPearl(this)
-                ? 0x40657386
-                : 0x405F7C9A);
-        FrameLayout.LayoutParams dividerParams = new FrameLayout.LayoutParams(dp(1), -1);
-        dividerParams.gravity = Gravity.LEFT;
-        dividerParams.setMargins(0, dp(10), 0, dp(10));
-        settingsSlot.addView(settingsDivider, dividerParams);
-        updateDockNavSelection(false);
         if (activeScreen == SCREEN_SETTINGS) {
             bottomDock.setVisibility(View.GONE);
         }
@@ -1869,7 +1873,99 @@ public class AssistantActivity extends Activity {
         if (touchPadView == null) {
             closeVirtualMouseDispatcher();
         }
-        return widgetGrid;
+        return hasUnsavedWidgetLayout()
+                ? createWidgetLayoutDraftPreview(widgetGrid)
+                : widgetGrid;
+    }
+
+    private View createWidgetLayoutDraftPreview(WidgetHostLayout widgetGrid) {
+        FrameLayout preview = new FrameLayout(this);
+        preview.addView(widgetGrid, new FrameLayout.LayoutParams(-1, -1));
+        widgetGrid.setDescendantFocusability(ViewGroup.FOCUS_BLOCK_DESCENDANTS);
+        widgetGrid.setImportantForAccessibility(
+                View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);
+
+        View interactionShield = new View(this);
+        interactionShield.setClickable(true);
+        interactionShield.setFocusable(false);
+        interactionShield.setBackgroundColor(HeimdallUi.isPearl(this)
+                ? 0x12000000
+                : 0x24000000);
+        interactionShield.setContentDescription(
+                getString(R.string.grid_draft_preview_accessibility));
+        interactionShield.setOnClickListener(v ->
+                showAction(getString(R.string.grid_draft_controls_paused)));
+        preview.addView(interactionShield, new FrameLayout.LayoutParams(-1, -1));
+        return preview;
+    }
+
+    private void populateWidgetLayoutDraftDock(LinearLayout dock) {
+        HeimdallUi.applySemanticPanel(this, dock, HeimdallUi.SEMANTIC_WARNING);
+        dock.setGravity(Gravity.CENTER_VERTICAL);
+        dock.setPadding(dp(8), dp(4), dp(8), dp(4));
+
+        LinearLayout status = new LinearLayout(this);
+        status.setOrientation(LinearLayout.VERTICAL);
+        status.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
+        status.setPadding(dp(6), 0, dp(8), 0);
+        int warningColor = HeimdallUi.isPearl(this)
+                ? 0xFF96500E
+                : HeimdallUi.COLOR_WARNING;
+        TextView title = text(getString(R.string.grid_draft_title),
+                HeimdallUi.TYPE_LABEL, warningColor, true);
+        title.setSingleLine(true);
+        status.addView(title, new LinearLayout.LayoutParams(-1, 0, 1));
+        TextView subtitle = text(getString(R.string.grid_draft_subtitle),
+                HeimdallUi.TYPE_META, MUTED, false);
+        subtitle.setSingleLine(true);
+        subtitle.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        status.addView(subtitle, new LinearLayout.LayoutParams(-1, 0, 1));
+        dock.addView(status, new LinearLayout.LayoutParams(0, -1, 1.45f));
+
+        addWidgetLayoutDraftAction(dock, R.string.grid_draft_continue_editing,
+                R.drawable.ic_edit, false, false, this::showWidgetGridEditor);
+        addWidgetLayoutDraftAction(dock, R.string.grid_draft_discard,
+                R.drawable.ic_trash, false, true, this::discardWidgetLayoutDraft);
+        addWidgetLayoutDraftAction(dock, R.string.grid_draft_save,
+                R.drawable.ic_check, true, false, this::saveWidgetLayoutDraft);
+    }
+
+    private void addWidgetLayoutDraftAction(LinearLayout dock, int labelRes, int iconRes,
+            boolean primary, boolean destructive, Runnable action) {
+        Button button = actionButton(getString(labelRes), action);
+        button.setTextSize(HeimdallUi.TYPE_BUTTON_COMPACT);
+        button.setGravity(Gravity.CENTER);
+        if (primary) {
+            HeimdallUi.applyPrimaryActionButton(this, button);
+        }
+        int color = destructive
+                ? (HeimdallUi.isPearl(this) ? 0xFFB34A4F : DANGER)
+                : HeimdallUi.textColor(this);
+        button.setTextColor(color);
+        setLeftIcon(button, iconRes, color, dp(16));
+        button.setCompoundDrawablePadding(dp(5));
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, -1, 0.62f);
+        params.setMargins(dp(2), 0, dp(2), 0);
+        dock.addView(button, params);
+    }
+
+    private void discardWidgetLayoutDraft() {
+        draftWidgetLayout = null;
+        rebuildContent();
+        showAction(getString(R.string.grid_draft_discarded));
+    }
+
+    private void saveWidgetLayoutDraft() {
+        if (draftWidgetLayout == null) {
+            return;
+        }
+        draftWidgetLayout.sanitize();
+        selectedProfile.widgetLayout = draftWidgetLayout.copy();
+        draftWidgetLayout = null;
+        ProfileStore.saveProfiles(this, profiles);
+        parkKeyboardInputSessionIfUnused();
+        rebuildContent();
+        showAction(getString(R.string.grid_layout_saved));
     }
 
     private WidgetLayout currentWidgetLayout() {
@@ -3877,6 +3973,10 @@ public class AssistantActivity extends Activity {
     }
 
     private void showProfileQuickPicker() {
+        if (hasUnsavedWidgetLayout()) {
+            showErrorAction(getString(R.string.grid_draft_resolve_before_profile_switch));
+            return;
+        }
         final PanelOverlay[] holder = new PanelOverlay[1];
         LinearLayout panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL);
@@ -5861,9 +5961,9 @@ public class AssistantActivity extends Activity {
 
     private String settingsSectionSummary() {
         if (activeSettingsSection == SETTINGS_LAYOUT) {
-            return getString(draftWidgetLayout == null
-                    ? R.string.settings_summary_layout_saved
-                    : R.string.settings_summary_layout_draft);
+            return getString(hasUnsavedWidgetLayout()
+                    ? R.string.settings_summary_layout_draft
+                    : R.string.settings_summary_layout_saved);
         }
         if (activeSettingsSection == SETTINGS_TOUCHPAD) {
             return getString(R.string.settings_summary_touchpad);

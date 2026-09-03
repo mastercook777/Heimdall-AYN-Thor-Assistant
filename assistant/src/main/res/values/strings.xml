@@ -212,6 +212,15 @@
     <string name="grid_layout_previewed">Layout previewed. Save to apply.</string>
     <string name="grid_layout_reset_preview">Layout reset. Save to apply.</string>
     <string name="grid_layout_saved">Layout saved.</string>
+    <string name="grid_draft_title">Unsaved layout</string>
+    <string name="grid_draft_subtitle">Preview only · Gameplay controls are paused</string>
+    <string name="grid_draft_preview_accessibility">Unsaved Grid layout preview. Gameplay controls are paused.</string>
+    <string name="grid_draft_controls_paused">This is a layout preview. Use the actions below to continue editing, discard, or save.</string>
+    <string name="grid_draft_continue_editing">Continue editing</string>
+    <string name="grid_draft_discard">Discard</string>
+    <string name="grid_draft_save">Save layout</string>
+    <string name="grid_draft_discarded">Layout draft discarded.</string>
+    <string name="grid_draft_resolve_before_profile_switch">Save or discard the current layout draft before switching Profiles.</string>
     <string name="grid_preset_title">Main layout</string>
     <string name="grid_preset_balanced">Balanced · Magnifier + pad + quick actions</string>
     <string name="grid_preset_controls">Controls · Full-width pad + quick actions</string>
@@ -221,7 +230,7 @@
     <string name="grid_preset_name_controls">Controls</string>
     <string name="grid_preset_name_macros">Macros</string>
     <string name="grid_preset_name_custom">Custom</string>
-    <string name="grid_preset_previewed">Previewing %1$s. Save in Settings.</string>
+    <string name="grid_preset_previewed">Previewing %1$s. Use the draft bar to save.</string>
 
     <string name="touch_mode_compatible">Compatible Touch</string>
     <string name="touch_mode_precision_aim">Precision Aim</string>

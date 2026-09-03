@@ -210,6 +210,15 @@
     <string name="grid_layout_previewed">已预览布局，保存后生效。</string>
     <string name="grid_layout_reset_preview">布局已重置，保存后生效。</string>
     <string name="grid_layout_saved">布局已保存。</string>
+    <string name="grid_draft_title">布局尚未保存</string>
+    <string name="grid_draft_subtitle">仅供预览 · 游戏控件已暂停</string>
+    <string name="grid_draft_preview_accessibility">未保存的 Grid 布局预览。游戏控件已暂停。</string>
+    <string name="grid_draft_controls_paused">当前为布局草稿预览，请使用下方操作继续编辑、放弃或保存。</string>
+    <string name="grid_draft_continue_editing">继续编辑</string>
+    <string name="grid_draft_discard">放弃</string>
+    <string name="grid_draft_save">保存布局</string>
+    <string name="grid_draft_discarded">已放弃布局草稿。</string>
+    <string name="grid_draft_resolve_before_profile_switch">请先保存或放弃当前布局草稿，再切换 Profile。</string>
     <string name="grid_preset_title">主界面布局</string>
     <string name="grid_preset_balanced">平衡 · 放大镜 + 触控 + 快捷操作</string>
     <string name="grid_preset_controls">操控 · 全宽触控 + 快捷操作</string>
@@ -219,7 +228,7 @@
     <string name="grid_preset_name_controls">操控</string>
     <string name="grid_preset_name_macros">宏优先</string>
     <string name="grid_preset_name_custom">自定义</string>
-    <string name="grid_preset_previewed">正在预览%1$s，进入设置保存后生效。</string>
+    <string name="grid_preset_previewed">正在预览%1$s，请使用草稿栏保存。</string>
 
     <string name="touch_mode_compatible">兼容触控</string>
     <string name="touch_mode_precision_aim">精细瞄准</string>
