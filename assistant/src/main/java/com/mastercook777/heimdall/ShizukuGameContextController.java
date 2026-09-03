@@ -21,6 +21,9 @@ final class ShizukuGameContextController implements AutoCloseable {
     }
 
     private static final long BIND_TIMEOUT_MS = 8_000L;
+    static final String SERVICE_PROCESS_SUFFIX = "game_context_v12";
+    static final String SERVICE_TAG = "heimdall_game_context_v12";
+    static final int SERVICE_VERSION = 11;
     private final Context appContext;
     private final Listener listener;
     private final Object lock = new Object();
@@ -202,9 +205,9 @@ final class ShizukuGameContextController implements AutoCloseable {
                         ShizukuGameContextUserService.class.getName()))
                         .daemon(false)
                         .debuggable(BuildConfig.DEBUG)
-                        .processNameSuffix("game_context_v11")
-                        .tag("heimdall_game_context_v11")
-                        .version(10);
+                        .processNameSuffix(SERVICE_PROCESS_SUFFIX)
+                        .tag(SERVICE_TAG)
+                        .version(SERVICE_VERSION);
                 bindLatch = new CountDownLatch(1);
                 boundRequested = true;
                 try {

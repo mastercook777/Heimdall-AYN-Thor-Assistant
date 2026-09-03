@@ -11,6 +11,7 @@ import android.graphics.Point;
 import android.graphics.Rect;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.IBinder;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -60,6 +61,7 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
             testUserMacroIconDeletionContract();
             testGameContextIdentityAndResolverContract();
             testGameContextAppOnlyFallbackAndManualSelectionGuardContract();
+            testGameContextUserServiceLifetimeContract();
             testRomContextProbeAdapterTargetsAndFiltering();
             testEdenGameContextIdentityAndResolverContract();
             testPpssppPositiveLaunchGameContextContract();
@@ -620,6 +622,20 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
                 "org.yuzu.yuzu_emu.activities.EmulationActivity", "", 0, 300L);
         assertEquals(1, ProfileAutoSwitchResolver.resolve(
                 Arrays.asList(first, second), 0, foreground, contextB));
+    }
+
+    public void testGameContextUserServiceLifetimeContract() throws Exception {
+        assertEquals("game_context_v12",
+                ShizukuGameContextController.SERVICE_PROCESS_SUFFIX);
+        assertEquals("heimdall_game_context_v12",
+                ShizukuGameContextController.SERVICE_TAG);
+        assertEquals(11, ShizukuGameContextController.SERVICE_VERSION);
+        assertEquals("heimdall_native_controller_v13",
+                ShizukuNativeController.SERVICE_TAG);
+        assertEquals(13, ShizukuNativeController.SERVICE_VERSION);
+        assertTrue(ShizukuUserServiceLifecycle.isDestroyTransaction(16_777_115));
+        assertFalse(ShizukuUserServiceLifecycle.isDestroyTransaction(
+                IBinder.FIRST_CALL_TRANSACTION));
     }
 
     public void testPpssppPositiveLaunchGameContextContract() throws Exception {

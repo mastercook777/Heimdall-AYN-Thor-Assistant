@@ -21,6 +21,8 @@ public final class ShizukuNativeController {
     static final String THOR_TOUCH_UNSUPPORTED = "THOR_TOUCH_UNSUPPORTED";
     private static final int REQUEST_CODE = 4109;
     private static final long BIND_TIMEOUT_MS = 10_000L;
+    static final String SERVICE_TAG = "heimdall_native_controller_v13";
+    static final int SERVICE_VERSION = 13;
     private static final Object LOCK = new Object();
     private static final ExecutorService BIND_EXECUTOR =
             Executors.newSingleThreadExecutor(runnable -> {
@@ -492,7 +494,7 @@ public final class ShizukuNativeController {
         }
         try {
             Shizuku.UserServiceArgs args = userServiceArgs(
-                    context, "heimdall_native_controller_v12", 12);
+                    context, SERVICE_TAG, SERVICE_VERSION);
             Shizuku.bindUserService(args, CONNECTION);
         } catch (Throwable error) {
             failBinding(generation);
