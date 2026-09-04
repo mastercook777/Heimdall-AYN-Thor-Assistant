@@ -75,6 +75,7 @@ import android.widget.ScrollView;
 import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
+import android.webkit.CookieManager;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
@@ -306,7 +307,7 @@ public class AssistantActivity extends Activity {
     private boolean editingInteractiveMapInline;
     private int activeMapViewerMode = MAP_VIEW_LOCAL;
     private WebView activeMapWebView;
-    private TextView activeMapWebStatus;
+    private InteractiveMapLoadIndicator activeMapLoadIndicator;
     private boolean activeMapWebError;
     private Bitmap activeLocalMapBitmap;
     private final List<Bitmap> activeLocalMapThumbnails = new ArrayList<>();
@@ -327,6 +328,7 @@ public class AssistantActivity extends Activity {
     private boolean imeVisibleForPerformanceCompatibility;
     private View fullscreenMapControls;
     private View fullscreenMapReveal;
+    private boolean fullscreenMapControlsPersistent;
     private View fullscreenGuideControls;
     private View fullscreenGuideReveal;
     private MapMarker editingMapMarkerInline;
@@ -953,7 +955,7 @@ public class AssistantActivity extends Activity {
         });
     }
 
-    private void requestTextInputFocus(EditText input) {
+    private void requestTextInputFocus(View input) {
         thorTextInputFocusLease.acquire(this, thorGameFocusProtection, input);
         recordFocusBoundary("text-lease-acquire");
         if (thorTextInputFocusLease.isHoldingWindowFocus() && !textInputFocused) {
@@ -1296,6 +1298,9 @@ public class AssistantActivity extends Activity {
         }
         if (guideReaderFullscreen) {
             closeGuideFullscreen();
+            return;
+        }
+        if (releaseInteractiveMapTextInputThen(null)) {
             return;
         }
         if (mapViewerFullscreen) {
@@ -6361,6 +6366,10 @@ public class AssistantActivity extends Activity {
     }
 
     private void openMapFullscreen(int mode) {
+        if (mode == MAP_VIEW_INTERACTIVE
+                && releaseInteractiveMapTextInputThen(() -> openMapFullscreen(mode))) {
+            return;
+        }
         if (mode == MAP_VIEW_LOCAL && selectedLocalMap() == null) {
             showErrorAction(getString(R.string.map_select_local_first));
             return;
@@ -6443,9 +6452,8 @@ public class AssistantActivity extends Activity {
     }
 
     private void addFullscreenInteractiveMap(FrameLayout root) {
-        LinearLayout toolbar = fullscreenMapToolbar(
-                nonEmpty(selectedProfile.interactiveMapTitle,
-                        getString(R.string.map_interactive)));
+        LinearLayout toolbar = interactiveMapToolbar();
+        addInteractiveMapLoadIndicator(toolbar, true);
         addMapIconTool(toolbar, R.drawable.ic_arrow_back,
                 getString(R.string.common_previous), () -> {
             if (activeMapWebView != null && activeMapWebView.canGoBack()) {
@@ -6464,28 +6472,26 @@ public class AssistantActivity extends Activity {
                 activeMapWebView.reload();
             }
         });
+        addInteractiveMapBrowserTools(toolbar);
         addMapIconTool(toolbar, R.drawable.ic_open_external,
                 getString(R.string.common_open_external), this::openInteractiveMapExternally);
         addMapIconTool(toolbar, R.drawable.ic_fullscreen_exit,
                 getString(R.string.common_exit_fullscreen), this::closeMapFullscreen);
+        compactFullscreenInteractiveToolbar(toolbar);
 
         try {
             activeMapWebView = buildInteractiveMapWebView();
             root.addView(activeMapWebView, new FrameLayout.LayoutParams(-1, -1));
-            activeMapWebStatus = floatingMapStatus();
-            FrameLayout.LayoutParams statusParams = new FrameLayout.LayoutParams(-2, dp(30));
-            statusParams.gravity = Gravity.LEFT | Gravity.BOTTOM;
-            statusParams.setMargins(dp(10), 0, dp(10), dp(10));
-            root.addView(activeMapWebStatus, statusParams);
-            installFullscreenMapControls(root, toolbar, activeMapWebView);
+            installFullscreenMapControls(root, toolbar, activeMapWebView, true);
             loadInteractiveMap(activeMapWebView);
         } catch (Exception ex) {
             activeMapWebView = null;
+            updateMapWebStatusError(R.string.map_embedded_browser_unavailable);
             TextView error = text(getString(R.string.map_embedded_browser_unavailable),
                     14, DANGER, false);
             error.setGravity(Gravity.CENTER);
             root.addView(error, new FrameLayout.LayoutParams(-1, -1));
-            installFullscreenMapControls(root, toolbar, error);
+            installFullscreenMapControls(root, toolbar, error, true);
         }
     }
 
@@ -6505,11 +6511,89 @@ public class AssistantActivity extends Activity {
         return toolbar;
     }
 
+    private LinearLayout interactiveMapToolbar() {
+        LinearLayout toolbar = fullscreenMapToolbar("");
+        toolbar.getChildAt(0).setVisibility(View.GONE);
+        if (HeimdallUi.isPearl(this)) {
+            toolbar.setBackground(HeimdallUi.glass(this,
+                    0xDDF6F5F3, 0xEEEEF0EF,
+                    0xAAFFFFFF, 0x669EABB8,
+                    HeimdallUi.RADIUS_PANEL, 2));
+        }
+        return toolbar;
+    }
+
     private void addMapIconTool(LinearLayout toolbar, int iconRes, String description, Runnable action) {
         ImageButton button = compactMapIconButton(iconRes, description, action);
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(42), dp(42));
         params.setMargins(dp(2), 0, dp(2), 0);
         toolbar.addView(button, params);
+    }
+
+    private void addInteractiveMapBrowserTools(LinearLayout toolbar) {
+        boolean desktop = InteractiveMapBrowserSettings.isDesktop(
+                selectedProfile.interactiveMapBrowserMode);
+        String currentMode = getString(desktop
+                ? R.string.map_browser_desktop
+                : R.string.map_browser_mobile);
+        addMapIconTool(toolbar,
+                desktop ? R.drawable.ic_desktop_mode : R.drawable.ic_mobile_mode,
+                getString(R.string.map_browser_identity_current, currentMode),
+                this::toggleInteractiveMapBrowserMode);
+    }
+
+    private void addInteractiveMapLoadIndicator(LinearLayout toolbar, boolean revealsControls) {
+        InteractiveMapLoadIndicator indicator = new InteractiveMapLoadIndicator(this);
+        if (revealsControls) {
+            indicator.setRevealControlsAction(this::showFullscreenMapControls);
+        }
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                dp(revealsControls ? 38 : 46), dp(42));
+        int horizontalMargin = dp(revealsControls ? 1 : 2);
+        params.setMargins(horizontalMargin, 0, horizontalMargin, 0);
+        toolbar.addView(indicator, 1, params);
+        activeMapLoadIndicator = indicator;
+    }
+
+    private void compactFullscreenInteractiveToolbar(LinearLayout toolbar) {
+        toolbar.setPadding(dp(4), dp(3), dp(4), dp(3));
+    }
+
+    private void requestInteractiveMapTextInput() {
+        if (activeMapWebView == null) {
+            return;
+        }
+        requestTextInputFocus(activeMapWebView);
+    }
+
+    private boolean releaseInteractiveMapTextInputThen(Runnable afterRelease) {
+        return activeMapWebView != null
+                && thorTextInputFocusLease.isActiveInputInside(activeMapWebView)
+                && releaseTextInputFocusThen(afterRelease);
+    }
+
+    private void toggleInteractiveMapBrowserMode() {
+        runAfterTextInputFocusRelease(() -> {
+            if (activeMapWebView != null) {
+                String current = activeMapWebView.getUrl();
+                if (current != null
+                        && (current.startsWith("https://") || current.startsWith("http://"))) {
+                    mapWebCurrentUrl = current;
+                }
+            }
+            boolean useDesktop = !InteractiveMapBrowserSettings.isDesktop(
+                    selectedProfile.interactiveMapBrowserMode);
+            selectedProfile.interactiveMapBrowserMode = useDesktop
+                    ? InteractiveMapBrowserSettings.MODE_DESKTOP
+                    : InteractiveMapBrowserSettings.MODE_MOBILE;
+            ProfileStore.saveProfiles(this, profiles);
+            Toast.makeText(this,
+                    getString(R.string.map_browser_mode_changed, getString(useDesktop
+                            ? R.string.map_browser_desktop
+                            : R.string.map_browser_mobile)),
+                    Toast.LENGTH_SHORT).show();
+            rebuildContent();
+        });
     }
 
     private ImageButton compactMapIconButton(int iconRes, String description, Runnable action) {
@@ -6533,11 +6617,33 @@ public class AssistantActivity extends Activity {
     }
 
     private void installFullscreenMapControls(FrameLayout root, LinearLayout toolbar, View content) {
-        FrameLayout.LayoutParams toolbarParams = new FrameLayout.LayoutParams(-1, dp(50));
-        toolbarParams.gravity = Gravity.TOP;
+        installFullscreenMapControls(root, toolbar, content, false);
+    }
+
+    private void installFullscreenMapControls(FrameLayout root, LinearLayout toolbar, View content,
+            boolean persistentCompact) {
+        fullscreenMapControlsPersistent = persistentCompact;
+        FrameLayout.LayoutParams toolbarParams = new FrameLayout.LayoutParams(
+                persistentCompact ? ViewGroup.LayoutParams.WRAP_CONTENT
+                        : ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(50));
+        toolbarParams.gravity = Gravity.TOP | Gravity.LEFT;
         toolbarParams.setMargins(dp(8), dp(8), dp(8), 0);
         root.addView(toolbar, toolbarParams);
         fullscreenMapControls = toolbar;
+
+        if (persistentCompact) {
+            fullscreenMapReveal = null;
+            toolbar.setOnTouchListener((view, event) -> {
+                if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
+                    showFullscreenMapControls();
+                }
+                return false;
+            });
+            uiHandler.removeCallbacks(hideFullscreenMapControls);
+            setFullscreenMapControlsVisible(false);
+            return;
+        }
 
         ImageButton reveal = compactMapIconButton(R.drawable.ic_toolbar_reveal,
                 getString(R.string.map_show_navigation), this::showFullscreenMapControls);
@@ -6574,6 +6680,18 @@ public class AssistantActivity extends Activity {
     }
 
     private void setFullscreenMapControlsVisible(boolean visible) {
+        if (fullscreenMapControlsPersistent
+                && fullscreenMapControls instanceof LinearLayout) {
+            LinearLayout toolbar = (LinearLayout) fullscreenMapControls;
+            toolbar.setVisibility(View.VISIBLE);
+            for (int index = 0; index < toolbar.getChildCount(); index++) {
+                View child = toolbar.getChildAt(index);
+                child.setVisibility(index == 0
+                        ? View.GONE
+                        : index == 1 || visible ? View.VISIBLE : View.GONE);
+            }
+            return;
+        }
         if (fullscreenMapControls != null) {
             fullscreenMapControls.setVisibility(visible ? View.VISIBLE : View.GONE);
         }
@@ -6583,6 +6701,9 @@ public class AssistantActivity extends Activity {
     }
 
     private void closeMapFullscreen() {
+        if (releaseInteractiveMapTextInputThen(this::closeMapFullscreen)) {
+            return;
+        }
         uiHandler.removeCallbacks(hideFullscreenMapControls);
         if (activeMapWebView != null) {
             String current = activeMapWebView.getUrl();
@@ -6592,6 +6713,7 @@ public class AssistantActivity extends Activity {
         }
         fullscreenMapControls = null;
         fullscreenMapReveal = null;
+        fullscreenMapControlsPersistent = false;
         mapViewerFullscreen = false;
         rebuildContent();
     }
@@ -6816,9 +6938,8 @@ public class AssistantActivity extends Activity {
             return panel;
         }
 
-        LinearLayout toolbar = fullscreenMapToolbar(
-                nonEmpty(selectedProfile.interactiveMapTitle,
-                        getString(R.string.map_interactive)));
+        LinearLayout toolbar = interactiveMapToolbar();
+        addInteractiveMapLoadIndicator(toolbar, false);
         addMapIconTool(toolbar, R.drawable.ic_arrow_back,
                 getString(R.string.common_previous), () -> {
             if (activeMapWebView != null && activeMapWebView.canGoBack()) {
@@ -6837,6 +6958,7 @@ public class AssistantActivity extends Activity {
                 activeMapWebView.reload();
             }
         });
+        addInteractiveMapBrowserTools(toolbar);
         addMapIconTool(toolbar, R.drawable.ic_fullscreen,
                 getString(R.string.common_fullscreen),
                 () -> openMapFullscreen(MAP_VIEW_INTERACTIVE));
@@ -6857,28 +6979,16 @@ public class AssistantActivity extends Activity {
         try {
             activeMapWebView = buildInteractiveMapWebView();
             browserFrame.addView(activeMapWebView, new FrameLayout.LayoutParams(-1, -1));
-            activeMapWebStatus = floatingMapStatus();
-            FrameLayout.LayoutParams statusParams = new FrameLayout.LayoutParams(-2, dp(30));
-            statusParams.gravity = Gravity.LEFT | Gravity.BOTTOM;
-            statusParams.setMargins(dp(8), 0, dp(8), dp(8));
-            browserFrame.addView(activeMapWebStatus, statusParams);
             loadInteractiveMap(activeMapWebView);
         } catch (Exception ex) {
             activeMapWebView = null;
+            updateMapWebStatusError(R.string.map_embedded_browser_unavailable);
             TextView error = text(getString(R.string.map_embedded_browser_unavailable),
                     13, DANGER, false);
             error.setGravity(Gravity.CENTER);
             browserFrame.addView(error, new FrameLayout.LayoutParams(-1, -1));
         }
         return panel;
-    }
-
-    private TextView floatingMapStatus() {
-        TextView status = text(getString(R.string.map_loading), 11, MUTED, false);
-        status.setGravity(Gravity.CENTER_VERTICAL | Gravity.LEFT);
-        status.setPadding(dp(10), 0, dp(10), 0);
-        status.setBackground(HeimdallUi.surfacePanel(this, 8));
-        return status;
     }
 
     private void addInteractiveMapEditor(LinearLayout panel) {
@@ -6896,6 +7006,36 @@ public class AssistantActivity extends Activity {
                 "https://map.example.com");
         urlInput.setSingleLine(true);
         card.addView(urlInput, blockParams(42, 0, 8));
+
+        String[] browserModeDraft = {
+                InteractiveMapBrowserSettings.normalize(
+                        selectedProfile.interactiveMapBrowserMode)
+        };
+        LinearLayout browserModeRow = new LinearLayout(this);
+        browserModeRow.setOrientation(LinearLayout.HORIZONTAL);
+        browserModeRow.setGravity(Gravity.CENTER_VERTICAL);
+        TextView browserModeLabel = text(getString(R.string.map_browser_identity),
+                HeimdallUi.TYPE_LABEL, TEXT, true);
+        browserModeRow.addView(browserModeLabel,
+                new LinearLayout.LayoutParams(dp(116), -1));
+        Button[] browserModeButtons = new Button[2];
+        browserModeButtons[0] = editorButton(getString(R.string.map_browser_mobile), () -> {
+            browserModeDraft[0] = InteractiveMapBrowserSettings.MODE_MOBILE;
+            HeimdallUi.applyChoiceButton(this, browserModeButtons[0], true);
+            HeimdallUi.applyChoiceButton(this, browserModeButtons[1], false);
+        });
+        browserModeButtons[1] = editorButton(getString(R.string.map_browser_desktop), () -> {
+            browserModeDraft[0] = InteractiveMapBrowserSettings.MODE_DESKTOP;
+            HeimdallUi.applyChoiceButton(this, browserModeButtons[0], false);
+            HeimdallUi.applyChoiceButton(this, browserModeButtons[1], true);
+        });
+        HeimdallUi.applyChoiceButton(this, browserModeButtons[0],
+                InteractiveMapBrowserSettings.MODE_MOBILE.equals(browserModeDraft[0]));
+        HeimdallUi.applyChoiceButton(this, browserModeButtons[1],
+                InteractiveMapBrowserSettings.MODE_DESKTOP.equals(browserModeDraft[0]));
+        browserModeRow.addView(browserModeButtons[0]);
+        browserModeRow.addView(browserModeButtons[1]);
+        card.addView(browserModeRow, new LinearLayout.LayoutParams(-1, dp(48)));
 
         LinearLayout actions = new LinearLayout(this);
         actions.setOrientation(LinearLayout.HORIZONTAL);
@@ -6916,6 +7056,7 @@ public class AssistantActivity extends Activity {
             selectedProfile.interactiveMapTitle = nonEmpty(titleInput.getText().toString(),
                     getString(R.string.map_interactive));
             selectedProfile.interactiveMapUrl = normalized;
+            selectedProfile.interactiveMapBrowserMode = browserModeDraft[0];
             ProfileStore.saveProfiles(this, profiles);
             editingInteractiveMapInline = false;
             activeMapViewerMode = MAP_VIEW_INTERACTIVE;
@@ -6925,7 +7066,8 @@ public class AssistantActivity extends Activity {
     }
 
     private WebView buildInteractiveMapWebView() {
-        WebView webView = new WebView(this);
+        InteractiveMapWebView webView = new InteractiveMapWebView(this);
+        webView.setOnTextInputRequested(this::requestInteractiveMapTextInput);
         webView.setBackgroundColor(0xFF05070A);
         webView.setOverScrollMode(View.OVER_SCROLL_NEVER);
         WebSettings settings = webView.getSettings();
@@ -6942,14 +7084,21 @@ public class AssistantActivity extends Activity {
         settings.setAllowFileAccessFromFileURLs(false);
         settings.setAllowUniversalAccessFromFileURLs(false);
         settings.setMediaPlaybackRequiresUserGesture(true);
+        InteractiveMapBrowserSettings.apply(this, settings,
+                selectedProfile.interactiveMapBrowserMode);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             settings.setSafeBrowsingEnabled(true);
+        }
+        CookieManager cookieManager = CookieManager.getInstance();
+        cookieManager.setAcceptCookie(true);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            cookieManager.setAcceptThirdPartyCookies(webView, true);
         }
         webView.setWebChromeClient(new WebChromeClient() {
             @Override
             public void onProgressChanged(WebView view, int progress) {
                 if (progress < 100) {
-                updateMapWebStatus(getString(R.string.map_loading_progress, progress), false);
+                    updateMapWebStatusLoading();
                 }
             }
         });
@@ -6957,7 +7106,7 @@ public class AssistantActivity extends Activity {
             @Override
             public void onPageStarted(WebView view, String url, Bitmap favicon) {
                 activeMapWebError = false;
-                updateMapWebStatus(getString(R.string.map_loading), false);
+                updateMapWebStatusLoading();
             }
 
             @Override
@@ -6976,7 +7125,7 @@ public class AssistantActivity extends Activity {
                     mapWebCurrentUrl = url;
                 }
                 if (!activeMapWebError) {
-                updateMapWebStatus(getString(R.string.map_loaded), false);
+                    updateMapWebStatusLoaded();
                 }
             }
 
@@ -6984,7 +7133,7 @@ public class AssistantActivity extends Activity {
             public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
                 if (request.isForMainFrame()) {
                     activeMapWebError = true;
-                updateMapWebStatus(getString(R.string.map_load_failed), true);
+                    updateMapWebStatusError(R.string.map_load_failed);
                 }
             }
         });
@@ -7005,7 +7154,7 @@ public class AssistantActivity extends Activity {
         try {
             startActivity(new Intent(Intent.ACTION_VIEW, uri));
         } catch (Exception ex) {
-                updateMapWebStatus(getString(R.string.map_link_open_failed), true);
+            updateMapWebStatusError(R.string.map_link_open_failed);
         }
         return true;
     }
@@ -7031,6 +7180,9 @@ public class AssistantActivity extends Activity {
     }
 
     private void openInteractiveMapExternally() {
+        if (releaseInteractiveMapTextInputThen(this::openInteractiveMapExternally)) {
+            return;
+        }
         String url = normalizeInteractiveMapUrl(selectedProfile.interactiveMapUrl);
         if (url.length() == 0) {
             showErrorAction(getString(R.string.map_add_interactive_first));
@@ -7043,12 +7195,23 @@ public class AssistantActivity extends Activity {
         }
     }
 
-    private void updateMapWebStatus(String message, boolean error) {
-        if (activeMapWebStatus == null) {
+    private void updateMapWebStatusLoading() {
+        if (activeMapLoadIndicator != null) {
+            activeMapLoadIndicator.setLoading();
+        }
+    }
+
+    private void updateMapWebStatusLoaded() {
+        if (activeMapLoadIndicator != null) {
+            activeMapLoadIndicator.setLoaded();
+        }
+    }
+
+    private void updateMapWebStatusError(int descriptionRes) {
+        if (activeMapLoadIndicator == null) {
             return;
         }
-        activeMapWebStatus.setText(message);
-        activeMapWebStatus.setTextColor(error ? DANGER : MUTED);
+        activeMapLoadIndicator.setError(descriptionRes);
     }
 
     private void chooseMapFile() {
@@ -9228,11 +9391,14 @@ public class AssistantActivity extends Activity {
 
     private void releaseMapWebView() {
         if (activeMapWebView == null) {
-            activeMapWebStatus = null;
+            activeMapLoadIndicator = null;
             activeMapWebError = false;
             return;
         }
         try {
+            if (activeMapWebView instanceof InteractiveMapWebView) {
+                ((InteractiveMapWebView) activeMapWebView).setOnTextInputRequested(null);
+            }
             activeMapWebView.stopLoading();
             activeMapWebView.setWebChromeClient(null);
             activeMapWebView.setWebViewClient(null);
@@ -9242,7 +9408,7 @@ public class AssistantActivity extends Activity {
         } catch (Exception ignored) {
         }
         activeMapWebView = null;
-        activeMapWebStatus = null;
+        activeMapLoadIndicator = null;
         activeMapWebError = false;
     }
 
@@ -9965,6 +10131,8 @@ public class AssistantActivity extends Activity {
         profile.syncLegacyMapFields();
         profile.interactiveMapTitle = source.interactiveMapTitle;
         profile.interactiveMapUrl = source.interactiveMapUrl;
+        profile.interactiveMapBrowserMode = InteractiveMapBrowserSettings.normalize(
+                source.interactiveMapBrowserMode);
         for (MapMarker marker : source.mapMarkers) {
             profile.mapMarkers.add(new MapMarker(marker.title, marker.note, marker.position));
         }

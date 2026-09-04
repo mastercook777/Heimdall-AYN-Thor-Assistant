@@ -465,9 +465,15 @@
     <string name="map_local">本地地图</string>
     <string name="map_untitled">未命名地图</string>
     <string name="map_interactive">互动地图</string>
+    <string name="map_browser_identity">浏览器身份</string>
+    <string name="map_browser_mobile">手机</string>
+    <string name="map_browser_desktop">电脑</string>
+    <string name="map_browser_identity_current">浏览器身份：%1$s。点击切换。</string>
+    <string name="map_browser_mode_changed">已切换为%1$s浏览器身份。</string>
     <string name="map_reset_zoom">复位缩放</string>
     <string name="map_embedded_browser_unavailable">内置网页查看器不可用，请尝试外部打开。</string>
     <string name="map_show_navigation">显示地图导航</string>
+    <string name="map_status_control_description">%1$s %2$s</string>
     <string name="map_add">添加地图</string>
     <string name="map_rename">重命名</string>
     <string name="map_delete">删除</string>
@@ -477,7 +483,6 @@
     <string name="map_interactive_empty">添加游戏互动地图网址后，可以在下屏内直接缩放、拖动和查找点位。</string>
     <string name="map_edit_interactive">编辑互动地图</string>
     <string name="map_loading">正在加载…</string>
-    <string name="map_loading_progress">正在加载… %1$d%%</string>
     <string name="map_loaded">地图已加载。</string>
     <string name="map_load_failed">加载失败，可刷新或使用外部打开。</string>
     <string name="map_link_open_failed">无法打开该链接。</string>

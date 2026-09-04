@@ -25,6 +25,7 @@ public final class GameProfile {
     public String mapUri = "";
     public String interactiveMapTitle = "";
     public String interactiveMapUrl = "";
+    public String interactiveMapBrowserMode = InteractiveMapBrowserSettings.MODE_MOBILE;
     public TouchpadSettings touchpadSettings = new TouchpadSettings();
     public WidgetLayout widgetLayout = WidgetLayout.defaultLayout();
     public final List<Macro> macros = new ArrayList<>();
@@ -73,6 +74,8 @@ public final class GameProfile {
         object.put("mapUri", mapUri);
         object.put("interactiveMapTitle", interactiveMapTitle);
         object.put("interactiveMapUrl", interactiveMapUrl);
+        object.put("interactiveMapBrowserMode",
+                InteractiveMapBrowserSettings.normalize(interactiveMapBrowserMode));
         object.put("touchpadSettings", safeTouchpadSettings().toJson());
         object.put("widgetLayout", safeWidgetLayout().toJson());
         JSONArray macroArray = new JSONArray();
@@ -139,6 +142,8 @@ public final class GameProfile {
         profile.mapUri = object.optString("mapUri", "");
         profile.interactiveMapTitle = object.optString("interactiveMapTitle", "");
         profile.interactiveMapUrl = object.optString("interactiveMapUrl", "");
+        profile.interactiveMapBrowserMode = InteractiveMapBrowserSettings.normalize(
+                object.optString("interactiveMapBrowserMode", ""));
         JSONArray mapArray = object.optJSONArray("maps");
         if (mapArray != null) {
             for (int i = 0; i < mapArray.length(); i++) {

@@ -469,9 +469,15 @@
     <string name="map_local">Local map</string>
     <string name="map_untitled">Untitled map</string>
     <string name="map_interactive">Interactive Map</string>
+    <string name="map_browser_identity">Browser identity</string>
+    <string name="map_browser_mobile">Mobile</string>
+    <string name="map_browser_desktop">Desktop</string>
+    <string name="map_browser_identity_current">Browser identity: %1$s. Tap to switch.</string>
+    <string name="map_browser_mode_changed">Using %1$s browser identity.</string>
     <string name="map_reset_zoom">Reset zoom</string>
     <string name="map_embedded_browser_unavailable">The built-in browser is unavailable. Try opening the map externally.</string>
     <string name="map_show_navigation">Show map navigation</string>
+    <string name="map_status_control_description">%1$s %2$s</string>
     <string name="map_add">Add map</string>
     <string name="map_rename">Rename</string>
     <string name="map_delete">Delete</string>
@@ -481,7 +487,6 @@
     <string name="map_interactive_empty">Add an Interactive Map URL to zoom, pan, and find locations directly on the lower screen.</string>
     <string name="map_edit_interactive">Edit Interactive Map</string>
     <string name="map_loading">Loading…</string>
-    <string name="map_loading_progress">Loading… %1$d%%</string>
     <string name="map_loaded">Map loaded.</string>
     <string name="map_load_failed">Loading failed. Refresh or open the map externally.</string>
     <string name="map_link_open_failed">Could not open this link.</string>

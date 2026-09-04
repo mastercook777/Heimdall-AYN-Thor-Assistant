@@ -71,6 +71,7 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
             testUpperDisplaySingleTouchHandoffCoordinateContract();
             testUpperDisplayStartedLifecycleHandoffContract();
             testStartupCapabilityDefaultContract();
+            testInteractiveMapBrowserSettingsContract();
             testSelfContainedRoundTripAfterSourcesAreDeleted();
             testCorruptMissingUnsafeAndOversizedBundlesFailClosed();
             testLegacyProfileJsonRemainsImportable();
@@ -97,6 +98,40 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
                 ShizukuNativeUserService.TRANSACTION_RELEASE_VIRTUAL_KEYBOARD_KEYS);
         assertEquals(ShizukuNativeUserService.TRANSACTION_RELEASE_VIRTUAL_KEYBOARD_KEYS + 1,
                 ShizukuNativeUserService.TRANSACTION_RELEASE_VIRTUAL_KEYBOARD);
+    }
+
+    public void testInteractiveMapBrowserSettingsContract() throws Exception {
+        assertEquals(InteractiveMapBrowserSettings.MODE_MOBILE,
+                InteractiveMapBrowserSettings.normalize(null));
+        assertEquals(InteractiveMapBrowserSettings.MODE_MOBILE,
+                InteractiveMapBrowserSettings.normalize("unknown"));
+        assertEquals(InteractiveMapBrowserSettings.MODE_DESKTOP,
+                InteractiveMapBrowserSettings.normalize(" DESKTOP "));
+
+        String mobileUserAgent = "Mozilla/5.0 (Linux; Android 15; Thor Build/AP3A; wv) "
+                + "AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 "
+                + "Chrome/140.0.0.0 Mobile Safari/537.36";
+        String desktopUserAgent = InteractiveMapBrowserSettings.desktopUserAgent(mobileUserAgent);
+        assertTrue(desktopUserAgent.contains("(X11; Linux x86_64)"));
+        assertTrue(desktopUserAgent.contains("Chrome/140.0.0.0"));
+        assertFalse(desktopUserAgent.contains("Android"));
+        assertFalse(desktopUserAgent.contains("Version/4.0"));
+        assertFalse(desktopUserAgent.contains("Mobile"));
+
+        JSONObject legacy = new JSONObject();
+        legacy.put("name", "Legacy map");
+        legacy.put("mode", "generic");
+        GameProfile legacyProfile = GameProfile.fromJson(legacy);
+        assertEquals(InteractiveMapBrowserSettings.MODE_MOBILE,
+                legacyProfile.interactiveMapBrowserMode);
+
+        legacyProfile.interactiveMapTitle = "World map";
+        legacyProfile.interactiveMapUrl = "https://example.com/map";
+        legacyProfile.interactiveMapBrowserMode = InteractiveMapBrowserSettings.MODE_DESKTOP;
+        GameProfile restored = GameProfile.fromJson(legacyProfile.toJson());
+        assertEquals(InteractiveMapBrowserSettings.MODE_DESKTOP,
+                restored.interactiveMapBrowserMode);
+        assertEquals("https://example.com/map", restored.interactiveMapUrl);
     }
 
     public void testUpperDisplaySingleTouchHandoffCoordinateContract() {
@@ -1228,6 +1263,9 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
         profile.iconUri = iconSource.toString();
         profile.maps.add(new MapEntry("同名攻略", mapSource.toString()));
         profile.maps.add(new MapEntry("PDF 地图", pdfSource.toString()));
+        profile.interactiveMapTitle = "在线地图";
+        profile.interactiveMapUrl = "https://example.com/interactive-map";
+        profile.interactiveMapBrowserMode = InteractiveMapBrowserSettings.MODE_DESKTOP;
         GuideEntry bookmarkedGuide = new GuideEntry("同名攻略", GuideEntry.TYPE_FILE,
                 guideSource.toString());
         bookmarkedGuide.addBookmark("Boss route", 240, 18, 12, 900,
@@ -1281,6 +1319,9 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
                 + target.getPackageName() + ".profile-assets/"));
         assertReadable(Uri.parse(restored.iconUri));
         assertEquals(2, restored.maps.size());
+        assertEquals("https://example.com/interactive-map", restored.interactiveMapUrl);
+        assertEquals(InteractiveMapBrowserSettings.MODE_DESKTOP,
+                restored.interactiveMapBrowserMode);
         assertReadable(Uri.parse(restored.maps.get(0).uri));
         assertReadable(Uri.parse(restored.maps.get(1).uri));
         assertEquals(2, restored.guides.size());
