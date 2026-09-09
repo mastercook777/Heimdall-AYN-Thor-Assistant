@@ -311,8 +311,16 @@ final class TouchpadSettingsController {
             disable(button, R.string.touch_precision_requires_controller_description);
         }
         if (TouchpadSettings.MODE_VIRTUAL_MOUSE.equals(mode)
-                && !ShizukuNativeController.isReady()) {
+                && !host.modeAvailable(mode)) {
             disable(button, R.string.virtual_mouse_unavailable);
+        }
+        if (TouchpadSettings.MODE_SHIZUKU_TOUCH.equals(mode)
+                && !host.modeAvailable(mode)) {
+            disable(button, R.string.action_connection_setup_required);
+        }
+        if (TouchpadSettings.MODE_RIGHT_STICK.equals(mode)
+                && !host.modeAvailable(mode)) {
+            disable(button, R.string.action_controller_enhancement_required);
         }
         return button;
     }

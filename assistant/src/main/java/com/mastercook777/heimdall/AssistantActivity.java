@@ -160,6 +160,7 @@ public class AssistantActivity extends Activity {
     private static final int SETTINGS_MAGNIFIER = 5;
     private static final int SETTINGS_APPEARANCE = 6;
     private static final int SETTINGS_DIAGNOSTICS = 7;
+    private static final int SETTINGS_GETTING_STARTED = 8;
     private static final String STATE_ACTIVE_SCREEN = "heimdall.active_screen";
     private static final String STATE_SETTINGS_SECTION = "heimdall.settings_section";
     private static final String STATE_SETTINGS_SCROLL_Y = "heimdall.settings_scroll_y";
@@ -226,6 +227,7 @@ public class AssistantActivity extends Activity {
     private StartupReadinessCoordinator startupReadinessCoordinator;
     private StartupReadinessView startupReadinessView;
     private long startupReadinessShownAt;
+    private FirstSetupView firstSetupView;
     private int targetDisplayId = Display.DEFAULT_DISPLAY;
     private int targetDisplayWidth;
     private int targetDisplayHeight;
@@ -351,6 +353,11 @@ public class AssistantActivity extends Activity {
     private GamepadRecordingSession activeGamepadRecordingSession;
     private final Handler uiHandler = new Handler(Looper.getMainLooper());
     private final Runnable hideStartupReadiness = () -> dismissStartupReadiness(true);
+    private final ShizukuNativeController.PermissionResultListener
+            shizukuPermissionResultListener = granted ->
+                    uiHandler.post(() -> handleShizukuPermissionResult(granted));
+    private final Runnable shizukuServiceStateListener =
+            () -> uiHandler.post(this::refreshConnectionCapabilitySurfaces);
     private final InputBridge.Callback inputStatusCallback = new InputBridge.Callback() {
         @Override
         public void onStatus(String message) {
@@ -416,6 +423,8 @@ public class AssistantActivity extends Activity {
     private int pendingCanvasImportFrameHeight = 1;
     private CanvasAssetStore.Request pendingCanvasImportRequest;
     private boolean canvasOverlayActive;
+    private CanvasCompositionEditor activeCanvasCompositionEditor;
+    private FullscreenImageViewer activeCanvasFullscreenViewer;
     private final Runnable hideFullscreenMapControls = new Runnable() {
         @Override
         public void run() {
@@ -490,6 +499,10 @@ public class AssistantActivity extends Activity {
             updateSettingsDetectedGameStatus(snapshot);
             maybeAutoSwitchProfile(ForegroundAppTracker.latest());
         });
+        ShizukuNativeController.addPermissionResultListener(
+                shizukuPermissionResultListener);
+        ShizukuNativeController.addServiceStateListener(
+                shizukuServiceStateListener);
         HeimdallStabilityDiagnostics.reportPreviousExit(this);
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         recordFocusBoundary("create-protected");
@@ -498,7 +511,9 @@ public class AssistantActivity extends Activity {
                 + Integer.toHexString(launchIntent == null ? 0 : launchIntent.getFlags()));
         enterImmersiveMode();
 
+        boolean hadStoredProfiles = ProfileStore.hasStoredProfiles(this);
         profiles = ProfileStore.loadProfiles(this);
+        FirstSetupState.initialize(this, hadStoredProfiles);
         selectedProfileIndex = ProfileStore.loadSelectedIndex(this, profiles.size());
         selectedProfile = profiles.get(selectedProfileIndex);
         touchpadSettings = selectedProfile.safeTouchpadSettings();
@@ -682,6 +697,7 @@ public class AssistantActivity extends Activity {
         startupReadinessCoordinator = null;
         if (readinessCoordinator != null) readinessCoordinator.close();
         dismissStartupReadiness(false);
+        dismissFirstSetup(false);
         flushGuideReadingPosition();
         dismissFullVirtualKeyboard(false);
         parkVirtualMouseDispatcher();
@@ -711,6 +727,10 @@ public class AssistantActivity extends Activity {
         thorPerformanceCompatibility.release();
         DebugPerformanceDiagnostics.shutdown();
         if (gameContextController != null) gameContextController.close();
+        ShizukuNativeController.removePermissionResultListener(
+                shizukuPermissionResultListener);
+        ShizukuNativeController.removeServiceStateListener(
+                shizukuServiceStateListener);
         super.onDestroy();
     }
 
@@ -749,12 +769,14 @@ public class AssistantActivity extends Activity {
         if (!DebugPerformanceDiagnostics.isStaticUi()) {
             resumeMagnifierViews();
         }
+        updateCanvasPlayback();
         if (activeMapWebView != null) {
             activeMapWebView.onResume();
         }
         if (touchPadView != null) {
             touchPadView.requestAdvancedInputPreparation();
         }
+        uiHandler.post(this::refreshConnectionCapabilitySurfaces);
     }
 
     @Override
@@ -766,6 +788,7 @@ public class AssistantActivity extends Activity {
         if (!magnifierRegionCaptureInProgress) {
             pauseMagnifierViews();
         }
+        pauseCanvasPlayback();
         resetRightStickIfNeeded();
         parkVirtualMouseDispatcher();
         parkKeyboardInputSession();
@@ -1028,7 +1051,9 @@ public class AssistantActivity extends Activity {
                 && !DebugPerformanceDiagnostics.isStaticUi()
                 && ForegroundAppTracker.isEnabled(this);
         if (gameContextController != null) {
-            gameContextController.setEnabled(profileAwarenessActive);
+            gameContextController.setEnabled(profileAwarenessActive
+                    && InputBridge.advancedControlsEnabled(this)
+                    && ShizukuNativeController.isPermissionGranted());
         }
         if (!profileAwarenessActive) {
             return;
@@ -1039,7 +1064,11 @@ public class AssistantActivity extends Activity {
             service.refreshForegroundApp();
         }
         ForegroundAppTracker.Snapshot foreground = ForegroundAppTracker.latest();
-        if (gameContextController != null) gameContextController.refresh(foreground);
+        if (gameContextController != null
+                && InputBridge.advancedControlsEnabled(this)
+                && ShizukuNativeController.isPermissionGranted()) {
+            gameContextController.refresh(foreground);
+        }
         maybeAutoSwitchProfile(foreground);
         DebugPerformanceDiagnostics.registerRepeatingTask(
                 "App-aware upper-window scan", 1200L);
@@ -1522,6 +1551,88 @@ public class AssistantActivity extends Activity {
             if (view.getParent() instanceof ViewGroup) {
                 ((ViewGroup) view.getParent()).removeView(view);
             }
+            if (animate) maybeShowFirstSetupAfterStartup();
+            return;
+        }
+        view.animate().alpha(0f).setDuration(PANEL_EXIT_MS).withEndAction(() -> {
+            if (view.getParent() instanceof ViewGroup) {
+                ((ViewGroup) view.getParent()).removeView(view);
+            }
+            maybeShowFirstSetupAfterStartup();
+        }).start();
+    }
+
+    private void maybeShowFirstSetupAfterStartup() {
+        if (isFinishing() || isDestroyed() || DebugPerformanceDiagnostics.isStaticUi()) return;
+        int phase = FirstSetupState.phase(this);
+        if (phase == FirstSetupState.PHASE_RESOLVED || firstSetupView != null) return;
+
+        firstSetupView = new FirstSetupView(this, new FirstSetupView.Listener() {
+            @Override
+            public void onGetStarted() {
+                FirstSetupState.markChecklistStarted(AssistantActivity.this);
+                FirstSetupView view = firstSetupView;
+                if (view != null) {
+                    view.showChecklist();
+                    refreshFirstSetupView();
+                }
+            }
+
+            @Override
+            public void onFinishSetup() {
+                FirstSetupState.markResolved(AssistantActivity.this);
+                dismissFirstSetup(true);
+            }
+
+            @Override
+            public void onCreateProfile() {
+                addBlankProfile();
+                refreshFirstSetupView();
+            }
+
+            @Override
+            public void onImportProfile() {
+                showProfileImportDialog(null);
+            }
+
+            @Override
+            public void onOpenBasicTouch() {
+                InputBridge.openAccessibilitySettings(AssistantActivity.this);
+            }
+
+            @Override
+            public void onOpenAdvancedControls() {
+                openAdvancedControlsFromFirstSetup();
+            }
+        });
+        if (phase == FirstSetupState.PHASE_CHECKLIST) {
+            firstSetupView.showChecklist();
+            refreshFirstSetupView();
+        } else {
+            firstSetupView.showWelcome();
+        }
+        attachFirstSetup();
+    }
+
+    private void attachFirstSetup() {
+        FirstSetupView view = firstSetupView;
+        if (view == null || overlayHost == null || view.getParent() == overlayHost) return;
+        if (view.getParent() instanceof ViewGroup) {
+            ((ViewGroup) view.getParent()).removeView(view);
+        }
+        overlayHost.addView(view, new FrameLayout.LayoutParams(-1, -1));
+        view.bringToFront();
+    }
+
+    private void dismissFirstSetup(boolean animate) {
+        FirstSetupView view = firstSetupView;
+        firstSetupView = null;
+        if (view == null) return;
+        view.animate().cancel();
+        if (!animate || !shouldAnimateUi() || view.getParent() == null) {
+            if (view.getParent() instanceof ViewGroup) {
+                ((ViewGroup) view.getParent()).removeView(view);
+            }
             return;
         }
         view.animate().alpha(0f).setDuration(PANEL_EXIT_MS).withEndAction(() -> {
@@ -1529,6 +1640,63 @@ public class AssistantActivity extends Activity {
                 ((ViewGroup) view.getParent()).removeView(view);
             }
         }).start();
+    }
+
+    private void refreshFirstSetupView() {
+        FirstSetupView view = firstSetupView;
+        if (view == null) return;
+        view.refresh(FirstSetupState.isProfileCreated(this),
+                ThorAccessibilityService.isReady(),
+                InputBridge.advancedControlsReady(this));
+    }
+
+    private void refreshFirstSetupSurfaces() {
+        refreshFirstSetupView();
+        if (activeScreen == SCREEN_SETTINGS
+                && activeSettingsSection == SETTINGS_GETTING_STARTED
+                && settingsContentContainer != null) {
+            refreshSettingsContent();
+        }
+    }
+
+    private void handleShizukuPermissionResult(boolean granted) {
+        if (isFinishing() || isDestroyed()) {
+            return;
+        }
+        if (granted) {
+            if (!InputBridge.enableAdvancedControls(this)) {
+                showErrorAction(getString(R.string.connection_advanced_enable_failed));
+                refreshConnectionCapabilitySurfaces();
+                return;
+            }
+            ShizukuNativeController.requestServiceBinding(this);
+            showAction(getString(R.string.connection_shizuku_authorized));
+        } else {
+            showErrorAction(getString(R.string.connection_shizuku_denied));
+        }
+        updateProfileAwarenessRegistration();
+        refreshConnectionCapabilitySurfaces();
+    }
+
+    private void refreshConnectionCapabilitySurfaces() {
+        if (isFinishing() || isDestroyed()) {
+            return;
+        }
+        updateBridgeStatus();
+        refreshFirstSetupSurfaces();
+        if (activeScreen == SCREEN_SETTINGS
+                && activeSettingsSection == SETTINGS_INPUT
+                && settingsContentContainer != null) {
+            refreshSettingsContent();
+        }
+    }
+
+    private void openAdvancedControlsFromFirstSetup() {
+        dismissFirstSetup(false);
+        activeSettingsSection = SETTINGS_INPUT;
+        settingsContentScrollY = 0;
+        activeScreen = SCREEN_SETTINGS;
+        rebuildContent();
     }
 
     private void recordFocusBoundary(String event) {
@@ -2053,6 +2221,8 @@ public class AssistantActivity extends Activity {
                             showErrorAction(getString(R.string.canvas_save_layout_first));
                         }
                     });
+            view.setPlaybackAllowed(activityResumed && activeScreen == SCREEN_MAIN
+                    && !canvasOverlayActive);
             canvasViews.add(view);
             return view;
         }
@@ -2901,6 +3071,34 @@ public class AssistantActivity extends Activity {
         canvasViews.clear();
     }
 
+    private void pauseCanvasPlayback() {
+        for (CanvasWidgetView view : canvasViews) {
+            view.setPlaybackAllowed(false);
+        }
+        if (activeCanvasCompositionEditor != null) {
+            activeCanvasCompositionEditor.setPlaybackAllowed(false);
+        }
+        if (activeCanvasFullscreenViewer != null) {
+            activeCanvasFullscreenViewer.setPlaybackAllowed(false);
+        }
+    }
+
+    private void updateCanvasPlayback() {
+        boolean runtimeAllowed = activityResumed && activeScreen == SCREEN_MAIN
+                && !canvasOverlayActive && panelOverlays.isEmpty();
+        for (CanvasWidgetView view : canvasViews) {
+            view.setPlaybackAllowed(runtimeAllowed);
+        }
+        if (activeCanvasCompositionEditor != null) {
+            activeCanvasCompositionEditor.setPlaybackAllowed(
+                    activityResumed && canvasOverlayActive);
+        }
+        if (activeCanvasFullscreenViewer != null) {
+            activeCanvasFullscreenViewer.setPlaybackAllowed(
+                    activityResumed && canvasOverlayActive);
+        }
+    }
+
     private void chooseCanvasImage(WidgetLayout.Item item, int frameWidth, int frameHeight) {
         if (hasUnsavedWidgetLayout()) {
             showErrorAction(getString(R.string.canvas_save_layout_first));
@@ -2918,9 +3116,10 @@ public class AssistantActivity extends Activity {
         pendingCanvasImportFrameHeight = Math.max(1, frameHeight);
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         intent.addCategory(Intent.CATEGORY_OPENABLE);
-        intent.setType("image/*");
+        intent.setType("*/*");
         intent.putExtra(Intent.EXTRA_MIME_TYPES,
-                new String[]{"image/jpeg", "image/png", "image/webp"});
+                new String[]{"image/jpeg", "image/png", "image/webp", "image/gif",
+                        "video/mp4"});
         intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
         try {
             startActivityForResult(intent, REQUEST_CANVAS_IMAGE);
@@ -2939,14 +3138,21 @@ public class AssistantActivity extends Activity {
         pendingCanvasImportRequest = CanvasAssetStore.importAsync(this, uri,
                 new CanvasAssetStore.ImportCallback() {
                     @Override
-                    public void onImported(String assetId) {
+                    public void onImported(CanvasAssetStore.ImportedAsset importedAsset) {
                         pendingCanvasImportRequest = null;
                         if (!isCanvasTargetValid(profile, item)
                                 || selectedProfile != profile || isFinishing() || isDestroyed()) {
                             return;
                         }
+                        if (!CanvasAnimationPolicy.canAssign(profile.safeWidgetLayout(), item,
+                                importedAsset.animated)) {
+                            showErrorAction(getString(R.string.canvas_animated_profile_limit));
+                            return;
+                        }
                         CanvasConfig draft = new CanvasConfig();
-                        draft.assetId = assetId;
+                        draft.assetId = importedAsset.assetId;
+                        draft.animated = importedAsset.animated;
+                        draft.video = importedAsset.video;
                         if (item.canvasConfig != null) {
                             draft.shape = item.canvasConfig.shape;
                         }
@@ -2966,8 +3172,11 @@ public class AssistantActivity extends Activity {
         if (error == CanvasAssetStore.ImportError.TOO_LARGE) {
             return R.string.canvas_import_too_large;
         }
-        if (error == CanvasAssetStore.ImportError.ANIMATED) {
-            return R.string.canvas_animated_unsupported;
+        if (error == CanvasAssetStore.ImportError.APNG_UNSUPPORTED) {
+            return R.string.canvas_apng_unsupported;
+        }
+        if (error == CanvasAssetStore.ImportError.PLATFORM_UNSUPPORTED) {
+            return R.string.canvas_animation_platform_unsupported;
         }
         if (error == CanvasAssetStore.ImportError.UNSUPPORTED) {
             return R.string.canvas_format_unsupported;
@@ -3020,15 +3229,23 @@ public class AssistantActivity extends Activity {
         FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER);
         params.setMargins(dp(8), dp(8), dp(8), dp(8));
         canvasOverlayActive = true;
+        activeCanvasCompositionEditor = editor;
+        updateCanvasPlayback();
         overlayHolder[0] = showPanelOverlay(editor, params, () -> {
             canvasOverlayActive = false;
+            if (activeCanvasCompositionEditor == editorHolder[0]) {
+                activeCanvasCompositionEditor = null;
+            }
             if (editorHolder[0] != null) {
                 editorHolder[0].release();
             }
+            updateCanvasPlayback();
         });
         if (overlayHolder[0] == null) {
             canvasOverlayActive = false;
+            activeCanvasCompositionEditor = null;
             editor.release();
+            updateCanvasPlayback();
         }
     }
 
@@ -3047,7 +3264,7 @@ public class AssistantActivity extends Activity {
         CanvasConfig config = targetItem.canvasConfig.copy();
         final PanelOverlay[] overlayHolder = new PanelOverlay[1];
         final FullscreenImageViewer[] viewerHolder = new FullscreenImageViewer[1];
-        FullscreenImageViewer viewer = new FullscreenImageViewer(this, config.assetId,
+        FullscreenImageViewer viewer = new FullscreenImageViewer(this, config,
                 new FullscreenImageViewer.Listener() {
                     @Override
                     public void onClose() {
@@ -3069,15 +3286,23 @@ public class AssistantActivity extends Activity {
         viewerHolder[0] = viewer;
         FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER);
         canvasOverlayActive = true;
+        activeCanvasFullscreenViewer = viewer;
+        updateCanvasPlayback();
         overlayHolder[0] = showPanelOverlay(viewer, params, () -> {
             canvasOverlayActive = false;
+            if (activeCanvasFullscreenViewer == viewerHolder[0]) {
+                activeCanvasFullscreenViewer = null;
+            }
             if (viewerHolder[0] != null) {
                 viewerHolder[0].release();
             }
+            updateCanvasPlayback();
         });
         if (overlayHolder[0] == null) {
             canvasOverlayActive = false;
+            activeCanvasFullscreenViewer = null;
             viewer.release();
+            updateCanvasPlayback();
         }
     }
 
@@ -3134,10 +3359,15 @@ public class AssistantActivity extends Activity {
                 settingsOverlayWidth(520), -2, Gravity.CENTER);
         params.setMargins(dp(12), dp(12), dp(12), dp(12));
         canvasOverlayActive = true;
+        updateCanvasPlayback();
         overlayHolder[0] = showPanelOverlay(shell, params,
-                () -> canvasOverlayActive = false);
+                () -> {
+                    canvasOverlayActive = false;
+                    updateCanvasPlayback();
+                });
         if (overlayHolder[0] == null) {
             canvasOverlayActive = false;
+            updateCanvasPlayback();
         }
     }
 
@@ -3173,6 +3403,7 @@ public class AssistantActivity extends Activity {
 
     private void confirmRemoveCanvasImage(GameProfile profile, WidgetLayout.Item item) {
         canvasOverlayActive = true;
+        updateCanvasPlayback();
         PanelOverlay overlay = showSettingsDecisionPanel(getString(R.string.canvas_remove_image),
                 getString(R.string.canvas_remove_confirm), null, null,
                 getString(R.string.canvas_remove_image), () -> {
@@ -3187,9 +3418,13 @@ public class AssistantActivity extends Activity {
                     ProfileStore.saveProfiles(this, profiles);
                     rebuildContent();
                     showAction(getString(R.string.canvas_image_removed));
-                }, () -> canvasOverlayActive = false);
+                }, () -> {
+                    canvasOverlayActive = false;
+                    updateCanvasPlayback();
+                });
         if (overlay == null) {
             canvasOverlayActive = false;
+            updateCanvasPlayback();
         }
     }
 
@@ -4443,6 +4678,8 @@ public class AssistantActivity extends Activity {
         nav.setOrientation(LinearLayout.VERTICAL);
         rail.addView(nav, new LinearLayout.LayoutParams(-1, 0, 1));
 
+        nav.addView(settingsCategoryButton(getString(R.string.settings_category_getting_started),
+                R.drawable.ic_heimdall_header_mark_blue, SETTINGS_GETTING_STARTED));
         nav.addView(settingsCategoryButton(getString(R.string.settings_category_main),
                 R.drawable.ic_overview, SETTINGS_LAYOUT));
         nav.addView(settingsCategoryButton(getString(R.string.settings_category_controls),
@@ -4483,13 +4720,22 @@ public class AssistantActivity extends Activity {
         rightColumn.setOrientation(LinearLayout.VERTICAL);
         shell.addView(rightColumn, new LinearLayout.LayoutParams(0, -1, 1));
 
+        FrameLayout contentFrame = new FrameLayout(this);
+        contentFrame.setBackground(HeimdallUi.isPearl(this)
+                ? HeimdallUi.cncFlush(this, 12)
+                : rounded(0xFF0B1018, HeimdallUi.border(this), 12));
+        rightColumn.addView(contentFrame, new LinearLayout.LayoutParams(-1, 0, 1));
+
         ScrollView contentScroll = new ScrollView(this);
         settingsContentScroll = contentScroll;
         contentScroll.setFillViewport(true);
-        contentScroll.setBackground(HeimdallUi.isPearl(this)
-                ? HeimdallUi.cncFlush(this, 12)
-                : rounded(0xFF0B1018, HeimdallUi.border(this), 12));
-        rightColumn.addView(contentScroll, new LinearLayout.LayoutParams(-1, 0, 1));
+        contentScroll.setClipToPadding(true);
+        contentScroll.setBackgroundColor(Color.TRANSPARENT);
+        int contentFrameInset = HeimdallUi.isPearl(this) ? dp(2) : dp(1);
+        FrameLayout.LayoutParams contentScrollParams = new FrameLayout.LayoutParams(-1, -1);
+        contentScrollParams.setMargins(contentFrameInset, contentFrameInset,
+                contentFrameInset, contentFrameInset);
+        contentFrame.addView(contentScroll, contentScrollParams);
 
         LinearLayout content = new LinearLayout(this);
         settingsContentContainer = content;
@@ -4508,19 +4754,22 @@ public class AssistantActivity extends Activity {
         footer.addView(settingsFooterButton(getString(R.string.common_back),
                 this::closeSettingsPanel, false, true));
         boolean canReset = activeSettingsSection != SETTINGS_PROFILE
-                && activeSettingsSection != SETTINGS_DIAGNOSTICS;
+                && activeSettingsSection != SETTINGS_DIAGNOSTICS
+                && activeSettingsSection != SETTINGS_INPUT
+                && activeSettingsSection != SETTINGS_GETTING_STARTED;
         String resetLabel = !canReset
                 ? getString(R.string.settings_no_reset)
-                : (activeSettingsSection == SETTINGS_INPUT
-                        ? getString(R.string.settings_use_basic_connection)
-                        : getString(R.string.settings_restore_defaults));
+                : getString(R.string.settings_restore_defaults);
         footer.addView(settingsFooterButton(resetLabel,
                 () -> runAfterTextInputFocusRelease(this::resetActiveSettingsSection),
                 false, canReset));
         boolean canSave = activeSettingsSection != SETTINGS_INPUT
-                && activeSettingsSection != SETTINGS_DIAGNOSTICS;
+                && activeSettingsSection != SETTINGS_DIAGNOSTICS
+                && activeSettingsSection != SETTINGS_GETTING_STARTED;
         String saveLabel = canSave ? getString(R.string.common_save)
                 : getString(activeSettingsSection == SETTINGS_DIAGNOSTICS
+                        || activeSettingsSection == SETTINGS_INPUT
+                        || activeSettingsSection == SETTINGS_GETTING_STARTED
                         ? R.string.settings_no_save
                         : R.string.settings_selection_applies_immediately);
         footer.addView(settingsFooterButton(saveLabel,
@@ -4636,7 +4885,9 @@ public class AssistantActivity extends Activity {
         summaryParams.setMargins(0, 0, 0, dp(6));
         content.addView(summary, summaryParams);
 
-        if (activeSettingsSection == SETTINGS_LAYOUT) {
+        if (activeSettingsSection == SETTINGS_GETTING_STARTED) {
+            populateGettingStartedSettingsContent(content);
+        } else if (activeSettingsSection == SETTINGS_LAYOUT) {
             populateLayoutSettingsContent(content);
         } else if (activeSettingsSection == SETTINGS_TOUCHPAD) {
             populateTouchpadSettingsContent(content);
@@ -4653,6 +4904,36 @@ public class AssistantActivity extends Activity {
         } else {
             populateProfileSettingsContent(content);
         }
+    }
+
+    private void populateGettingStartedSettingsContent(LinearLayout content) {
+        FirstSetupChecklistView checklist = new FirstSetupChecklistView(this,
+                new FirstSetupChecklistView.Listener() {
+                    @Override
+                    public void onCreateProfile() {
+                        addBlankProfile();
+                        refreshSettingsContent();
+                    }
+
+                    @Override
+                    public void onImportProfile() {
+                        showProfileImportDialog(null);
+                    }
+
+                    @Override
+                    public void onOpenBasicTouch() {
+                        InputBridge.openAccessibilitySettings(AssistantActivity.this);
+                    }
+
+                    @Override
+                    public void onOpenAdvancedControls() {
+                        openSettingsSection(SETTINGS_INPUT);
+                    }
+                });
+        checklist.refresh(FirstSetupState.isProfileCreated(this),
+                ThorAccessibilityService.isReady(),
+                InputBridge.advancedControlsReady(this));
+        content.addView(checklist, new LinearLayout.LayoutParams(-1, -2));
     }
 
     private void populateAppearanceSettingsContent(LinearLayout content) {
@@ -4788,7 +5069,7 @@ public class AssistantActivity extends Activity {
         card.setBackground(HeimdallUi.isPearl(this)
                 ? HeimdallUi.pearlMenuPanel(this, 10)
                 : HeimdallUi.fieldPanel(this, 10));
-        LinearLayout.LayoutParams cardParams = new LinearLayout.LayoutParams(-1, dp(204));
+        LinearLayout.LayoutParams cardParams = new LinearLayout.LayoutParams(-1, -2);
         cardParams.setMargins(0, dp(5), 0, dp(7));
         content.addView(card, cardParams);
 
@@ -4798,7 +5079,7 @@ public class AssistantActivity extends Activity {
 
         LinearLayout rangeRow = new LinearLayout(this);
         rangeRow.setOrientation(LinearLayout.HORIZONTAL);
-        card.addView(rangeRow, new LinearLayout.LayoutParams(-1, dp(46)));
+        card.addView(rangeRow, new LinearLayout.LayoutParams(-1, dp(62)));
 
         NumberStepper startInput = compactNumberStepper(1, 24, item.macroStart + 1);
         rangeRow.addView(labeledNumberStepper(
@@ -4812,7 +5093,7 @@ public class AssistantActivity extends Activity {
 
         LinearLayout layoutRow = new LinearLayout(this);
         layoutRow.setOrientation(LinearLayout.HORIZONTAL);
-        card.addView(layoutRow, new LinearLayout.LayoutParams(-1, dp(46)));
+        card.addView(layoutRow, new LinearLayout.LayoutParams(-1, dp(62)));
 
         NumberStepper columnsInput = compactNumberStepper(1, 4, item.macroColumns);
         layoutRow.addView(labeledNumberStepper(getString(R.string.common_columns),
@@ -4851,76 +5132,44 @@ public class AssistantActivity extends Activity {
         boolean accessibilityReady = ThorAccessibilityService.isReady();
         boolean shizukuReady = ShizukuNativeController.isReady();
         boolean nativeReady = nativeDevice != null && shizukuReady;
-        InputBridge.BackendOption accessibilityOption = null;
-        InputBridge.BackendOption shizukuOption = null;
-        InputBridge.BackendOption[] options = InputBridge.backendOptions(this);
-        for (InputBridge.BackendOption option : options) {
-            if (InputBridge.BACKEND_ACCESSIBILITY.equals(option.id)) {
-                accessibilityOption = option;
-            } else if (InputBridge.BACKEND_SHIZUKU.equals(option.id)) {
-                shizukuOption = option;
-            }
-        }
-        String selectedBackend = InputBridge.selectedBackendId(this);
-        boolean accessibilitySelected = InputBridge.BACKEND_ACCESSIBILITY.equals(selectedBackend);
-        boolean shizukuSelected = InputBridge.BACKEND_SHIZUKU.equals(selectedBackend);
+        InputBridge.AdvancedControlsState advancedState =
+                InputBridge.advancedControlsState(this);
+        boolean advancedReady = advancedState == InputBridge.AdvancedControlsState.READY;
 
         addSettingsInfoCard(content, getString(R.string.connection_capabilities),
                 getString(R.string.connection_capability_summary,
-                        getString(accessibilityReady ? R.string.connection_available
-                                : R.string.connection_basic_required),
-                        getString(nativeReady ? R.string.connection_available
-                                : R.string.connection_controller_required)),
-                accessibilityReady && nativeReady
-                        ? HeimdallUi.SEMANTIC_SUCCESS : HeimdallUi.SEMANTIC_WARNING);
+                        getString(accessibilityReady
+                                ? R.string.connection_state_ready
+                                : R.string.connection_state_not_enabled),
+                        getString(advancedControlsStateLabel(advancedState))),
+                advancedReady || accessibilityReady
+                        ? HeimdallUi.SEMANTIC_NEUTRAL : HeimdallUi.SEMANTIC_WARNING);
 
-        addSettingsLabel(content, getString(R.string.connection_methods));
-        if (accessibilityOption != null) {
-            InputBridge.BackendOption option = accessibilityOption;
-            addConnectionSettingsOption(content, getString(R.string.connection_basic_touch),
-                    getString(R.string.connection_basic_touch_summary),
-                    accessibilitySelected, accessibilityReady,
-                    accessibilitySelected
-                            ? getString(accessibilityReady
-                                    ? R.string.connection_manage_permission
-                                    : R.string.connection_enable)
-                            : getString(R.string.connection_use_this),
-                    true, () -> {
-                        if (!accessibilitySelected) {
-                            selectInputBackendFromSettings(option);
-                            if (accessibilityReady) {
-                                return;
-                            }
-                        }
-                        showAction(getString(accessibilityReady
-                                ? R.string.connection_accessibility_manage
-                                : R.string.connection_accessibility_enable));
-                        InputBridge.openSettings(this);
-                    });
-        }
-        if (shizukuOption != null) {
-            InputBridge.BackendOption option = shizukuOption;
-            String actionLabel = shizukuSelected && shizukuReady
-                    ? getString(nativeReady ? R.string.connection_connected
-                            : R.string.connection_waiting_controller)
-                    : getString(shizukuReady ? R.string.connection_use_this
-                            : R.string.connection_connect);
-            addConnectionSettingsOption(content,
-                    getString(R.string.connection_controller_enhancement),
-                    getString(R.string.connection_controller_summary),
-                    shizukuSelected, nativeReady, actionLabel,
-                    !(shizukuSelected && shizukuReady), () -> {
-                        if (!ShizukuNativeController.isBinderAlive()) {
-                            showErrorAction(getString(R.string.connection_start_shizuku));
-                            return;
-                        }
-                        if (!shizukuSelected || !ShizukuNativeController.isPermissionGranted()) {
-                            selectInputBackendFromSettings(option);
-                            return;
-                        }
-                        showAction(getString(R.string.connection_controller_connected));
-                    });
-        }
+        addSettingsLabel(content, getString(R.string.connection_capabilities_setup));
+        addConnectionCapabilityOption(content,
+                getString(R.string.connection_basic_touch),
+                getString(R.string.connection_basic_touch_summary),
+                getString(accessibilityReady
+                        ? R.string.connection_state_ready
+                        : R.string.connection_state_not_enabled),
+                accessibilityReady,
+                getString(accessibilityReady
+                        ? R.string.connection_manage_permission
+                        : R.string.connection_enable),
+                true, () -> {
+                    showAction(getString(accessibilityReady
+                            ? R.string.connection_accessibility_manage
+                            : R.string.connection_accessibility_enable));
+                    InputBridge.openAccessibilitySettings(this);
+                });
+        addConnectionCapabilityOption(content,
+                getString(R.string.first_setup_advanced_controls_title),
+                getString(R.string.connection_advanced_controls_summary),
+                getString(advancedControlsStateLabel(advancedState)),
+                advancedReady,
+                getString(advancedControlsActionLabel(advancedState)),
+                advancedState != InputBridge.AdvancedControlsState.PREPARING,
+                () -> handleAdvancedControlsAction(advancedState));
 
         LinearLayout detailsRow = settingsActionRow(content);
         detailsRow.addView(editorButton(showInputDiagnostics
@@ -4955,6 +5204,82 @@ public class AssistantActivity extends Activity {
         }
     }
 
+    private int advancedControlsStateLabel(InputBridge.AdvancedControlsState state) {
+        switch (state) {
+            case SHIZUKU_STOPPED:
+                return R.string.connection_state_shizuku_stopped;
+            case AUTHORIZATION_REQUIRED:
+                return R.string.connection_state_authorization_required;
+            case AUTHORIZED:
+                return R.string.connection_state_authorized;
+            case PREPARING:
+                return R.string.connection_state_preparing;
+            case READY:
+            default:
+                return R.string.connection_state_ready;
+        }
+    }
+
+    private int advancedControlsActionLabel(InputBridge.AdvancedControlsState state) {
+        switch (state) {
+            case SHIZUKU_STOPPED:
+                return R.string.connection_open_shizuku;
+            case AUTHORIZATION_REQUIRED:
+                return R.string.connection_authorize;
+            case AUTHORIZED:
+                return R.string.connection_prepare_advanced_controls;
+            case PREPARING:
+                return R.string.connection_preparing;
+            case READY:
+            default:
+                return R.string.connection_manage_shizuku;
+        }
+    }
+
+    private void handleAdvancedControlsAction(InputBridge.AdvancedControlsState state) {
+        switch (state) {
+            case SHIZUKU_STOPPED:
+                openShizukuManager(R.string.connection_shizuku_opened);
+                return;
+            case AUTHORIZATION_REQUIRED:
+                if (ShizukuNativeController.requestPermission()) {
+                    showAction(getString(R.string.connection_shizuku_request_sent));
+                } else {
+                    openShizukuManager(R.string.connection_shizuku_open_for_permission);
+                }
+                refreshConnectionCapabilitySurfaces();
+                return;
+            case AUTHORIZED:
+                if (!InputBridge.enableAdvancedControls(this)) {
+                    showErrorAction(getString(R.string.connection_advanced_enable_failed));
+                    return;
+                }
+                if (ShizukuNativeController.requestServiceBinding(this)) {
+                    showAction(getString(ShizukuNativeController.isServiceBound()
+                            ? R.string.connection_advanced_ready
+                            : R.string.connection_advanced_preparing));
+                } else {
+                    showErrorAction(getString(R.string.connection_advanced_prepare_failed));
+                }
+                refreshConnectionCapabilitySurfaces();
+                return;
+            case PREPARING:
+                refreshConnectionCapabilitySurfaces();
+                return;
+            case READY:
+            default:
+                openShizukuManager(R.string.connection_shizuku_opened);
+        }
+    }
+
+    private void openShizukuManager(int successMessageRes) {
+        if (ShizukuNativeController.openManager(this)) {
+            showAction(getString(successMessageRes));
+        } else {
+            showErrorAction(getString(R.string.connection_shizuku_app_missing));
+        }
+    }
+
     private void populateDiagnosticsSettingsContent(LinearLayout content) {
         addSettingsInfoCard(content, getString(R.string.diagnostics_last_exit),
                 HeimdallStabilityDiagnostics.previousExitSummary(this),
@@ -4965,27 +5290,6 @@ public class AssistantActivity extends Activity {
         LinearLayout row = settingsActionRow(content);
         row.addView(editorButton(getString(R.string.diagnostics_export_action),
                 this::requestDiagnosticExport));
-        if (BuildConfig.DEBUG) {
-            addSettingsLabel(content, getString(R.string.rom_context_probe_title));
-            addSettingsHelp(content, getString(R.string.rom_context_probe_settings_help));
-            LinearLayout probeRow = settingsActionRow(content);
-            probeRow.addView(editorButton(getString(R.string.rom_context_probe_open),
-                    this::openRomContextProbe));
-        }
-    }
-
-    private void openRomContextProbe() {
-        if (!BuildConfig.DEBUG) {
-            return;
-        }
-        Intent intent = new Intent();
-        intent.setClassName(this,
-                "com.mastercook777.heimdall.RomContextProbeActivity");
-        try {
-            startActivity(intent);
-        } catch (RuntimeException error) {
-            showErrorAction(getString(R.string.rom_context_probe_open_error));
-        }
     }
 
     private void requestDiagnosticExport() {
@@ -5127,7 +5431,8 @@ public class AssistantActivity extends Activity {
                         R.string.profile_game_detection_requires_app_awareness));
                 return;
             }
-            if (!ShizukuNativeController.isPermissionGranted()) {
+            if (!InputBridge.advancedControlsEnabled(this)
+                    || !ShizukuNativeController.isPermissionGranted()) {
                 showErrorAction(getString(
                         R.string.profile_game_detection_requires_shizuku));
                 return;
@@ -5154,7 +5459,8 @@ public class AssistantActivity extends Activity {
                         R.string.profile_game_detection_requires_app_awareness));
                 return;
             }
-            if (!ShizukuNativeController.isPermissionGranted()) {
+            if (!InputBridge.advancedControlsEnabled(this)
+                    || !ShizukuNativeController.isPermissionGranted()) {
                 showErrorAction(getString(
                         R.string.profile_game_detection_requires_shizuku));
                 return;
@@ -5661,10 +5967,10 @@ public class AssistantActivity extends Activity {
         content.addView(title, params);
     }
 
-    private void addConnectionSettingsOption(LinearLayout content, String title, String summary,
-                                             boolean selected, boolean ready,
-                                             String actionLabel, boolean actionEnabled,
-                                             Runnable action) {
+    private void addConnectionCapabilityOption(LinearLayout content, String title, String summary,
+                                               String stateLabel, boolean ready,
+                                               String actionLabel, boolean actionEnabled,
+                                               Runnable action) {
         LinearLayout copy = new LinearLayout(this);
         copy.setOrientation(LinearLayout.VERTICAL);
         copy.setPadding(dp(12), dp(9), dp(12), dp(9));
@@ -5673,14 +5979,9 @@ public class AssistantActivity extends Activity {
         copyParams.setMargins(0, dp(4), 0, 0);
         content.addView(copy, copyParams);
 
-        int stateRes = selected
-                ? (ready ? R.string.connection_state_current_ready
-                        : R.string.connection_state_current_setup)
-                : (ready ? R.string.connection_state_available_ready
-                        : R.string.connection_state_available_setup);
         TextView titleView = text(getString(R.string.connection_option_title,
-                        title, getString(stateRes)), 12,
-                selected ? HeimdallUi.accent(this) : TEXT, true);
+                        title, stateLabel), 12,
+                ready ? HeimdallUi.accent(this) : TEXT, true);
         copy.addView(titleView, new LinearLayout.LayoutParams(-1, -2));
         TextView summaryView = text(summary, 11, MUTED, false);
         LinearLayout.LayoutParams summaryParams = new LinearLayout.LayoutParams(-1, -2);
@@ -5694,7 +5995,7 @@ public class AssistantActivity extends Activity {
         button.setMinHeight(dp(52));
         LinearLayout.LayoutParams buttonParams = new LinearLayout.LayoutParams(-1, -2);
         buttonParams.setMargins(0, dp(4), 0, dp(8));
-        content.addView(button, buttonParams);
+        copy.addView(button, buttonParams);
     }
 
     private EditText settingsEditText(String value) {
@@ -5919,27 +6220,10 @@ public class AssistantActivity extends Activity {
         selectTouchpadModeDraft(mode);
     }
 
-    private void selectInputBackendFromSettings(InputBridge.BackendOption option) {
-        if (!option.available) {
-            showErrorAction(getString(InputBridge.BACKEND_SHIZUKU.equals(option.id)
-                    ? R.string.connection_start_shizuku
-                    : R.string.settings_connection_unavailable));
-            return;
-        }
-        if (InputBridge.setSelectedBackendId(this, option.id)) {
-            if (InputBridge.BACKEND_SHIZUKU.equals(option.id) && !ShizukuNativeController.isPermissionGranted()) {
-                ShizukuNativeController.requestPermission();
-            }
-            updateBridgeStatus();
-            refreshSettingsContent();
-            showAction(getString(R.string.settings_connection_using,
-                    getString(InputBridge.BACKEND_SHIZUKU.equals(option.id)
-                            ? R.string.connection_controller_enhancement
-                            : R.string.connection_basic_touch)));
-        }
-    }
-
     private String settingsSectionTitle() {
+        if (activeSettingsSection == SETTINGS_GETTING_STARTED) {
+            return getString(R.string.settings_category_getting_started);
+        }
         if (activeSettingsSection == SETTINGS_LAYOUT) {
             return getString(R.string.settings_category_main);
         }
@@ -5965,6 +6249,9 @@ public class AssistantActivity extends Activity {
     }
 
     private String settingsSectionSummary() {
+        if (activeSettingsSection == SETTINGS_GETTING_STARTED) {
+            return getString(R.string.settings_summary_getting_started);
+        }
         if (activeSettingsSection == SETTINGS_LAYOUT) {
             return getString(hasUnsavedWidgetLayout()
                     ? R.string.settings_summary_layout_draft
@@ -6026,11 +6313,6 @@ public class AssistantActivity extends Activity {
                 settingsMagnifierDraft.magnifierZoom = 1f;
             }
             showDebugAction(getString(R.string.settings_reset_magnifier_draft));
-            refreshSettingsContent();
-            return;
-        } else if (activeSettingsSection == SETTINGS_INPUT) {
-            InputBridge.setSelectedBackendId(this, InputBridge.BACKEND_ACCESSIBILITY);
-            showDebugAction(getString(R.string.settings_reset_connection_basic));
             refreshSettingsContent();
             return;
         } else if (activeSettingsSection == SETTINGS_APPEARANCE) {
@@ -9054,6 +9336,7 @@ public class AssistantActivity extends Activity {
         closeVirtualMouseDispatcherIfUnused();
         ProfileStore.saveSelectedIndex(this, selectedProfileIndex);
         ProfileStore.saveProfiles(this, profiles);
+        FirstSetupState.markProfileCreated(this);
         renderProfiles();
         renderSelectedProfile();
         rebuildContent();
@@ -9080,13 +9363,15 @@ public class AssistantActivity extends Activity {
         return false;
     }
 
-    private String safeFilename(String rawName) {
-        String name = nonEmpty(rawName, "profile").trim();
+    static String safeFilename(String rawName) {
+        String name = rawName == null ? "" : rawName.trim();
+        if (name.length() == 0) {
+            name = "profile";
+        }
         StringBuilder builder = new StringBuilder();
         for (int i = 0; i < name.length(); i++) {
             char c = name.charAt(i);
-            boolean safe = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
-                    || (c >= '0' && c <= '9') || c == '-' || c == '_';
+            boolean safe = Character.isLetterOrDigit(c) || c == '-' || c == '_';
             builder.append(safe ? c : '-');
         }
         String result = builder.toString();
@@ -9099,10 +9384,13 @@ public class AssistantActivity extends Activity {
             return true;
         }
         if (TouchpadSettings.MODE_RIGHT_STICK.equals(normalized)) {
-            return true;
+            NativeGamepadPath.Device device = NativeGamepadPath.resolveDevice();
+            return (InputBridge.advancedControlsEnabled(this)
+                    && ShizukuNativeController.isReady())
+                    || (device != null && device.writable);
         }
         if (TouchpadSettings.MODE_SHIZUKU_TOUCH.equals(normalized)) {
-            return InputBridge.BACKEND_SHIZUKU.equals(InputBridge.selectedBackendId(this))
+            return InputBridge.advancedControlsEnabled(this)
                     && ShizukuNativeController.isReady();
         }
         if (TouchpadSettings.MODE_RELATIVE_MOUSE.equals(normalized)) {
@@ -9115,13 +9403,14 @@ public class AssistantActivity extends Activity {
             return InputBridge.supportsMouseMode(this);
         }
         if (TouchpadSettings.MODE_VIRTUAL_MOUSE.equals(normalized)) {
-            return ShizukuNativeController.isReady();
+            return InputBridge.advancedControlsEnabled(this)
+                    && ShizukuNativeController.isReady();
         }
         return false;
     }
 
     private boolean relativeMouseBackendAvailable() {
-        return InputBridge.BACKEND_SHIZUKU.equals(InputBridge.selectedBackendId(this))
+        return InputBridge.advancedControlsEnabled(this)
                 && ShizukuNativeController.isReady()
                 && NativeGamepadPath.resolveDevice() != null;
     }
@@ -9145,6 +9434,7 @@ public class AssistantActivity extends Activity {
         releaseLocalMapThumbnails();
         setContentView(createLayout());
         attachStartupReadiness();
+        attachFirstSetup();
         systemStatusController.resetCachedLabels();
         renderProfiles();
         renderSelectedProfile();
@@ -9646,14 +9936,15 @@ public class AssistantActivity extends Activity {
 
     private LinearLayout labeledNumberStepper(String label, NumberStepper stepper) {
         LinearLayout container = new LinearLayout(this);
-        container.setOrientation(LinearLayout.HORIZONTAL);
-        container.setGravity(Gravity.CENTER_VERTICAL);
+        container.setOrientation(LinearLayout.VERTICAL);
         container.setPadding(0, 0, dp(4), 0);
         TextView title = text(label, 10, MUTED, true);
         title.setGravity(Gravity.CENTER_VERTICAL | Gravity.LEFT);
         title.setSingleLine(true);
-        container.addView(title, new LinearLayout.LayoutParams(dp(50), -1));
-        container.addView(stepper, new LinearLayout.LayoutParams(0, dp(38), 1));
+        container.addView(title, new LinearLayout.LayoutParams(-1, dp(20)));
+        LinearLayout.LayoutParams stepperParams = new LinearLayout.LayoutParams(-1, dp(38));
+        stepperParams.setMargins(0, dp(2), 0, 0);
+        container.addView(stepper, stepperParams);
         return container;
     }
 
@@ -9676,14 +9967,14 @@ public class AssistantActivity extends Activity {
             setBackground(HeimdallUi.fieldPanel(AssistantActivity.this, 7));
 
             decrement = stepButton("-");
-            valueLabel = text(String.valueOf(current), 12, TEXT, true);
+            valueLabel = text(String.valueOf(current), 14, TEXT, true);
             valueLabel.setGravity(Gravity.CENTER);
             valueLabel.setSingleLine(true);
             increment = stepButton("+");
 
-            addView(decrement, new LinearLayout.LayoutParams(dp(30), -1));
+            addView(decrement, new LinearLayout.LayoutParams(dp(40), -1));
             addView(valueLabel, new LinearLayout.LayoutParams(0, -1, 1));
-            addView(increment, new LinearLayout.LayoutParams(dp(30), -1));
+            addView(increment, new LinearLayout.LayoutParams(dp(40), -1));
             decrement.setOnClickListener(v -> setValue(current - 1));
             increment.setOnClickListener(v -> setValue(current + 1));
             refresh();
@@ -10156,6 +10447,7 @@ public class AssistantActivity extends Activity {
         closeVirtualMouseDispatcherIfUnused();
         ProfileStore.saveSelectedIndex(this, selectedProfileIndex);
         ProfileStore.saveProfiles(this, profiles);
+        FirstSetupState.markProfileCreated(this);
         renderProfiles();
         renderSelectedProfile();
         showAction(getString(R.string.profile_copied, profile.name));
@@ -10186,6 +10478,7 @@ public class AssistantActivity extends Activity {
         closeVirtualMouseDispatcherIfUnused();
         ProfileStore.saveSelectedIndex(this, selectedProfileIndex);
         ProfileStore.saveProfiles(this, profiles);
+        FirstSetupState.markProfileCreated(this);
         renderProfiles();
         renderSelectedProfile();
         showAction(getString(R.string.profile_created));
@@ -11229,6 +11522,7 @@ public class AssistantActivity extends Activity {
         PanelOverlay overlay = new PanelOverlay(scrim, panel, onDismiss);
         panelOverlays.add(overlay);
         updateGameFocusProtection();
+        updateCanvasPlayback();
         overlayHost.addView(scrim, new FrameLayout.LayoutParams(-1, -1));
         animatePanelOverlayIn(overlay);
         return overlay;
@@ -11342,6 +11636,7 @@ public class AssistantActivity extends Activity {
         closingAnimatedPanels.remove(overlay.panel);
         panelOverlays.remove(overlay);
         updateGameFocusProtection();
+        updateCanvasPlayback();
         if (overlay.scrim.getParent() instanceof ViewGroup) {
             ((ViewGroup) overlay.scrim.getParent()).removeView(overlay.scrim);
         }
@@ -12046,7 +12341,7 @@ public class AssistantActivity extends Activity {
         if (device == null) {
             return false;
         }
-        if (InputBridge.BACKEND_SHIZUKU.equals(InputBridge.selectedBackendId(this))) {
+        if (InputBridge.advancedControlsEnabled(this)) {
             return ShizukuNativeController.isReady();
         }
         return device.writable;
@@ -12073,7 +12368,7 @@ public class AssistantActivity extends Activity {
             title = getString(R.string.gamepad_no_controller_title);
             body = getString(R.string.gamepad_no_controller_body);
             semantic = HeimdallUi.SEMANTIC_WARNING;
-        } else if (InputBridge.BACKEND_SHIZUKU.equals(InputBridge.selectedBackendId(this))) {
+        } else if (InputBridge.advancedControlsEnabled(this)) {
             if (ready) {
             title = getString(R.string.gamepad_enhancement_ready_title, deviceName);
             body = getString(R.string.gamepad_record_ready_body);
@@ -12116,7 +12411,7 @@ public class AssistantActivity extends Activity {
         if (device == null) {
             return false;
         }
-        if (InputBridge.BACKEND_SHIZUKU.equals(InputBridge.selectedBackendId(this))) {
+        if (InputBridge.advancedControlsEnabled(this)) {
             return ShizukuNativeController.isReady();
         }
         return device.readable;
@@ -13042,11 +13337,11 @@ public class AssistantActivity extends Activity {
             String mode = TouchpadSettings.normalizeMode(touchpadSettings.mode);
             boolean shizukuControllerMode = (TouchpadSettings.MODE_RELATIVE_MOUSE.equals(mode)
                     || TouchpadSettings.MODE_RIGHT_STICK.equals(mode))
-                    && InputBridge.BACKEND_SHIZUKU.equals(
-                            InputBridge.selectedBackendId(AssistantActivity.this));
+                    && InputBridge.advancedControlsEnabled(AssistantActivity.this);
             if ((TouchpadSettings.MODE_SHIZUKU_TOUCH.equals(mode)
                     || TouchpadSettings.MODE_VIRTUAL_MOUSE.equals(mode)
                     || shizukuControllerMode)
+                    && InputBridge.advancedControlsEnabled(AssistantActivity.this)
                     && ShizukuNativeController.isPermissionGranted()) {
                 ShizukuNativeController.requestServiceBinding(AssistantActivity.this);
                 if (TouchpadSettings.MODE_VIRTUAL_MOUSE.equals(mode)) {
@@ -13056,8 +13351,7 @@ public class AssistantActivity extends Activity {
         }
 
         private boolean shizukuControllerServicePrepared() {
-            if (!InputBridge.BACKEND_SHIZUKU.equals(
-                    InputBridge.selectedBackendId(AssistantActivity.this))) {
+            if (!InputBridge.advancedControlsEnabled(AssistantActivity.this)) {
                 return true;
             }
             if (ShizukuNativeController.isServiceBound()) {
@@ -14140,7 +14434,8 @@ public class AssistantActivity extends Activity {
             int action = event.getActionMasked();
             int actionIndex = event.getActionIndex();
             int actionPointerId = event.getPointerId(actionIndex);
-            if (!ShizukuNativeController.isReady()) {
+            if (!InputBridge.advancedControlsEnabled(AssistantActivity.this)
+                    || !ShizukuNativeController.isReady()) {
                 if (action == MotionEvent.ACTION_DOWN && !virtualMouseErrorShown) {
                     virtualMouseErrorShown = true;
                     showErrorAction(getString(R.string.virtual_mouse_unavailable));

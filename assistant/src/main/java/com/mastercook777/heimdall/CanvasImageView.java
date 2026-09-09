@@ -12,7 +12,7 @@ import android.view.ScaleGestureDetector;
 import android.widget.ImageView;
 
 @SuppressLint("ClickableViewAccessibility")
-final class CanvasImageView extends ImageView {
+final class CanvasImageView extends ImageView implements CanvasCompositionSurface {
     private final Matrix compositionMatrix = new Matrix();
     private final float[] matrixValues = new float[9];
     private final ScaleGestureDetector scaleDetector;
@@ -65,27 +65,32 @@ final class CanvasImageView extends ImageView {
                 });
     }
 
-    void setComposition(CanvasConfig value, boolean resetToFill) {
+    @Override
+    public void setComposition(CanvasConfig value, boolean resetToFill) {
         composition = value == null ? new CanvasConfig() : value.copy();
         composition.normalize();
         resetToFillWhenReady = resetToFill;
         post(this::applyStoredComposition);
     }
 
-    CanvasConfig composition() {
+    @Override
+    public CanvasConfig composition() {
         updateCompositionFromMatrix();
         return composition.copy();
     }
 
-    void setInteractive(boolean value) {
+    @Override
+    public void setInteractive(boolean value) {
         interactive = value;
     }
 
-    void fitImage() {
+    @Override
+    public void fitImage() {
         setCenteredZoom(CanvasConfig.MIN_ZOOM);
     }
 
-    void fillImage() {
+    @Override
+    public void fillImage() {
         Drawable drawable = getDrawable();
         if (!isReady(drawable)) {
             return;
@@ -96,7 +101,8 @@ final class CanvasImageView extends ImageView {
                 CanvasConfig.MIN_ZOOM, CanvasConfig.MAX_ZOOM));
     }
 
-    void resetImage() {
+    @Override
+    public void resetImage() {
         fillImage();
     }
 

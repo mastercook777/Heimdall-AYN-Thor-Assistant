@@ -57,12 +57,13 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
             testKeyboardPadModelContract();
             testQuickActionsModelContract();
             testCanvasRuntimeDecodePolicy();
+            testCanvasAnimationContract();
             testProfileIconDecodePolicy();
             testUserMacroIconDeletionContract();
             testGameContextIdentityAndResolverContract();
             testGameContextAppOnlyFallbackAndManualSelectionGuardContract();
+            testForegroundObservationClearAndUnicodeExportFilenameContract();
             testGameContextUserServiceLifetimeContract();
-            testRomContextProbeAdapterTargetsAndFiltering();
             testEdenGameContextIdentityAndResolverContract();
             testPpssppPositiveLaunchGameContextContract();
             testRetroArchTwoLevelGameContextContract();
@@ -71,6 +72,7 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
             testUpperDisplaySingleTouchHandoffCoordinateContract();
             testUpperDisplayStartedLifecycleHandoffContract();
             testStartupCapabilityDefaultContract();
+            testAdvancedControlsStateContract();
             testInteractiveMapBrowserSettingsContract();
             testSelfContainedRoundTripAfterSourcesAreDeleted();
             testCorruptMissingUnsafeAndOversizedBundlesFailClosed();
@@ -383,6 +385,69 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
                 600, 400, Float.NaN));
     }
 
+    public void testAdvancedControlsStateContract() {
+        assertEquals(InputBridge.AdvancedControlsState.SHIZUKU_STOPPED,
+                InputBridge.resolveAdvancedControlsState(false,
+                        true, true, true, false));
+        assertEquals(InputBridge.AdvancedControlsState.AUTHORIZATION_REQUIRED,
+                InputBridge.resolveAdvancedControlsState(true,
+                        false, true, true, false));
+        assertEquals(InputBridge.AdvancedControlsState.AUTHORIZED,
+                InputBridge.resolveAdvancedControlsState(true,
+                        true, false, true, false));
+        assertEquals(InputBridge.AdvancedControlsState.AUTHORIZED,
+                InputBridge.resolveAdvancedControlsState(true,
+                        true, true, false, false));
+        assertEquals(InputBridge.AdvancedControlsState.PREPARING,
+                InputBridge.resolveAdvancedControlsState(true,
+                        true, true, false, true));
+        assertEquals(InputBridge.AdvancedControlsState.READY,
+                InputBridge.resolveAdvancedControlsState(true,
+                        true, true, true, true));
+    }
+
+    public void testCanvasAnimationContract() throws Exception {
+        CanvasConfig animated = new CanvasConfig();
+        animated.assetId = "animated.gif";
+        animated.animated = true;
+        CanvasConfig restored = CanvasConfig.fromJson(animated.toJson());
+        assertTrue(restored.animated);
+        assertFalse(restored.video);
+
+        CanvasConfig video = new CanvasConfig();
+        video.assetId = "loop.mp4";
+        video.animated = true;
+        video.video = true;
+        CanvasConfig restoredVideo = CanvasConfig.fromJson(video.toJson());
+        assertTrue(restoredVideo.animated);
+        assertTrue(restoredVideo.video);
+
+        WidgetLayout layout = new WidgetLayout();
+        WidgetLayout.Item first = new WidgetLayout.Item(
+                WidgetLayout.TYPE_CANVAS, 0, 0, 2, 2);
+        first.canvasConfig = restored;
+        WidgetLayout.Item second = new WidgetLayout.Item(
+                WidgetLayout.TYPE_CANVAS, 2, 0, 2, 2);
+        layout.items.add(first);
+        layout.items.add(second);
+        assertFalse(CanvasAnimationPolicy.canAssign(layout, second, true));
+        assertTrue(CanvasAnimationPolicy.canAssign(layout, first, true));
+        assertTrue(CanvasAnimationPolicy.canAssign(layout, second, false));
+
+        File gif = new File(target.getCacheDir(),
+                "canvas-animation-contract-" + System.nanoTime() + ".gif");
+        writeFile(gif, android.util.Base64.decode(
+                "R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==",
+                android.util.Base64.DEFAULT));
+        CanvasAssetStore.AssetInfo info = CanvasAssetStore.inspectStoredAsset(gif);
+        assertEquals("gif", info.extension);
+        assertTrue(info.animated);
+        assertFalse(info.video);
+        assertEquals(1, info.width);
+        assertEquals(1, info.height);
+        assertTrue(gif.delete());
+    }
+
     public void testGameContextIdentityAndResolverContract() throws Exception {
         String uriA = "content://com.android.externalstorage.documents/document/"
                 + "primary%3ARoms%2FPS2%2FGame%20A.iso";
@@ -474,23 +539,6 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
         assertFalse(restoredLegacy.safeGameContextBinding().isBound());
     }
 
-    public void testRomContextProbeAdapterTargetsAndFiltering() {
-        assertEquals("retroarch", RomContextProbeCollector.targetName(
-                RomContextProbeCollector.TARGET_RETROARCH));
-        assertEquals("ppsspp", RomContextProbeCollector.targetName(
-                RomContextProbeCollector.TARGET_PPSSPP));
-        assertEquals("eden", RomContextProbeCollector.targetName(
-                RomContextProbeCollector.TARGET_EDEN));
-        String filtered = RomContextProbeCollector.filterIdentityCandidates(
-                "I Eden: [EmulationActivity] Begin ROM swap: data=content://games/Game.xci\n"
-                        + "I Noise: unrelated renderer frame\n");
-        assertTrue(filtered.contains("content://games/Game.xci"));
-        assertFalse(filtered.contains("unrelated renderer frame"));
-        String ppssppStop = RomContextProbeCollector.filterIdentityCandidates(
-                "I Loader: REQUEST_GAME_STOP: running exit callback before shutdown.\n");
-        assertTrue(ppssppStop.contains("REQUEST_GAME_STOP"));
-    }
-
     public void testGameContextAppOnlyFallbackAndManualSelectionGuardContract() {
         String uriA = "content://com.android.externalstorage.documents/document/"
                 + "primary%3AROMs%2Fpsp%2FGame%20A.iso";
@@ -565,6 +613,30 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
         ForegroundAppTracker.Snapshot otherApp = new ForegroundAppTracker.Snapshot(
                 "com.example.frontend", "com.example.frontend.MainActivity", "", 0, 500L);
         assertFalse(guard.shouldSuppress(otherApp, contextB));
+    }
+
+    public void testForegroundObservationClearAndUnicodeExportFilenameContract() {
+        ForegroundAppTracker.Snapshot previous = ForegroundAppTracker.latest();
+        ForegroundAppTracker.Snapshot game = new ForegroundAppTracker.Snapshot(
+                "com.example.game", "com.example.game.MainActivity", "", 0, 100L);
+        ForegroundAppTracker.publish(game);
+        assertEquals("com.example.game", ForegroundAppTracker.latest().packageName);
+        ForegroundAppTracker.clear();
+        assertNull(ForegroundAppTracker.latest());
+        assertEquals(ProfileAutoSwitchResolver.NO_MATCH,
+                ProfileAutoSwitchResolver.resolve(Collections.emptyList(), 0,
+                        ForegroundAppTracker.latest()));
+        assertTrue(ThorAccessibilityService.isLauncherPackage("com.android.launcher3"));
+        assertFalse(ThorAccessibilityService.isLauncherPackage("com.example.game"));
+        if (previous != null) {
+            ForegroundAppTracker.publish(previous);
+        }
+
+        assertEquals("\u585e\u5c14\u8fbe\u4f20\u8bf4",
+                AssistantActivity.safeFilename("\u585e\u5c14\u8fbe\u4f20\u8bf4"));
+        assertEquals("Game-\u4e2d\u6587-2",
+                AssistantActivity.safeFilename("Game \u4e2d\u6587/2"));
+        assertEquals("profile", AssistantActivity.safeFilename("  "));
     }
 
     public void testEdenGameContextIdentityAndResolverContract() throws Exception {

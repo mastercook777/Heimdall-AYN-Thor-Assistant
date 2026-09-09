@@ -95,7 +95,10 @@ final class KeyboardInputSession {
         int count = pressedCodeCounts.containsKey(code) ? pressedCodeCounts.get(code) : 0;
         pressedCodeCounts.put(code, count + 1);
         if (count == 0) {
-            ensureDispatcher().key(code, true);
+            VirtualKeyboardDispatcher active = ensureDispatcher();
+            if (active != null) {
+                active.key(code, true);
+            }
         }
     }
 
@@ -115,6 +118,10 @@ final class KeyboardInputSession {
     }
 
     private VirtualKeyboardDispatcher ensureDispatcher() {
+        if (!InputBridge.advancedControlsEnabled(context)) {
+            handleUnavailable();
+            return null;
+        }
         if (dispatcher == null) {
             dispatcher = new VirtualKeyboardDispatcher(context,
                     new VirtualKeyboardDispatcher.Listener() {

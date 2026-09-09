@@ -85,6 +85,17 @@ final class ForegroundAppTracker {
         }
     }
 
+    static void clear() {
+        if (latest == null) {
+            return;
+        }
+        latest = null;
+        Listener current = listener;
+        if (current != null) {
+            current.onForegroundAppChanged(null);
+        }
+    }
+
     static boolean isObservationRequested(Context context) {
         return isEnabled(context);
     }

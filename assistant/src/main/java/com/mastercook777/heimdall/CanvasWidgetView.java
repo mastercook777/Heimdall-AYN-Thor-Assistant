@@ -2,7 +2,6 @@ package com.mastercook777.heimdall;
 
 import android.annotation.SuppressLint;
 import android.content.Context;
-import android.graphics.Bitmap;
 import android.graphics.Outline;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.GradientDrawable;
@@ -31,6 +30,7 @@ final class CanvasWidgetView extends FrameLayout {
         LOADING,
         READY,
         MISSING,
+        PLATFORM_UNSUPPORTED,
         ERROR
     }
 
@@ -41,16 +41,20 @@ final class CanvasWidgetView extends FrameLayout {
     private final FrameLayout displayFrame;
     private final FrameLayout viewport;
     private final CanvasImageView imageView;
+    private final CanvasVideoView videoView;
     private final TextView statusView;
     private final GestureDetector gestureDetector;
     private final Runnable clearPressedEdge = this::clearPressedEdge;
     private final Runnable triggerOptionsLongPress = this::triggerOptionsLongPress;
     private final int longPressTouchSlop;
     private CanvasImageLoader.Request loadRequest;
-    private Bitmap bitmap;
+    private CanvasImageLoader.DecodedImage decodedImage;
     private State state = State.EMPTY;
     private boolean optionsLongPressPending;
     private boolean optionsLongPressTriggered;
+    private boolean playbackAllowed;
+    private boolean aggregatedVisible;
+    private boolean videoBound;
 
     CanvasWidgetView(Context context, WidgetLayout.Item item, boolean interactionEnabled,
             Listener listener) {
@@ -104,6 +108,11 @@ final class CanvasWidgetView extends FrameLayout {
         imageView.setVisibility(GONE);
         viewport.addView(imageView, new LayoutParams(-1, -1));
 
+        videoView = new CanvasVideoView(context);
+        videoView.setInteractive(false);
+        videoView.setVisibility(GONE);
+        viewport.addView(videoView, new LayoutParams(-1, -1));
+
         statusView = new TextView(context);
         statusView.setGravity(Gravity.CENTER);
         statusView.setTextSize(12);
@@ -121,7 +130,9 @@ final class CanvasWidgetView extends FrameLayout {
 
                     @Override
                     public boolean onSingleTapConfirmed(MotionEvent event) {
-                        if (state == State.EMPTY || state == State.MISSING || state == State.ERROR) {
+                        if (state == State.EMPTY || state == State.MISSING
+                                || state == State.PLATFORM_UNSUPPORTED
+                                || state == State.ERROR) {
                             performClick();
                         }
                         return true;
@@ -142,7 +153,8 @@ final class CanvasWidgetView extends FrameLayout {
                 listener.onDraftInteractionBlocked();
                 return;
             }
-            if (state == State.EMPTY || state == State.MISSING || state == State.ERROR) {
+            if (state == State.EMPTY || state == State.MISSING
+                    || state == State.PLATFORM_UNSUPPORTED || state == State.ERROR) {
                 listener.onChooseImage(item, getWidth(), getHeight());
             }
         });
@@ -225,8 +237,8 @@ final class CanvasWidgetView extends FrameLayout {
         super.onSizeChanged(width, height, oldWidth, oldHeight);
         viewport.invalidateOutline();
         updateCompactPresentation();
-        if (state == State.LOADING && loadRequest == null) {
-            loadImage();
+        if (state == State.LOADING && loadRequest == null && !videoBound) {
+            loadMedia();
         }
     }
 
@@ -234,6 +246,18 @@ final class CanvasWidgetView extends FrameLayout {
     protected void onDetachedFromWindow() {
         release();
         super.onDetachedFromWindow();
+    }
+
+    @Override
+    public void onVisibilityAggregated(boolean isVisible) {
+        super.onVisibilityAggregated(isVisible);
+        aggregatedVisible = isVisible;
+        updatePlayback();
+    }
+
+    void setPlaybackAllowed(boolean allowed) {
+        playbackAllowed = allowed;
+        updatePlayback();
     }
 
     void release() {
@@ -246,8 +270,12 @@ final class CanvasWidgetView extends FrameLayout {
             loadRequest = null;
         }
         imageView.setImageDrawable(null);
-        CanvasImageLoader.recycle(bitmap);
-        bitmap = null;
+        videoView.release();
+        videoBound = false;
+        if (decodedImage != null) {
+            decodedImage.release();
+            decodedImage = null;
+        }
     }
 
     private void bind() {
@@ -258,12 +286,16 @@ final class CanvasWidgetView extends FrameLayout {
             return;
         }
         showState(State.LOADING);
-        post(this::loadImage);
+        post(this::loadMedia);
     }
 
-    private void loadImage() {
+    private void loadMedia() {
         CanvasConfig config = item.canvasConfig == null
                 ? new CanvasConfig() : item.canvasConfig;
+        if (config.video) {
+            loadVideo(config);
+            return;
+        }
         if (!config.hasAsset() || loadRequest != null || getWidth() <= 0 || getHeight() <= 0) {
             return;
         }
@@ -272,37 +304,92 @@ final class CanvasWidgetView extends FrameLayout {
         loadRequest = CanvasImageLoader.load(getContext(), config.assetId, maxSide,
                 new CanvasImageLoader.Callback() {
                     @Override
-                    public void onLoaded(Bitmap loaded) {
+                    public void onLoaded(CanvasImageLoader.DecodedImage loaded) {
                         loadRequest = null;
-                        CanvasImageLoader.recycle(bitmap);
-                        bitmap = loaded;
-                        imageView.setImageBitmap(bitmap);
+                        if (decodedImage != null) {
+                            decodedImage.release();
+                        }
+                        decodedImage = loaded;
+                        if (loaded.bitmap() != null) {
+                            imageView.setImageBitmap(loaded.bitmap());
+                        } else {
+                            imageView.setImageDrawable(loaded.drawable());
+                        }
                         imageView.setComposition(config, false);
                         showState(State.READY);
+                        updatePlayback();
                     }
 
                     @Override
                     public void onError(CanvasImageLoader.Error error) {
                         loadRequest = null;
                         showState(error == CanvasImageLoader.Error.MISSING
-                                ? State.MISSING : State.ERROR);
+                                ? State.MISSING
+                                : error == CanvasImageLoader.Error.PLATFORM_UNSUPPORTED
+                                        ? State.PLATFORM_UNSUPPORTED : State.ERROR);
                     }
                 });
+    }
+
+    private void loadVideo(CanvasConfig config) {
+        if (!config.hasAsset() || videoBound) {
+            return;
+        }
+        if (CanvasAssetStore.resolve(getContext(), config.assetId) == null) {
+            showState(State.MISSING);
+            return;
+        }
+        videoBound = true;
+        videoView.setComposition(config, false);
+        videoView.setSource(config, new CanvasVideoView.Listener() {
+            @Override
+            public void onReady() {
+                videoView.setComposition(config, false);
+                showState(State.READY);
+                updatePlayback();
+            }
+
+            @Override
+            public void onError() {
+                showState(State.ERROR);
+            }
+        });
+        updatePlayback();
     }
 
     private void showState(State next) {
         state = next;
         boolean ready = next == State.READY;
-        imageView.setVisibility(ready ? VISIBLE : GONE);
+        CanvasConfig config = item.canvasConfig == null
+                ? new CanvasConfig() : item.canvasConfig;
+        imageView.setVisibility(ready && !config.video ? VISIBLE : GONE);
+        videoView.setVisibility(config.video
+                && (next == State.LOADING || ready) ? VISIBLE : GONE);
         statusView.setVisibility(ready ? GONE : VISIBLE);
         statusView.setCompoundDrawablesWithIntrinsicBounds(0,
                 next == State.LOADING ? 0 : R.drawable.ic_add, 0, 0);
         statusView.setTextColor(next == State.ERROR || next == State.MISSING
+                || next == State.PLATFORM_UNSUPPORTED
                 ? HeimdallUi.COLOR_DANGER : HeimdallUi.mutedTextColor(getContext()));
         setContentDescription(getResources().getString(ready
                 ? R.string.canvas_ready_content_description
                 : R.string.canvas_recovery_content_description));
         updateCompactPresentation();
+    }
+
+    private void updatePlayback() {
+        videoView.setPlaybackAllowed(playbackAllowed && aggregatedVisible
+                && isAttachedToWindow()
+                && (state == State.LOADING || state == State.READY));
+        if (decodedImage == null || !decodedImage.isAnimated()) {
+            return;
+        }
+        if (playbackAllowed && aggregatedVisible && isAttachedToWindow()
+                && state == State.READY) {
+            decodedImage.start();
+        } else {
+            decodedImage.stop();
+        }
     }
 
     private void updateCompactPresentation() {
@@ -323,6 +410,8 @@ final class CanvasWidgetView extends FrameLayout {
             statusView.setText(R.string.canvas_loading);
         } else if (state == State.MISSING) {
             statusView.setText(R.string.canvas_image_missing);
+        } else if (state == State.PLATFORM_UNSUPPORTED) {
+            statusView.setText(R.string.canvas_animation_platform_unsupported);
         } else {
             statusView.setText(R.string.canvas_decode_error);
         }

@@ -1,7 +1,6 @@
 package com.mastercook777.heimdall;
 
 import android.content.Context;
-import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.view.Gravity;
 import android.view.View;
@@ -86,7 +85,7 @@ final class StartupReadinessView extends FrameLayout {
         view.setTextSize(sizeSp);
         view.setTextColor(color);
         view.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
-        if (bold) view.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        view.setTypeface(HeimdallUi.typeface(bold));
         return view;
     }
 

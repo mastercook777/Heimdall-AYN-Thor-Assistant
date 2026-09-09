@@ -17,7 +17,7 @@
 
 [English](README.md) | 简体中文
 
-Heimdall 让游戏继续显示在 Thor 上屏，同时把下屏变成常驻控制与资料中心：Profile、宏、触摸控制、地图、攻略、静态图片 Canvas、放大镜、录屏和快捷操作都在拇指可及的位置。
+Heimdall 让游戏继续显示在 Thor 上屏，同时把下屏变成常驻控制与资料中心：Profile、宏、触摸控制、地图、攻略、本地媒体 Canvas、放大镜、录屏和快捷操作都在拇指可及的位置。
 
 > **Alpha 软件：** Heimdall 以 AYN Thor 为目标设备，不承诺兼容所有 Thor 固件、手柄模式、游戏、模拟器或其他双屏设备。
 
@@ -50,7 +50,7 @@ Heimdall 让游戏继续显示在 Thor 上屏，同时把下屏变成常驻控�
 | 宏 | 通过结构化编辑器添加点击、长按、滑动、等待和实体手柄步骤；手柄编辑器支持组合键、蓄力、无损重新编辑、镜像、克隆和有边界取消，不需要手写命令。 |
 | 触摸与瞄准 | 基础触控、触摸板拖动、虚拟右摇杆、精准瞄准、真实相对虚拟鼠标，以及条件满足时可与 Thor 自带映射共存的 Shizuku 触控。 |
 | PC 键盘 | 经 Shizuku/uinput 提供临时完整 US ANSI 键盘和 Profile 级可配置小键盘；这是游戏中的 PC 输入，不是 Android IME 文字输入。 |
-| 游戏资料 | 本地地图、PDF、攻略、Interactive Map 链接，以及每个 Profile 内多个独立的静态图片 Canvas。 |
+| 游戏资料 | 本地地图、PDF、攻略、Interactive Map 链接，以及 Profile 级图片或静音循环视频 Canvas。 |
 | 上屏工具 | 上屏截图、录屏，以及每个 Profile 一个实时局部放大镜。 |
 
 <table>
@@ -102,7 +102,7 @@ Heimdall 让游戏继续显示在 Thor 上屏，同时把下屏变成常驻控�
 4. 重新授权实际使用的服务。
 5. 导入该文件；确认关键 Profile 正常后，再删除旧版或旧备份。
 
-旧版导出的是仅含配置的 JSON；新版仍可导入，但源资源丢失时无法恢复。当前版本导出自包含 `.heimdall-profile` 迁移包，包含 Profile 数据以及受支持的 Profile 图标、地图、文件 Guide、用户宏图标和 Canvas 图片。
+旧版导出的是仅含配置的 JSON；新版仍可导入，但源资源丢失时无法恢复。当前版本导出自包含 `.heimdall-profile` 迁移包，包含 Profile 数据以及受支持的 Profile 图标、地图、文件 Guide、用户宏图标和 Canvas 媒体。
 
 ## 2. 创建第一个 Profile
 
@@ -196,7 +196,7 @@ Thor 重启后，在使用控制器功能前先检查 Shizuku 状态。如果服
 
 - 在 Grid 中添加放大镜，按 Android 提示允许屏幕捕获，然后选择上屏区域。长按模块可以重新选区。每个 Profile 当前支持一个实时放大镜，且不能与录屏同时运行。
 - 地图与攻略属于当前 Profile，可以保存本地图片、PDF、文本或 Interactive Map 地址。
-- Canvas 用于显示静态 JPG、PNG 或 WebP 资料。一个 Profile 可以添加多个独立 Canvas；双击进入全屏查看，长按更换图片或调整构图。
+- Canvas 支持本地 JPG、PNG、GIF、WebP 和 MP4。GIF 与动态 WebP 需要 Android 9 或更高版本；MP4 始终静音并循环播放。一个 Profile 可以添加多个独立静态 Canvas，但 GIF、动态 WebP 和 MP4 合计最多一个动态 Canvas。文件不超过 50 MiB；图片不超过 4096 × 4096，MP4 最长边不超过 2048；不支持 APNG。双击进入全屏查看，长按更换媒体或调整构图。
 
 ### 截图与录屏
 

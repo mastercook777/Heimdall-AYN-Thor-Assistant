@@ -2,6 +2,7 @@ package com.mastercook777.heimdall;
 
 import android.content.ComponentName;
 import android.content.Context;
+import android.content.Intent;
 import android.content.ServiceConnection;
 import android.content.pm.PackageManager;
 import android.os.IBinder;
@@ -18,6 +19,10 @@ import java.util.concurrent.CopyOnWriteArraySet;
 import rikka.shizuku.Shizuku;
 
 public final class ShizukuNativeController {
+    interface PermissionResultListener {
+        void onPermissionResult(boolean granted);
+    }
+
     static final String THOR_TOUCH_UNSUPPORTED = "THOR_TOUCH_UNSUPPORTED";
     private static final int REQUEST_CODE = 4109;
     private static final long BIND_TIMEOUT_MS = 10_000L;
@@ -37,6 +42,21 @@ public final class ShizukuNativeController {
     private static int bindGeneration;
     private static final CopyOnWriteArraySet<Runnable> SERVICE_LOSS_LISTENERS =
             new CopyOnWriteArraySet<>();
+    private static final CopyOnWriteArraySet<Runnable> SERVICE_STATE_LISTENERS =
+            new CopyOnWriteArraySet<>();
+    private static final CopyOnWriteArraySet<PermissionResultListener>
+            PERMISSION_RESULT_LISTENERS = new CopyOnWriteArraySet<>();
+    private static boolean permissionResultListenerRegistered;
+    private static final Shizuku.OnRequestPermissionResultListener
+            SHIZUKU_PERMISSION_RESULT_LISTENER = (requestCode, grantResult) -> {
+                if (requestCode != REQUEST_CODE) {
+                    return;
+                }
+                boolean granted = grantResult == PackageManager.PERMISSION_GRANTED;
+                for (PermissionResultListener listener : PERMISSION_RESULT_LISTENERS) {
+                    AssistantMainHandler.post(() -> listener.onPermissionResult(granted));
+                }
+            };
 
     private static final IBinder.DeathRecipient SERVICE_DEATH_RECIPIENT =
             ShizukuNativeController::clearService;
@@ -63,6 +83,7 @@ public final class ShizukuNativeController {
                 bindGeneration++;
                 releaseBindLatchLocked();
             }
+            notifyServiceStateChanged();
         }
 
         @Override
@@ -94,12 +115,57 @@ public final class ShizukuNativeController {
         return isPermissionGranted();
     }
 
+    static void addPermissionResultListener(PermissionResultListener listener) {
+        if (listener == null) {
+            return;
+        }
+        PERMISSION_RESULT_LISTENERS.add(listener);
+        synchronized (LOCK) {
+            if (permissionResultListenerRegistered) {
+                return;
+            }
+            try {
+                Shizuku.addRequestPermissionResultListener(
+                        SHIZUKU_PERMISSION_RESULT_LISTENER);
+                permissionResultListenerRegistered = true;
+            } catch (Throwable ignored) {
+            }
+        }
+    }
+
+    static void removePermissionResultListener(PermissionResultListener listener) {
+        if (listener == null) {
+            return;
+        }
+        PERMISSION_RESULT_LISTENERS.remove(listener);
+        synchronized (LOCK) {
+            if (!PERMISSION_RESULT_LISTENERS.isEmpty()
+                    || !permissionResultListenerRegistered) {
+                return;
+            }
+            try {
+                Shizuku.removeRequestPermissionResultListener(
+                        SHIZUKU_PERMISSION_RESULT_LISTENER);
+            } catch (Throwable ignored) {
+            }
+            permissionResultListenerRegistered = false;
+        }
+    }
+
     static void addServiceLossListener(Runnable listener) {
         if (listener != null) SERVICE_LOSS_LISTENERS.add(listener);
     }
 
     static void removeServiceLossListener(Runnable listener) {
         if (listener != null) SERVICE_LOSS_LISTENERS.remove(listener);
+    }
+
+    static void addServiceStateListener(Runnable listener) {
+        if (listener != null) SERVICE_STATE_LISTENERS.add(listener);
+    }
+
+    static void removeServiceStateListener(Runnable listener) {
+        if (listener != null) SERVICE_STATE_LISTENERS.remove(listener);
     }
 
     public static boolean isServiceBound() {
@@ -179,14 +245,43 @@ public final class ShizukuNativeController {
         }
     }
 
-    public static void requestPermission() {
+    public static boolean requestPermission() {
         try {
-            if (isBinderAlive() && Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED
-                    && !Shizuku.shouldShowRequestPermissionRationale()) {
-                Shizuku.requestPermission(REQUEST_CODE);
+            if (!isBinderAlive()) {
+                return false;
             }
+            if (Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED) {
+                return true;
+            }
+            if (Shizuku.shouldShowRequestPermissionRationale()) {
+                return false;
+            }
+            Shizuku.requestPermission(REQUEST_CODE);
+            return true;
         } catch (Throwable ignored) {
+            return false;
         }
+    }
+
+    static boolean openManager(Context context) {
+        if (context == null) {
+            return false;
+        }
+        String[] packages = {"moe.shizuku.privileged.api", "rikka.shizuku"};
+        for (String packageName : packages) {
+            try {
+                Intent intent = context.getPackageManager()
+                        .getLaunchIntentForPackage(packageName);
+                if (intent == null) {
+                    continue;
+                }
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                context.startActivity(intent);
+                return true;
+            } catch (Throwable ignored) {
+            }
+        }
+        return false;
     }
 
     public static String emitGamepadStep(Context context, String path, String value, int holdMs) {
@@ -510,6 +605,7 @@ public final class ShizukuNativeController {
             bindGeneration++;
             releaseBindLatchLocked();
         }
+        notifyServiceStateChanged();
     }
 
     private static Shizuku.UserServiceArgs userServiceArgs(Context context, String tag, int version) {
@@ -536,6 +632,13 @@ public final class ShizukuNativeController {
             for (Runnable listener : SERVICE_LOSS_LISTENERS) {
                 AssistantMainHandler.post(listener);
             }
+        }
+        notifyServiceStateChanged();
+    }
+
+    private static void notifyServiceStateChanged() {
+        for (Runnable listener : SERVICE_STATE_LISTENERS) {
+            AssistantMainHandler.post(listener);
         }
     }
 

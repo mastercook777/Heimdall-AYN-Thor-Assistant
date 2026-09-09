@@ -166,6 +166,12 @@ public final class ThorAccessibilityService extends AccessibilityService {
             if (isGameAssistantPackage(value)) {
                 handler.removeCallbacks(foregroundRefresh);
                 handler.postDelayed(foregroundRefresh, 180L);
+            } else if (isLauncherPackage(value)) {
+                EventWindow window = resolveEventWindow(event.getWindowId());
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+                        && window.displayId == Display.DEFAULT_DISPLAY) {
+                    ForegroundAppTracker.clear();
+                }
             }
             return;
         }
@@ -210,6 +216,8 @@ public final class ThorAccessibilityService extends AccessibilityService {
         int windowCount = 0;
         AccessibilityWindowInfo best = null;
         int bestScore = Integer.MIN_VALUE;
+        AccessibilityWindowInfo upperOwner = null;
+        int upperOwnerScore = Integer.MIN_VALUE;
         for (AccessibilityWindowInfo window : getWindows()) {
             windowCount++;
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
@@ -220,16 +228,20 @@ public final class ThorAccessibilityService extends AccessibilityService {
                 continue;
             }
             AccessibilityNodeInfo root = window.getRoot();
-            CharSequence packageName = root == null ? null : root.getPackageName();
-            if (packageName == null || !isTrackablePackage(packageName.toString())) {
-                continue;
-            }
             int score = window.getLayer();
             if (window.isActive()) {
                 score += 10000;
             }
             if (window.isFocused()) {
                 score += 20000;
+            }
+            if (upperOwner == null || score > upperOwnerScore) {
+                upperOwner = window;
+                upperOwnerScore = score;
+            }
+            CharSequence packageName = root == null ? null : root.getPackageName();
+            if (packageName == null || !isTrackablePackage(packageName.toString())) {
+                continue;
             }
             if (best == null || score > bestScore) {
                 best = window;
@@ -239,7 +251,18 @@ public final class ThorAccessibilityService extends AccessibilityService {
         for (int i = 0; i < windowCount; i++) {
             DebugPerformanceDiagnostics.countAccessibilityWindowInspection();
         }
+        AccessibilityNodeInfo upperOwnerRoot = upperOwner == null ? null : upperOwner.getRoot();
+        String upperOwnerPackage = upperOwnerRoot == null
+                || upperOwnerRoot.getPackageName() == null
+                ? "" : upperOwnerRoot.getPackageName().toString();
+        if (isLauncherPackage(upperOwnerPackage)) {
+            ForegroundAppTracker.clear();
+            DebugPerformanceDiagnostics.endTask(
+                    "Accessibility getWindows scan", started);
+            return;
+        }
         if (best == null) {
+            ForegroundAppTracker.clear();
             DebugPerformanceDiagnostics.endTask(
                     "Accessibility getWindows scan", started);
             return;
@@ -272,8 +295,13 @@ public final class ThorAccessibilityService extends AccessibilityService {
                 && !packageName.equals("com.android.systemui")
                 && !packageName.equals("com.android.settings")
                 && !packageName.contains("permissioncontroller")
-                && !packageName.contains("launcher")
+                && !isLauncherPackage(packageName)
                 && !isGameAssistantPackage(packageName);
+    }
+
+    static boolean isLauncherPackage(String packageName) {
+        return packageName != null
+                && packageName.toLowerCase(Locale.ROOT).contains("launcher");
     }
 
     private static boolean isGameAssistantPackage(String packageName) {

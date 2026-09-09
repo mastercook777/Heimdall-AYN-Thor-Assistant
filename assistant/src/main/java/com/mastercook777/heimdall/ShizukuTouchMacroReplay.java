@@ -146,8 +146,7 @@ final class ShizukuTouchMacroReplay {
             throw new ReplayFailure(context.getString(
                     R.string.native_controller_replay_failed));
         }
-        if (InputBridge.BACKEND_SHIZUKU.equals(
-                InputBridge.selectedBackendId(context))) {
+        if (InputBridge.advancedControlsEnabled(context)) {
             if (!ShizukuNativeController.isReady()) {
                 throw new ReplayFailure(context.getString(
                         R.string.controller_enhancement_unavailable));

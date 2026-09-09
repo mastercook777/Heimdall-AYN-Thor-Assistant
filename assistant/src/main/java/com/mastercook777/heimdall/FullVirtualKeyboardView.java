@@ -5,7 +5,6 @@ import android.annotation.SuppressLint;
 import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Paint;
-import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.InsetDrawable;
@@ -521,7 +520,7 @@ final class FullVirtualKeyboardView extends LinearLayout {
             setText(spec.label);
             setTextSize(spec.label.length() > 8 ? 8 : 10);
             setTextColor(HeimdallUi.textColor(context));
-            setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+            setTypeface(HeimdallUi.typeface(true));
             setGravity(Gravity.CENTER);
             setIncludeFontPadding(false);
             setPadding(dp(3), dp(1), dp(3), dp(1));
