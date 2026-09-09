@@ -34,7 +34,11 @@ final class FirstSetupView extends FrameLayout {
         removeAllViews();
 
         LinearLayout card = baseCard();
-        card.setPadding(dp(30), dp(22), dp(30), dp(22));
+        card.setPadding(dp(26), dp(18), dp(26), dp(18));
+
+        LinearLayout header = new LinearLayout(getContext());
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
 
         ImageView mark = new ImageView(getContext());
         mark.setImageResource(HeimdallUi.isPearl(getContext())
@@ -42,26 +46,36 @@ final class FirstSetupView extends FrameLayout {
                 : R.drawable.ic_heimdall_header_mark_blue);
         mark.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
         mark.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
-        card.addView(mark, new LinearLayout.LayoutParams(dp(58), dp(58)));
+        header.addView(mark, new LinearLayout.LayoutParams(dp(46), dp(46)));
+
+        LinearLayout heading = new LinearLayout(getContext());
+        heading.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams headingParams = new LinearLayout.LayoutParams(0, -2, 1);
+        headingParams.setMargins(dp(14), 0, 0, 0);
+        header.addView(heading, headingParams);
 
         TextView eyebrow = label(getContext().getString(R.string.first_setup_brand), 11,
                 HeimdallUi.accent(getContext()), true);
         eyebrow.setLetterSpacing(0.16f);
-        card.addView(eyebrow, new LinearLayout.LayoutParams(-1, dp(24)));
+        heading.addView(eyebrow, new LinearLayout.LayoutParams(-1, -2));
 
         TextView title = label(getContext().getString(R.string.first_setup_welcome_title), 24,
                 HeimdallUi.textColor(getContext()), true);
-        card.addView(title, new LinearLayout.LayoutParams(-1, dp(38)));
+        heading.addView(title, new LinearLayout.LayoutParams(-1, -2));
 
         TextView summary = label(getContext().getString(R.string.first_setup_welcome_summary), 13,
                 HeimdallUi.mutedTextColor(getContext()), false);
         LinearLayout.LayoutParams summaryParams = new LinearLayout.LayoutParams(-1, -2);
-        summaryParams.setMargins(0, 0, 0, dp(12));
-        card.addView(summary, summaryParams);
+        summaryParams.setMargins(0, dp(2), 0, 0);
+        heading.addView(summary, summaryParams);
+
+        LinearLayout.LayoutParams headerParams = new LinearLayout.LayoutParams(-1, -2);
+        headerParams.setMargins(0, 0, 0, dp(10));
+        card.addView(header, headerParams);
 
         LinearLayout capabilityPanel = new LinearLayout(getContext());
         capabilityPanel.setOrientation(LinearLayout.VERTICAL);
-        capabilityPanel.setPadding(dp(14), dp(6), dp(14), dp(6));
+        capabilityPanel.setPadding(dp(14), dp(4), dp(14), dp(4));
         capabilityPanel.setBackground(HeimdallUi.insetPanel(getContext(),
                 HeimdallUi.RADIUS_CARD));
         capabilityPanel.addView(capabilityRow(R.drawable.ic_touchpad,
@@ -70,7 +84,10 @@ final class FirstSetupView extends FrameLayout {
                 R.string.first_setup_reference_title, R.string.first_setup_reference_summary));
         capabilityPanel.addView(capabilityRow(R.drawable.ic_profile,
                 R.string.first_setup_profiles_title, R.string.first_setup_profiles_summary));
-        card.addView(capabilityPanel, new LinearLayout.LayoutParams(-1, -2));
+        FrameLayout capabilitySlot = new FrameLayout(getContext());
+        capabilitySlot.addView(capabilityPanel,
+                new FrameLayout.LayoutParams(-1, -2, Gravity.CENTER_VERTICAL));
+        card.addView(capabilitySlot, new LinearLayout.LayoutParams(-1, 0, 1));
 
         LinearLayout actions = actionRow();
         actions.addView(secondaryButton(R.string.first_setup_skip_later,
@@ -78,11 +95,11 @@ final class FirstSetupView extends FrameLayout {
         actions.addView(primaryButton(R.string.first_setup_get_started,
                 listener::onGetStarted), weightedButtonParams(false));
         LinearLayout.LayoutParams actionParams = new LinearLayout.LayoutParams(-1, dp(52));
-        actionParams.setMargins(0, dp(14), 0, 0);
+        actionParams.setMargins(0, dp(10), 0, 0);
         card.addView(actions, actionParams);
 
-        FrameLayout.LayoutParams cardParams = new FrameLayout.LayoutParams(-1, -2, Gravity.CENTER);
-        cardParams.setMargins(dp(64), dp(30), dp(64), dp(30));
+        FrameLayout.LayoutParams cardParams = new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER);
+        cardParams.setMargins(dp(64), dp(12), dp(64), dp(12));
         addView(card, cardParams);
     }
 
@@ -164,8 +181,8 @@ final class FirstSetupView extends FrameLayout {
         copy.addView(label(getContext().getString(summaryRes), 11,
                 HeimdallUi.mutedTextColor(getContext()), false),
                 new LinearLayout.LayoutParams(-1, -2));
-        row.setPadding(0, dp(4), 0, dp(4));
-        row.setMinimumHeight(dp(58));
+        row.setPadding(0, dp(3), 0, dp(3));
+        row.setMinimumHeight(dp(50));
         return row;
     }
 
