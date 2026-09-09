@@ -11,7 +11,6 @@ import android.graphics.Paint;
 import android.graphics.PixelFormat;
 import android.graphics.RectF;
 import android.graphics.Shader;
-import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.InsetDrawable;
 import android.view.HapticFeedbackConstants;
@@ -366,7 +365,7 @@ final class KeyboardPadView extends ViewGroup {
             if (!label.isEmpty()) {
                 textPaint.setColor(textColor);
                 textPaint.setTextAlign(Paint.Align.CENTER);
-                textPaint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
+                textPaint.setTypeface(HeimdallUi.typeface(true));
                 textPaint.setTextSize(dp(label.length() > 10 ? 9 : 11));
                 String fitted = fitText(label, textPaint, width - dp(10));
                 Paint.FontMetrics metrics = textPaint.getFontMetrics();

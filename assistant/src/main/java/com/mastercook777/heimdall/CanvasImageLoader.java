@@ -4,8 +4,12 @@ import android.annotation.SuppressLint;
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.ImageDecoder;
 import android.graphics.Matrix;
+import android.graphics.drawable.AnimatedImageDrawable;
+import android.graphics.drawable.Drawable;
 import android.media.ExifInterface;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 
@@ -30,12 +34,63 @@ final class CanvasImageLoader {
 
     enum Error {
         MISSING,
+        PLATFORM_UNSUPPORTED,
         DECODE
     }
 
     interface Callback {
-        void onLoaded(Bitmap bitmap);
+        void onLoaded(DecodedImage image);
         void onError(Error error);
+    }
+
+    static final class DecodedImage {
+        private final Bitmap bitmap;
+        private final Drawable drawable;
+
+        private DecodedImage(Bitmap bitmap, Drawable drawable) {
+            this.bitmap = bitmap;
+            this.drawable = drawable;
+        }
+
+        static DecodedImage still(Bitmap bitmap) {
+            return new DecodedImage(bitmap, null);
+        }
+
+        static DecodedImage drawable(Drawable drawable) {
+            return new DecodedImage(null, drawable);
+        }
+
+        Bitmap bitmap() {
+            return bitmap;
+        }
+
+        Drawable drawable() {
+            return drawable;
+        }
+
+        boolean isAnimated() {
+            return Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+                    && drawable instanceof AnimatedImageDrawable;
+        }
+
+        void start() {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+                    && drawable instanceof AnimatedImageDrawable) {
+                ((AnimatedImageDrawable) drawable).start();
+            }
+        }
+
+        void stop() {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+                    && drawable instanceof AnimatedImageDrawable) {
+                ((AnimatedImageDrawable) drawable).stop();
+            }
+        }
+
+        void release() {
+            stop();
+            recycle(bitmap);
+        }
     }
 
     static final class Request {
@@ -80,17 +135,35 @@ final class CanvasImageLoader {
                 deliverError(request, callback, Error.MISSING);
                 return;
             }
-            Bitmap bitmap = decode(source, boundedMaxSide);
-            if (bitmap == null) {
+            CanvasAssetStore.AssetInfo info;
+            try {
+                info = CanvasAssetStore.inspectStoredAsset(source);
+            } catch (IOException ex) {
+                deliverError(request, callback, Error.DECODE);
+                return;
+            }
+            if (info.video) {
+                deliverError(request, callback, Error.DECODE);
+                return;
+            }
+            if (info.animated && Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
+                deliverError(request, callback, Error.PLATFORM_UNSUPPORTED);
+                return;
+            }
+            DecodedImage image = info.animated
+                    ? decodeAnimated(source, info, Math.min(RUNTIME_MAX_DECODE_SIDE,
+                            boundedMaxSide))
+                    : decodeStill(source, boundedMaxSide);
+            if (image == null) {
                 deliverError(request, callback, Error.DECODE);
                 return;
             }
             MAIN.post(() -> {
                 if (request.isCancelled()) {
-                    recycle(bitmap);
+                    image.release();
                     return;
                 }
-                callback.onLoaded(bitmap);
+                callback.onLoaded(image);
             });
         });
         return request;
@@ -110,7 +183,7 @@ final class CanvasImageLoader {
         });
     }
 
-    private static Bitmap decode(File source, int maxSide) {
+    private static DecodedImage decodeStill(File source, int maxSide) {
         try {
             BitmapFactory.Options bounds = new BitmapFactory.Options();
             bounds.inJustDecodeBounds = true;
@@ -129,8 +202,26 @@ final class CanvasImageLoader {
             if (decoded == null) {
                 return null;
             }
-            return applyExifOrientation(source, decoded);
+            Bitmap oriented = applyExifOrientation(source, decoded);
+            return oriented == null ? null : DecodedImage.still(oriented);
         } catch (OutOfMemoryError | RuntimeException ex) {
+            return null;
+        }
+    }
+
+    @android.annotation.TargetApi(Build.VERSION_CODES.P)
+    private static DecodedImage decodeAnimated(File source, CanvasAssetStore.AssetInfo info,
+            int maxSide) {
+        try {
+            int largest = Math.max(info.width, info.height);
+            float scale = Math.min(1f, maxSide / (float) Math.max(1, largest));
+            int targetWidth = Math.max(1, Math.round(info.width * scale));
+            int targetHeight = Math.max(1, Math.round(info.height * scale));
+            Drawable drawable = ImageDecoder.decodeDrawable(ImageDecoder.createSource(source),
+                    (decoder, imageInfo, imageSource) ->
+                            decoder.setTargetSize(targetWidth, targetHeight));
+            return DecodedImage.drawable(drawable);
+        } catch (IOException | OutOfMemoryError | RuntimeException ex) {
             return null;
         }
     }

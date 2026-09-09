@@ -4,7 +4,6 @@ import android.animation.ValueAnimator;
 import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Paint;
-import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
 import android.view.Gravity;
 import android.view.MotionEvent;
@@ -110,7 +109,7 @@ final class DockNavButton extends Button {
                 ? HeimdallUi.accent(getContext())
                 : getCurrentTextColor());
         navLabelPaint.setTextSize(getTextSize());
-        navLabelPaint.setTypeface(navSelected ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
+        navLabelPaint.setTypeface(HeimdallUi.typeface(navSelected));
         navLabelPaint.setTextAlign(Paint.Align.LEFT);
         navLabelPaint.setAlpha(isEnabled() ? 255 : 140);
         String label = fitTextToWidth(String.valueOf(getText()), navLabelPaint,

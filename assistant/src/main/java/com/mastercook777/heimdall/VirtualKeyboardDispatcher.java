@@ -63,7 +63,7 @@ public final class VirtualKeyboardDispatcher {
 
     /** Sends all-up while preserving the enumerated device across internal page changes. */
     public void park() {
-        shutdown(false);
+        shutdown();
     }
 
     /** Sends all-up without closing this dispatcher or destroying the uinput device. */
@@ -76,46 +76,24 @@ public final class VirtualKeyboardDispatcher {
                 ShizukuNativeController.releaseVirtualKeyboardKeys(context)));
     }
 
-    /** Sends all-up and destroys the device when keyboard mapping is no longer in use. */
-    public void close() {
-        shutdown(true);
-    }
-
-    /** Destroys a device parked by an earlier Activity after keyboard mapping becomes unused. */
-    public static void destroyParkedDevice(Context context) {
-        Context appContext = context.getApplicationContext();
-        DEVICE_EXECUTOR.execute(() -> {
-            if (!DEVICE_MAY_BE_OPEN.get()) return;
-            if (operationSucceeded(
-                    ShizukuNativeController.releaseVirtualKeyboard(appContext))) {
-                DEVICE_MAY_BE_OPEN.set(false);
-            }
-        });
-    }
-
     static boolean isSupportedKeyCode(int linuxKeyCode) {
         return linuxKeyCode >= MIN_LINUX_KEY_CODE && linuxKeyCode <= MAX_LINUX_KEY_CODE;
     }
 
-    private void shutdown(boolean destroyDevice) {
+    private void shutdown() {
         synchronized (lock) {
             if (closed) return;
             closed = true;
             transitions.clear();
         }
         ShizukuNativeController.removeServiceLossListener(serviceLossListener);
-        DEVICE_EXECUTOR.execute(() -> releaseKeysAndMaybeDestroy(destroyDevice));
+        DEVICE_EXECUTOR.execute(this::releaseKeys);
     }
 
-    private void releaseKeysAndMaybeDestroy(boolean destroyDevice) {
+    private void releaseKeys() {
         if (!DEVICE_MAY_BE_OPEN.get()) return;
         String allUp = ShizukuNativeController.releaseVirtualKeyboardKeys(context);
         if (!operationSucceeded(allUp)) {
-            DEVICE_MAY_BE_OPEN.set(false);
-            return;
-        }
-        if (destroyDevice && operationSucceeded(
-                ShizukuNativeController.releaseVirtualKeyboard(context))) {
             DEVICE_MAY_BE_OPEN.set(false);
         }
     }

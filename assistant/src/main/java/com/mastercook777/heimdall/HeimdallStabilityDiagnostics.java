@@ -84,6 +84,16 @@ final class HeimdallStabilityDiagnostics {
         }
     }
 
+    /** Persists bounded cross-display focus evidence for owner-operated Thor diagnostics. */
+    static void recordFocusDiagnostic(Context context, String message) {
+        record(context, "focusDiagnostic " + safeToken(message));
+    }
+
+    /** Persists privacy-safe detector lifecycle evidence without ROM paths or identities. */
+    static void recordGameContextDiagnostic(Context context, String message) {
+        record(context, "gameContextDiagnostic " + safeToken(message));
+    }
+
     void start(Activity activity) {
         appContext = activity.getApplicationContext();
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q || thermalListener != null) {
@@ -137,6 +147,9 @@ final class HeimdallStabilityDiagnostics {
             memoryClass = manager.getMemoryClass();
         }
         Runtime runtime = Runtime.getRuntime();
+        ForegroundAppTracker.Snapshot foreground = ForegroundAppTracker.latest();
+        GameContextSnapshot gameContext = GameContextTracker.latest();
+        long now = System.currentTimeMillis();
         StringBuilder report = new StringBuilder();
         report.append("Heimdall diagnostic report\n")
                 .append("createdUtc=").append(utcNow()).append('\n')
@@ -164,6 +177,33 @@ final class HeimdallStabilityDiagnostics {
                 .append(UpperScreenProjectionService.isActiveOrStarting()).append('\n')
                 .append("screenRecordingActive=")
                 .append(ScreenRecordingService.isRecording()).append('\n')
+                .append("appAwarenessEnabled=")
+                .append(ForegroundAppTracker.isEnabled(context)).append('\n')
+                .append("accessibilityServiceReady=")
+                .append(ThorAccessibilityService.isReady()).append('\n')
+                .append("foregroundPackage=")
+                .append(foreground == null ? "" : safeToken(foreground.packageName)).append('\n')
+                .append("foregroundDisplay=")
+                .append(foreground == null ? -1 : foreground.displayId).append('\n')
+                .append("foregroundAgeMs=")
+                .append(foreground == null || foreground.observedAtMs <= 0L
+                        ? -1L : Math.max(0L, now - foreground.observedAtMs)).append('\n')
+                .append("gameContextState=")
+                .append(gameContext == null ? GameContextSnapshot.State.UNKNOWN
+                        : gameContext.state).append('\n')
+                .append("gameContextPackage=")
+                .append(gameContext == null ? "" : safeToken(gameContext.packageName)).append('\n')
+                .append("gameContextPid=")
+                .append(gameContext == null ? -1 : gameContext.pid).append('\n')
+                .append("gameContextDetector=")
+                .append(gameContext == null ? "" : safeToken(gameContext.detectorId)).append('\n')
+                .append("gameContextKind=")
+                .append(gameContext == null ? "" : safeToken(gameContext.kind)).append('\n')
+                .append("gameContextAgeMs=")
+                .append(gameContext == null || gameContext.observedAt <= 0L
+                        ? -1L : Math.max(0L, now - gameContext.observedAt)).append('\n')
+                .append("gameContextHasPlatform=")
+                .append(gameContext != null && gameContext.hasPlatformIdentity()).append('\n')
                 .append("previousExit=").append(previousExitSummary(context)).append('\n')
                 .append("\nPrevious exit trace\n")
                 .append(previousExitTrace(context))

@@ -91,23 +91,14 @@ final class KeyboardInputSession {
         }
     }
 
-    void close() {
-        pressedCodeCounts.clear();
-        activeHolds.clear();
-        VirtualKeyboardDispatcher active = dispatcher;
-        dispatcher = null;
-        if (active != null) {
-            active.close();
-        } else {
-            VirtualKeyboardDispatcher.destroyParkedDevice(context);
-        }
-    }
-
     private void retainCode(int code) {
         int count = pressedCodeCounts.containsKey(code) ? pressedCodeCounts.get(code) : 0;
         pressedCodeCounts.put(code, count + 1);
         if (count == 0) {
-            ensureDispatcher().key(code, true);
+            VirtualKeyboardDispatcher active = ensureDispatcher();
+            if (active != null) {
+                active.key(code, true);
+            }
         }
     }
 
@@ -127,6 +118,10 @@ final class KeyboardInputSession {
     }
 
     private VirtualKeyboardDispatcher ensureDispatcher() {
+        if (!InputBridge.advancedControlsEnabled(context)) {
+            handleUnavailable();
+            return null;
+        }
         if (dispatcher == null) {
             dispatcher = new VirtualKeyboardDispatcher(context,
                     new VirtualKeyboardDispatcher.Listener() {
@@ -151,7 +146,7 @@ final class KeyboardInputSession {
         VirtualKeyboardDispatcher failed = dispatcher;
         dispatcher = null;
         if (failed != null) {
-            failed.close();
+            failed.park();
         }
         listener.onUnavailable();
     }

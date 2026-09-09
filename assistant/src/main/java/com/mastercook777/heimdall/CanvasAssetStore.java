@@ -2,7 +2,9 @@ package com.mastercook777.heimdall;
 
 import android.content.Context;
 import android.graphics.BitmapFactory;
+import android.media.MediaMetadataRetriever;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 
@@ -25,11 +27,11 @@ import java.util.regex.Pattern;
 
 final class CanvasAssetStore {
     private static final String DIRECTORY = "canvas_assets";
-    private static final long MAX_SOURCE_BYTES = 64L * 1024L * 1024L;
-    private static final long MAX_SOURCE_PIXELS = 100_000_000L;
-    private static final int MAX_SOURCE_SIDE = 32_768;
+    private static final long MAX_SOURCE_BYTES = 50L * 1024L * 1024L;
+    private static final int MAX_SOURCE_SIDE = 4096;
+    private static final int MAX_VIDEO_SIDE = 2048;
     private static final Pattern ASSET_ID = Pattern.compile(
-            "^[0-9a-f]{64}\\.(jpg|png|webp)$");
+            "^[0-9a-f]{64}\\.(jpg|png|webp|gif|mp4)$");
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
     private static final ExecutorService IMPORT_EXECUTOR = Executors.newSingleThreadExecutor(
             runnable -> {
@@ -42,14 +44,43 @@ final class CanvasAssetStore {
         UNAVAILABLE,
         TOO_LARGE,
         UNSUPPORTED,
-        ANIMATED,
+        APNG_UNSUPPORTED,
+        PLATFORM_UNSUPPORTED,
         DECODE,
         STORAGE
     }
 
     interface ImportCallback {
-        void onImported(String assetId);
+        void onImported(ImportedAsset asset);
         void onError(ImportError error);
+    }
+
+    static final class ImportedAsset {
+        final String assetId;
+        final boolean animated;
+        final boolean video;
+
+        ImportedAsset(String assetId, boolean animated, boolean video) {
+            this.assetId = assetId;
+            this.animated = animated;
+            this.video = video;
+        }
+    }
+
+    static final class AssetInfo {
+        final String extension;
+        final boolean animated;
+        final boolean video;
+        final int width;
+        final int height;
+
+        AssetInfo(String extension, boolean animated, boolean video, int width, int height) {
+            this.extension = extension;
+            this.animated = animated;
+            this.video = video;
+            this.width = width;
+            this.height = height;
+        }
     }
 
     static final class Request {
@@ -71,23 +102,23 @@ final class CanvasAssetStore {
         Request request = new Request();
         Context appContext = context.getApplicationContext();
         IMPORT_EXECUTOR.execute(() -> {
-            String assetId = null;
+            ImportedAsset importedAsset = null;
             ImportError error = null;
             try {
-                assetId = importImage(appContext, uri);
+                importedAsset = importMedia(appContext, uri);
             } catch (ImportException ex) {
                 error = ex.error;
             } catch (Exception ex) {
                 error = ImportError.STORAGE;
             }
-            String finalAssetId = assetId;
+            ImportedAsset finalAsset = importedAsset;
             ImportError finalError = error;
             MAIN.post(() -> {
                 if (request.isCancelled()) {
                     return;
                 }
-                if (finalAssetId != null) {
-                    callback.onImported(finalAssetId);
+                if (finalAsset != null) {
+                    callback.onImported(finalAsset);
                 } else {
                     callback.onError(finalError == null ? ImportError.STORAGE : finalError);
                 }
@@ -153,24 +184,39 @@ final class CanvasAssetStore {
     }
 
     static void validateBundledAsset(File source, String expectedExtension) throws IOException {
-        if (source == null || !source.isFile()
-                || source.length() <= 0L || source.length() > MAX_SOURCE_BYTES) {
+        inspectBundledAsset(source, expectedExtension);
+    }
+
+    static AssetInfo inspectStoredAsset(File source) throws IOException {
+        if (source == null || !source.isFile() || source.length() <= 0L) {
+            throw new IOException("Missing Canvas asset");
+        }
+        try {
+            return inspect(source, false);
+        } catch (ImportException ex) {
+            throw new IOException("Invalid Canvas asset", ex);
+        }
+    }
+
+    static AssetInfo inspectBundledAsset(File source, String expectedExtension)
+            throws IOException {
+        if (source == null || !source.isFile() || source.length() <= 0L) {
             throw new IOException("Invalid bundled Canvas asset");
         }
         String requestedExtension = expectedExtension == null
                 ? "" : expectedExtension.trim().toLowerCase(Locale.US);
         try {
-            String detectedExtension = detectStaticFormat(source);
-            validateBounds(source);
-            if (!detectedExtension.equals(requestedExtension)) {
+            AssetInfo info = inspect(source, true);
+            if (!info.extension.equals(requestedExtension)) {
                 throw new IOException("Bundled Canvas format mismatch");
             }
+            return info;
         } catch (ImportException ex) {
             throw new IOException("Unsupported bundled Canvas asset", ex);
         }
     }
 
-    private static String importImage(Context context, Uri uri) throws ImportException {
+    private static ImportedAsset importMedia(Context context, Uri uri) throws ImportException {
         if (uri == null) {
             throw new ImportException(ImportError.UNAVAILABLE);
         }
@@ -217,29 +263,46 @@ final class CanvasAssetStore {
             throw new ImportException(ImportError.UNAVAILABLE);
         }
 
-        String extension;
+        AssetInfo info;
         try {
-            extension = detectStaticFormat(temporary);
-            validateBounds(temporary);
+            info = inspect(temporary, true);
         } catch (ImportException ex) {
             temporary.delete();
             throw ex;
         }
 
-        String assetId = hex(digest.digest()) + "." + extension;
+        String assetId = hex(digest.digest()) + "." + info.extension;
         File destination = new File(directory, assetId);
         if (destination.isFile()) {
             temporary.delete();
-            return assetId;
+            return new ImportedAsset(assetId, info.animated, info.video);
         }
         if (!temporary.renameTo(destination)) {
             temporary.delete();
             throw new ImportException(ImportError.STORAGE);
         }
-        return assetId;
+        return new ImportedAsset(assetId, info.animated, info.video);
     }
 
-    private static String detectStaticFormat(File file) throws ImportException {
+    private static AssetInfo inspect(File file, boolean enforceImportLimits)
+            throws ImportException {
+        Format format = detectFormat(file);
+        int[] bounds = format.video ? readVideoBounds(file) : readImageBounds(file);
+        if (enforceImportLimits && (file.length() > MAX_SOURCE_BYTES
+                || (format.video && Math.max(bounds[0], bounds[1]) > MAX_VIDEO_SIDE)
+                || (!format.video
+                        && (bounds[0] > MAX_SOURCE_SIDE || bounds[1] > MAX_SOURCE_SIDE)))) {
+            throw new ImportException(ImportError.TOO_LARGE);
+        }
+        if (enforceImportLimits && format.animated && !format.video
+                && Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
+            throw new ImportException(ImportError.PLATFORM_UNSUPPORTED);
+        }
+        return new AssetInfo(format.extension, format.animated, format.video,
+                bounds[0], bounds[1]);
+    }
+
+    private static Format detectFormat(File file) throws ImportException {
         byte[] header = new byte[12];
         try (DataInputStream input = new DataInputStream(
                 new BufferedInputStream(new FileInputStream(file)))) {
@@ -251,22 +314,22 @@ final class CanvasAssetStore {
         }
         if ((header[0] & 0xFF) == 0xFF && (header[1] & 0xFF) == 0xD8
                 && (header[2] & 0xFF) == 0xFF) {
-            return "jpg";
+            return new Format("jpg", false);
         }
         if (isPngHeader(header)) {
             if (containsPngAnimation(file)) {
-                throw new ImportException(ImportError.ANIMATED);
+                throw new ImportException(ImportError.APNG_UNSUPPORTED);
             }
-            return "png";
+            return new Format("png", false);
         }
         if (asciiEquals(header, 0, "RIFF") && asciiEquals(header, 8, "WEBP")) {
-            if (containsWebpAnimation(file)) {
-                throw new ImportException(ImportError.ANIMATED);
-            }
-            return "webp";
+            return new Format("webp", containsWebpAnimation(file));
         }
         if (asciiEquals(header, 0, "GIF8")) {
-            throw new ImportException(ImportError.ANIMATED);
+            return new Format("gif", true, false);
+        }
+        if (asciiEquals(header, 4, "ftyp")) {
+            return new Format("mp4", true, true);
         }
         throw new ImportException(ImportError.UNSUPPORTED);
     }
@@ -324,17 +387,52 @@ final class CanvasAssetStore {
         }
     }
 
-    private static void validateBounds(File file) throws ImportException {
+    private static int[] readImageBounds(File file) throws ImportException {
         BitmapFactory.Options options = new BitmapFactory.Options();
         options.inJustDecodeBounds = true;
         BitmapFactory.decodeFile(file.getAbsolutePath(), options);
-        long pixels = (long) options.outWidth * (long) options.outHeight;
         if (options.outWidth <= 0 || options.outHeight <= 0) {
             throw new ImportException(ImportError.DECODE);
         }
-        if (options.outWidth > MAX_SOURCE_SIDE || options.outHeight > MAX_SOURCE_SIDE
-                || pixels > MAX_SOURCE_PIXELS) {
-            throw new ImportException(ImportError.TOO_LARGE);
+        return new int[]{options.outWidth, options.outHeight};
+    }
+
+    private static int[] readVideoBounds(File file) throws ImportException {
+        MediaMetadataRetriever retriever = new MediaMetadataRetriever();
+        try {
+            retriever.setDataSource(file.getAbsolutePath());
+            int width = parsePositiveInt(retriever.extractMetadata(
+                    MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH));
+            int height = parsePositiveInt(retriever.extractMetadata(
+                    MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT));
+            String mime = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_MIMETYPE);
+            if (width <= 0 || height <= 0 || mime == null
+                    || !mime.toLowerCase(Locale.US).startsWith("video/")) {
+                throw new ImportException(ImportError.DECODE);
+            }
+            int rotation = parsePositiveInt(retriever.extractMetadata(
+                    MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION));
+            if (rotation == 90 || rotation == 270) {
+                int swap = width;
+                width = height;
+                height = swap;
+            }
+            return new int[]{width, height};
+        } catch (RuntimeException ex) {
+            throw new ImportException(ImportError.DECODE);
+        } finally {
+            try {
+                retriever.release();
+            } catch (IOException | RuntimeException ignored) {
+            }
+        }
+    }
+
+    private static int parsePositiveInt(String value) {
+        try {
+            return Math.max(0, Integer.parseInt(value == null ? "" : value));
+        } catch (NumberFormatException ex) {
+            return 0;
         }
     }
 
@@ -411,6 +509,22 @@ final class CanvasAssetStore {
 
         ImportException(ImportError error) {
             this.error = error;
+        }
+    }
+
+    private static final class Format {
+        final String extension;
+        final boolean animated;
+        final boolean video;
+
+        Format(String extension, boolean animated) {
+            this(extension, animated, false);
+        }
+
+        Format(String extension, boolean animated, boolean video) {
+            this.extension = extension;
+            this.animated = animated;
+            this.video = video;
         }
     }
 }

@@ -14,11 +14,9 @@ import android.view.View;
 /**
  * Briefly owns focus on Thor's upper display, then returns it to the existing upper task.
  *
- * <p>Heimdall's lower Activity must remain non-focusable for game performance. Launching that
- * Activity can nevertheless leave Android's global focused display on the lower panel, where no
- * focused window exists. A display-unspecified Back/Home event then has no dispatch target. This
- * transparent one-shot task uses the public multi-display Activity launch path to move focus to
- * display 0 without injecting input or relaunching the user's upper-screen application.</p>
+ * <p>This intentionally uses a real, transparent display-0 Activity. It is the owner-selected
+ * compromise for reliable Back ownership during active play; it does not inject or intercept
+ * Back and it does not depend on Accessibility, Shizuku, or Game Context.</p>
  */
 public final class UpperDisplayFocusHandoffActivity extends Activity {
     private static final String TAG = "HeimdallGameFocus";
@@ -34,14 +32,14 @@ public final class UpperDisplayFocusHandoffActivity extends Activity {
         View decor = source.getWindow().getDecorView();
         Display sourceDisplay = decor == null ? null : decor.getDisplay();
         if (sourceDisplay == null || sourceDisplay.getDisplayId() == Display.DEFAULT_DISPLAY) {
-            Log.w(TAG, "upper focus handoff skipped; Heimdall lower display unresolved");
+            record(source, "explicit-handoff skipped-lower-display-unresolved");
             return false;
         }
         DisplayManager displayManager = source.getSystemService(DisplayManager.class);
         Display upperDisplay = displayManager == null
                 ? null : displayManager.getDisplay(Display.DEFAULT_DISPLAY);
         if (upperDisplay == null || !upperDisplay.isValid()) {
-            Log.w(TAG, "upper focus handoff skipped; default display unavailable");
+            record(source, "explicit-handoff skipped-default-display-unavailable");
             return false;
         }
 
@@ -54,11 +52,13 @@ public final class UpperDisplayFocusHandoffActivity extends Activity {
         options.setLaunchDisplayId(Display.DEFAULT_DISPLAY);
         try {
             source.startActivity(intent, options.toBundle());
-            Log.i(TAG, "upper focus handoff requested from display="
+            record(source, "explicit-handoff requested sourceDisplay="
                     + sourceDisplay.getDisplayId());
             return true;
-        } catch (Throwable throwable) {
-            Log.e(TAG, "upper focus handoff launch failed", throwable);
+        } catch (RuntimeException error) {
+            Log.e(TAG, "upper focus handoff launch failed", error);
+            record(source, "explicit-handoff failed type="
+                    + error.getClass().getSimpleName());
             return false;
         }
     }
@@ -70,14 +70,15 @@ public final class UpperDisplayFocusHandoffActivity extends Activity {
         overridePendingTransition(0, 0);
         handler.postDelayed(finishTimeout, FINISH_TIMEOUT_MS);
         Display display = getWindow().getDecorView().getDisplay();
-        Log.i(TAG, "upper focus handoff attached display="
-                + (display == null ? Display.INVALID_DISPLAY : display.getDisplayId()));
+        int displayId = display == null ? Display.INVALID_DISPLAY : display.getDisplayId();
+        record(this, "explicit-handoff attached display=" + displayId);
     }
 
     @Override
     public void onWindowFocusChanged(boolean hasFocus) {
         super.onWindowFocusChanged(hasFocus);
         if (hasFocus) {
+            record(this, "explicit-handoff window-focus=true");
             getWindow().getDecorView().post(this::finishHandoff);
         }
     }
@@ -93,8 +94,13 @@ public final class UpperDisplayFocusHandoffActivity extends Activity {
             return;
         }
         handler.removeCallbacks(finishTimeout);
-        Log.i(TAG, "upper focus handoff complete");
+        record(this, "explicit-handoff complete");
         finishAndRemoveTask();
         overridePendingTransition(0, 0);
+    }
+
+    private static void record(Activity activity, String message) {
+        Log.i(TAG, message);
+        HeimdallStabilityDiagnostics.recordFocusDiagnostic(activity, message);
     }
 }

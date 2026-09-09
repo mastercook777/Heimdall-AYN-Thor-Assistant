@@ -17,7 +17,7 @@
 
 English | [简体中文](README.zh-CN.md)
 
-Heimdall keeps the game on Thor's upper screen while the lower screen becomes a persistent control and reference console: Profiles, macros, touch controls, maps, guides, static-image Canvases, magnification, recording, and Quick Actions stay within thumb reach.
+Heimdall keeps the game on Thor's upper screen while the lower screen becomes a persistent control and reference console: Profiles, macros, touch controls, maps, guides, local-media Canvases, magnification, recording, and Quick Actions stay within thumb reach.
 
 > **Alpha software:** Heimdall targets AYN Thor. Compatibility is not guaranteed for every Thor firmware, controller mode, game, emulator, or other dual-screen device.
 
@@ -50,7 +50,7 @@ Heimdall keeps the game on Thor's upper screen while the lower screen becomes a 
 | Macros | Structured tap, hold, swipe, wait, and physical-controller sequences, including a controller composer with chords, charge holds, recomposition, mirroring, cloning, and bounded cancellation. No free-form command editing is required. |
 | Touch and aiming | Basic Touch, touchpad drag, Virtual Right Stick, Precision Aim, a real relative Virtual Mouse, and mapping-compatible Shizuku Touch when the required route is available. |
 | PC keyboard | A temporary complete US ANSI keyboard plus Profile-owned configurable Keypad modules through Shizuku/uinput. This is active-play PC input, not Android IME text entry. |
-| Reference tools | Local maps, PDFs, guides, Interactive Map links, and multiple independent static-image Canvases per Profile. |
+| Reference tools | Local maps, PDFs, guides, Interactive Map links, and Profile-owned image or muted looping-video Canvases. |
 | Upper-screen tools | Screenshot, screen recording, and one live region magnifier per Profile. |
 
 <table>
@@ -102,7 +102,7 @@ Before moving from an older test build:
 4. Re-authorize the services you use.
 5. Import the exported file and confirm the important Profiles before deleting the old build or backup.
 
-Older builds export configuration-only JSON, which remains importable but cannot recover missing external assets. Current builds export a self-contained `.heimdall-profile` bundle containing Profile data plus supported Profile icons, maps, file Guides, user Macro icons, and Canvas images.
+Older builds export configuration-only JSON, which remains importable but cannot recover missing external assets. Current builds export a self-contained `.heimdall-profile` bundle containing Profile data plus supported Profile icons, maps, file Guides, user Macro icons, and Canvas media.
 
 ## 2. Create Your First Profile
 
@@ -196,7 +196,7 @@ Enhanced Touch protects Thor's built-in mapping by default and rejects Macros co
 
 - Add the magnifier to the Grid, accept Android's capture consent, and select the upper-screen region. Hold the module to reselect the region. One live magnifier is supported per Profile, and it cannot run at the same time as screen recording.
 - Maps and guides belong to the current Profile and may reference local images, PDFs, text, or an Interactive Map URL.
-- Canvas displays static JPG, PNG, or WebP references. A Profile can contain multiple independent Canvases. Double-tap a Canvas for full-screen viewing and hold it to change its image or composition.
+- Canvas accepts local JPG, PNG, GIF, WebP, and MP4 media. GIF and animated WebP require Android 9 or newer; MP4 is always muted and loops. A Profile can contain multiple independent static Canvases, while GIF, animated WebP, and MP4 share a limit of one dynamic Canvas. Files are limited to 50 MiB; images may be up to 4096 × 4096 and MP4 video up to 2048px on its longest side. APNG is not supported. Double-tap a Canvas for full-screen viewing and hold it to replace its media or adjust composition.
 
 ### Screenshot And Recording
 
