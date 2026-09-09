@@ -1,5 +1,6 @@
 package com.mastercook777.heimdall;
 
+import android.annotation.SuppressLint;
 import android.content.Context;
 import android.content.SharedPreferences;
 
@@ -35,8 +36,14 @@ final class FirstSetupState {
         preferences(context).edit().putInt(KEY_PHASE, PHASE_CHECKLIST).apply();
     }
 
+    @SuppressLint("ApplySharedPref")
     static void markResolved(Context context) {
-        preferences(context).edit().putInt(KEY_PHASE, PHASE_RESOLVED).apply();
+        // Resolution can be followed immediately by a locale-driven Activity/process restart.
+        // Persist the terminal phase before the UI is dismissed so recreation cannot reopen it.
+        preferences(context).edit()
+                .putBoolean(KEY_INITIALIZED, true)
+                .putInt(KEY_PHASE, PHASE_RESOLVED)
+                .commit();
     }
 
     static boolean isProfileCreated(Context context) {

@@ -1692,6 +1692,7 @@ public class AssistantActivity extends Activity {
     }
 
     private void openAdvancedControlsFromFirstSetup() {
+        FirstSetupState.markResolved(this);
         dismissFirstSetup(false);
         activeSettingsSection = SETTINGS_INPUT;
         settingsContentScrollY = 0;
@@ -9340,6 +9341,7 @@ public class AssistantActivity extends Activity {
         renderProfiles();
         renderSelectedProfile();
         rebuildContent();
+        refreshFirstSetupView();
         showAction(message);
     }
 
