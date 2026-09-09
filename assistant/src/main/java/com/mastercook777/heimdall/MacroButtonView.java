@@ -291,4 +291,5 @@ final class MacroButtonView extends Button {
     private int dp(int value) {
         return Math.round(value * getResources().getDisplayMetrics().density);
     }
+
 }

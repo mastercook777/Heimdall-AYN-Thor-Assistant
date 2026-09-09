@@ -47,6 +47,26 @@ final class ForegroundAppTracker {
         return preferences(context).getBoolean(KEY_ENABLED, false);
     }
 
+    static boolean hasExplicitEnabledPreference(Context context) {
+        return preferences(context).contains(KEY_ENABLED);
+    }
+
+    static boolean shouldAutoEnable(boolean explicitlyConfigured,
+            boolean accessibilityReady, boolean shizukuReady) {
+        return !explicitlyConfigured && accessibilityReady && shizukuReady;
+    }
+
+    static boolean enableIfUnset(Context context) {
+        SharedPreferences prefs = preferences(context);
+        synchronized (ForegroundAppTracker.class) {
+            if (prefs.contains(KEY_ENABLED)) {
+                return false;
+            }
+            prefs.edit().putBoolean(KEY_ENABLED, true).apply();
+            return true;
+        }
+    }
+
     static void setEnabled(Context context, boolean enabled) {
         preferences(context).edit().putBoolean(KEY_ENABLED, enabled).apply();
     }
@@ -63,6 +83,21 @@ final class ForegroundAppTracker {
         if (listener == value) {
             listener = null;
         }
+    }
+
+    static void clear() {
+        if (latest == null) {
+            return;
+        }
+        latest = null;
+        Listener current = listener;
+        if (current != null) {
+            current.onForegroundAppChanged(null);
+        }
+    }
+
+    static boolean isObservationRequested(Context context) {
+        return isEnabled(context);
     }
 
     static void publish(Snapshot snapshot) {

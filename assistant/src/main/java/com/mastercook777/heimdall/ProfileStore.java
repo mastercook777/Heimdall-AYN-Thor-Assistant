@@ -18,6 +18,12 @@ public final class ProfileStore {
     private ProfileStore() {
     }
 
+    static boolean hasStoredProfiles(Context context) {
+        String raw = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .getString(KEY_PROFILES, "");
+        return raw != null && raw.length() > 0;
+    }
+
     public static List<GameProfile> loadProfiles(Context context) {
         SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         String raw = prefs.getString(KEY_PROFILES, "");

@@ -336,10 +336,12 @@ final class HeimdallUi {
         view.setTextSize(sp);
         view.setTextColor(resolveColor(context, color));
         view.setGravity(Gravity.CENTER_VERTICAL);
-        if (bold) {
-            view.setTypeface(Typeface.DEFAULT_BOLD);
-        }
+        view.setTypeface(typeface(bold));
         return view;
+    }
+
+    static Typeface typeface(boolean bold) {
+        return Typeface.create("sans-serif", bold ? Typeface.BOLD : Typeface.NORMAL);
     }
 
     static void applyModulePanel(Context context, LinearLayout view) {
@@ -404,6 +406,7 @@ final class HeimdallUi {
         button.setText(label);
         button.setTextSize(TYPE_BUTTON);
         button.setAllCaps(false);
+        button.setTypeface(typeface(false));
         button.setTextColor(textColor(context));
         button.setIncludeFontPadding(false);
         applySecondaryButton(context, button);

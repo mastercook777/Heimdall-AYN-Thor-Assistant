@@ -46,6 +46,9 @@ public final class ProfileAssetProvider extends ContentProvider {
         if ("gif".equals(extension)) {
             return "image/gif";
         }
+        if ("mp4".equals(extension)) {
+            return "video/mp4";
+        }
         if ("pdf".equals(extension)) {
             return "application/pdf";
         }

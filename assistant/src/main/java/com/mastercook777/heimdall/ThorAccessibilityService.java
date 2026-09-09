@@ -10,6 +10,7 @@ import android.hardware.HardwareBuffer;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.util.Log;
 import android.view.Display;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
@@ -20,6 +21,7 @@ import java.util.List;
 import java.util.Locale;
 
 public final class ThorAccessibilityService extends AccessibilityService {
+    private static final String FOCUS_TAG = "HeimdallGameFocus";
     private static ThorAccessibilityService instance;
     private static volatile boolean diagnosticScanningSuspended;
     private static String lastExternalPackageName = "";
@@ -44,6 +46,13 @@ public final class ThorAccessibilityService extends AccessibilityService {
     private Thread activeMacroGamepadThread;
     private String activeMacroLabel = "";
     private boolean activeMacroCancelRequested;
+    private boolean upperDisplayHandoffDispatching;
+
+    enum SingleTouchHandoffDispatchResult {
+        ACCEPTED,
+        BUSY,
+        REJECTED
+    }
 
     public static ThorAccessibilityService getInstance() {
         return instance;
@@ -122,7 +131,10 @@ public final class ThorAccessibilityService extends AccessibilityService {
     protected void onServiceConnected() {
         super.onServiceConnected();
         instance = this;
-        if (!diagnosticScanningSuspended && ForegroundAppTracker.isEnabled(this)) {
+        HeimdallStabilityDiagnostics.recordFocusDiagnostic(
+                this, "accessibility service-connected");
+        if (!diagnosticScanningSuspended
+                && ForegroundAppTracker.isObservationRequested(this)) {
             handler.postDelayed(foregroundRefresh, 120L);
         }
     }
@@ -131,6 +143,8 @@ public final class ThorAccessibilityService extends AccessibilityService {
     public void onDestroy() {
         handler.removeCallbacks(foregroundRefresh);
         cancelMacro();
+        HeimdallStabilityDiagnostics.recordFocusDiagnostic(
+                this, "accessibility service-destroyed");
         if (instance == this) {
             instance = null;
         }
@@ -139,7 +153,8 @@ public final class ThorAccessibilityService extends AccessibilityService {
 
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
-        if (diagnosticScanningSuspended || !ForegroundAppTracker.isEnabled(this)) {
+        if (diagnosticScanningSuspended
+                || !ForegroundAppTracker.isObservationRequested(this)) {
             return;
         }
         CharSequence packageName = event.getPackageName();
@@ -151,12 +166,26 @@ public final class ThorAccessibilityService extends AccessibilityService {
             if (isGameAssistantPackage(value)) {
                 handler.removeCallbacks(foregroundRefresh);
                 handler.postDelayed(foregroundRefresh, 180L);
+            } else if (isLauncherPackage(value)) {
+                EventWindow window = resolveEventWindow(event.getWindowId());
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+                        && window.displayId == Display.DEFAULT_DISPLAY) {
+                    ForegroundAppTracker.clear();
+                }
             }
             return;
         }
         rememberPackage(value);
-        lastExternalPackageName = value;
         EventWindow window = resolveEventWindow(event.getWindowId());
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+                && window.displayId != Display.DEFAULT_DISPLAY) {
+            // A lower-screen picker or transient unresolved event must not replace
+            // the verified upper-window snapshot. Re-scan display 0 instead.
+            handler.removeCallbacks(foregroundRefresh);
+            handler.post(foregroundRefresh);
+            return;
+        }
+        lastExternalPackageName = value;
         ForegroundAppTracker.publish(new ForegroundAppTracker.Snapshot(
                 value,
                 event.getClassName() == null ? "" : event.getClassName().toString(),
@@ -178,7 +207,8 @@ public final class ThorAccessibilityService extends AccessibilityService {
     }
 
     public void refreshForegroundApp() {
-        if (diagnosticScanningSuspended || !ForegroundAppTracker.isEnabled(this)) {
+        if (diagnosticScanningSuspended
+                || !ForegroundAppTracker.isObservationRequested(this)) {
             return;
         }
         long started = DebugPerformanceDiagnostics.beginTask(
@@ -186,6 +216,8 @@ public final class ThorAccessibilityService extends AccessibilityService {
         int windowCount = 0;
         AccessibilityWindowInfo best = null;
         int bestScore = Integer.MIN_VALUE;
+        AccessibilityWindowInfo upperOwner = null;
+        int upperOwnerScore = Integer.MIN_VALUE;
         for (AccessibilityWindowInfo window : getWindows()) {
             windowCount++;
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
@@ -196,16 +228,20 @@ public final class ThorAccessibilityService extends AccessibilityService {
                 continue;
             }
             AccessibilityNodeInfo root = window.getRoot();
-            CharSequence packageName = root == null ? null : root.getPackageName();
-            if (packageName == null || !isTrackablePackage(packageName.toString())) {
-                continue;
-            }
             int score = window.getLayer();
             if (window.isActive()) {
                 score += 10000;
             }
             if (window.isFocused()) {
                 score += 20000;
+            }
+            if (upperOwner == null || score > upperOwnerScore) {
+                upperOwner = window;
+                upperOwnerScore = score;
+            }
+            CharSequence packageName = root == null ? null : root.getPackageName();
+            if (packageName == null || !isTrackablePackage(packageName.toString())) {
+                continue;
             }
             if (best == null || score > bestScore) {
                 best = window;
@@ -215,7 +251,18 @@ public final class ThorAccessibilityService extends AccessibilityService {
         for (int i = 0; i < windowCount; i++) {
             DebugPerformanceDiagnostics.countAccessibilityWindowInspection();
         }
+        AccessibilityNodeInfo upperOwnerRoot = upperOwner == null ? null : upperOwner.getRoot();
+        String upperOwnerPackage = upperOwnerRoot == null
+                || upperOwnerRoot.getPackageName() == null
+                ? "" : upperOwnerRoot.getPackageName().toString();
+        if (isLauncherPackage(upperOwnerPackage)) {
+            ForegroundAppTracker.clear();
+            DebugPerformanceDiagnostics.endTask(
+                    "Accessibility getWindows scan", started);
+            return;
+        }
         if (best == null) {
+            ForegroundAppTracker.clear();
             DebugPerformanceDiagnostics.endTask(
                     "Accessibility getWindows scan", started);
             return;
@@ -248,8 +295,13 @@ public final class ThorAccessibilityService extends AccessibilityService {
                 && !packageName.equals("com.android.systemui")
                 && !packageName.equals("com.android.settings")
                 && !packageName.contains("permissioncontroller")
-                && !packageName.contains("launcher")
+                && !isLauncherPackage(packageName)
                 && !isGameAssistantPackage(packageName);
+    }
+
+    static boolean isLauncherPackage(String packageName) {
+        return packageName != null
+                && packageName.toLowerCase(Locale.ROOT).contains("launcher");
     }
 
     private static boolean isGameAssistantPackage(String packageName) {
@@ -337,6 +389,76 @@ public final class ThorAccessibilityService extends AccessibilityService {
                             ? getString(R.string.common_macro_fallback) : label));
             callback.onMacroFinished(true);
         }
+    }
+
+    SingleTouchHandoffDispatchResult dispatchUpperDisplaySingleTouchHandoff(
+            int displayId, float x, float y, long durationMs) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R
+                || displayId != Display.DEFAULT_DISPLAY
+                || x < 0f
+                || y < 0f
+                || durationMs < 1L) {
+            return SingleTouchHandoffDispatchResult.REJECTED;
+        }
+        synchronized (this) {
+            if (upperDisplayHandoffDispatching
+                    || InputBridge.hasActiveMacroDispatch()
+                    || activeMacroCallback != null
+                    || activeMacroGamepadThread != null
+                    || touchpadActive
+                    || touchpadDispatching
+                    || activeTouchpadStroke != null
+                    || activeTouchpadCallback != null) {
+                return SingleTouchHandoffDispatchResult.BUSY;
+            }
+            upperDisplayHandoffDispatching = true;
+        }
+
+        Path path = new Path();
+        path.moveTo(x, y);
+        GestureDescription gesture = new GestureDescription.Builder()
+                .addStroke(new GestureDescription.StrokeDescription(
+                        path, 0L, durationMs))
+                .setDisplayId(displayId)
+                .build();
+        boolean accepted;
+        try {
+            accepted = dispatchGesture(gesture, new GestureResultCallback() {
+                @Override
+                public void onCompleted(GestureDescription gestureDescription) {
+                    finishUpperDisplayHandoff("completed");
+                }
+
+                @Override
+                public void onCancelled(GestureDescription gestureDescription) {
+                    // This deterministic primitive never retries or launches another route.
+                    finishUpperDisplayHandoff("cancelled");
+                }
+            }, handler);
+        } catch (Throwable throwable) {
+            synchronized (this) {
+                upperDisplayHandoffDispatching = false;
+            }
+            Log.e(FOCUS_TAG, "upper display handoff submission failed", throwable);
+            return SingleTouchHandoffDispatchResult.REJECTED;
+        }
+        if (!accepted) {
+            synchronized (this) {
+                upperDisplayHandoffDispatching = false;
+            }
+            Log.w(FOCUS_TAG, "upper display handoff rejected by AccessibilityService");
+            return SingleTouchHandoffDispatchResult.REJECTED;
+        }
+        return SingleTouchHandoffDispatchResult.ACCEPTED;
+    }
+
+    private void finishUpperDisplayHandoff(String outcome) {
+        synchronized (this) {
+            upperDisplayHandoffDispatching = false;
+        }
+        Log.i(FOCUS_TAG, "upper display handoff " + outcome);
+        HeimdallStabilityDiagnostics.recordFocusDiagnostic(
+                this, "deterministic handoff-" + outcome);
     }
 
     private synchronized boolean isMacroActive(

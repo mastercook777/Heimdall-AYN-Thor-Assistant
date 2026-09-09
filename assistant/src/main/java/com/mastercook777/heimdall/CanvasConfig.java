@@ -16,6 +16,8 @@ final class CanvasConfig {
     float focusY = 0.5f;
     float zoom = MIN_ZOOM;
     String shape = SHAPE_RECTANGLE;
+    boolean animated;
+    boolean video;
 
     CanvasConfig copy() {
         CanvasConfig copy = new CanvasConfig();
@@ -25,6 +27,8 @@ final class CanvasConfig {
         copy.focusY = focusY;
         copy.zoom = zoom;
         copy.shape = shape;
+        copy.animated = animated;
+        copy.video = video;
         return copy;
     }
 
@@ -54,6 +58,8 @@ final class CanvasConfig {
         object.put("focusY", focusY);
         object.put("zoom", zoom);
         object.put("shape", shape);
+        object.put("animated", animated);
+        object.put("video", video);
         return object;
     }
 
@@ -68,6 +74,8 @@ final class CanvasConfig {
         config.focusY = (float) object.optDouble("focusY", 0.5d);
         config.zoom = (float) object.optDouble("zoom", MIN_ZOOM);
         config.shape = object.optString("shape", SHAPE_RECTANGLE);
+        config.animated = object.optBoolean("animated", false);
+        config.video = object.optBoolean("video", false);
         config.normalize();
         return config;
     }

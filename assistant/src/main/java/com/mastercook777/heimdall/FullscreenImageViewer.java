@@ -2,7 +2,6 @@ package com.mastercook777.heimdall;
 
 import android.annotation.SuppressLint;
 import android.content.Context;
-import android.graphics.Bitmap;
 import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
@@ -18,7 +17,7 @@ final class FullscreenImageViewer extends FrameLayout {
         void onEditComposition();
     }
 
-    private final String assetId;
+    private final CanvasConfig config;
     private final Listener listener;
     private final LinearLayout toolbar;
     private final ImageButton revealButton;
@@ -26,11 +25,14 @@ final class FullscreenImageViewer extends FrameLayout {
     private final Runnable hideControls = () -> setControlsVisible(false);
     private CanvasImageLoader.Request loadRequest;
     private ZoomableMapView viewer;
-    private Bitmap bitmap;
+    private CanvasImageLoader.DecodedImage decodedImage;
+    private CanvasVideoView videoViewer;
+    private boolean playbackAllowed;
+    private boolean aggregatedVisible;
 
-    FullscreenImageViewer(Context context, String assetId, Listener listener) {
+    FullscreenImageViewer(Context context, CanvasConfig config, Listener listener) {
         super(context);
-        this.assetId = assetId;
+        this.config = config == null ? new CanvasConfig() : config.copy();
         this.listener = listener;
         setBackgroundColor(0xFF020407);
 
@@ -56,13 +58,25 @@ final class FullscreenImageViewer extends FrameLayout {
         revealButton.setElevation(dp(3));
         addView(revealButton, revealParams);
         showControls();
-        post(this::loadImage);
+        post(this::loadMedia);
     }
 
     @Override
     protected void onDetachedFromWindow() {
         release();
         super.onDetachedFromWindow();
+    }
+
+    @Override
+    public void onVisibilityAggregated(boolean isVisible) {
+        super.onVisibilityAggregated(isVisible);
+        aggregatedVisible = isVisible;
+        updatePlayback();
+    }
+
+    void setPlaybackAllowed(boolean allowed) {
+        playbackAllowed = allowed;
+        updatePlayback();
     }
 
     void release() {
@@ -75,36 +89,84 @@ final class FullscreenImageViewer extends FrameLayout {
             viewer.setImageDrawable(null);
             viewer = null;
         }
-        CanvasImageLoader.recycle(bitmap);
-        bitmap = null;
+        if (decodedImage != null) {
+            decodedImage.release();
+            decodedImage = null;
+        }
+        if (videoViewer != null) {
+            videoViewer.release();
+            videoViewer = null;
+        }
     }
 
-    private void loadImage() {
-        loadRequest = CanvasImageLoader.load(getContext(), assetId, 3000,
+    private void loadMedia() {
+        if (config.video) {
+            loadVideo();
+            return;
+        }
+        loadRequest = CanvasImageLoader.load(getContext(), config.assetId, 3000,
                 new CanvasImageLoader.Callback() {
                     @Override
-                    public void onLoaded(Bitmap loaded) {
+                    public void onLoaded(CanvasImageLoader.DecodedImage loaded) {
                         loadRequest = null;
-                        bitmap = loaded;
+                        decodedImage = loaded;
                         viewer = new ZoomableMapView(getContext());
-                        viewer.setImageBitmap(bitmap);
+                        if (loaded.bitmap() != null) {
+                            viewer.setImageBitmap(loaded.bitmap());
+                        } else {
+                            viewer.setImageDrawable(loaded.drawable());
+                        }
                         viewer.setBackgroundColor(0xFF020407);
                         addView(viewer, 0, new LayoutParams(-1, -1));
                         stateView.setVisibility(GONE);
                         bringChildToFront(toolbar);
                         bringChildToFront(revealButton);
                         showControls();
+                        updatePlayback();
                     }
 
                     @Override
                     public void onError(CanvasImageLoader.Error error) {
                         loadRequest = null;
                         stateView.setText(error == CanvasImageLoader.Error.MISSING
-                                ? R.string.canvas_image_missing : R.string.canvas_decode_error);
+                                ? R.string.canvas_image_missing
+                                : error == CanvasImageLoader.Error.PLATFORM_UNSUPPORTED
+                                        ? R.string.canvas_animation_platform_unsupported
+                                        : R.string.canvas_decode_error);
                         stateView.setTextColor(HeimdallUi.COLOR_DANGER);
                         showControls();
                     }
                 });
+    }
+
+    private void loadVideo() {
+        videoViewer = new CanvasVideoView(getContext());
+        videoViewer.setInteractive(true);
+        CanvasConfig fullscreenConfig = config.copy();
+        fullscreenConfig.focusX = 0.5f;
+        fullscreenConfig.focusY = 0.5f;
+        fullscreenConfig.zoom = CanvasConfig.MIN_ZOOM;
+        videoViewer.setComposition(fullscreenConfig, false);
+        addView(videoViewer, 0, new LayoutParams(-1, -1));
+        videoViewer.setSource(fullscreenConfig, new CanvasVideoView.Listener() {
+            @Override
+            public void onReady() {
+                stateView.setVisibility(GONE);
+                bringChildToFront(toolbar);
+                bringChildToFront(revealButton);
+                showControls();
+            }
+
+            @Override
+            public void onError() {
+                stateView.setText(CanvasAssetStore.resolve(getContext(), config.assetId) == null
+                        ? R.string.canvas_image_missing : R.string.canvas_decode_error);
+                stateView.setTextColor(HeimdallUi.COLOR_DANGER);
+                stateView.setVisibility(VISIBLE);
+                showControls();
+            }
+        });
+        updatePlayback();
     }
 
     private LinearLayout createToolbar() {
@@ -129,6 +191,9 @@ final class FullscreenImageViewer extends FrameLayout {
                 () -> {
                     if (viewer != null) {
                         viewer.resetZoom();
+                    }
+                    if (videoViewer != null) {
+                        videoViewer.fitImage();
                     }
                 }), iconParams());
         row.addView(iconButton(R.drawable.ic_edit, R.string.canvas_edit_composition,
@@ -182,6 +247,21 @@ final class FullscreenImageViewer extends FrameLayout {
     private void setControlsVisible(boolean visible) {
         toolbar.setVisibility(visible ? VISIBLE : GONE);
         revealButton.setVisibility(visible ? GONE : VISIBLE);
+    }
+
+    private void updatePlayback() {
+        if (videoViewer != null) {
+            videoViewer.setPlaybackAllowed(
+                    playbackAllowed && aggregatedVisible && isAttachedToWindow());
+        }
+        if (decodedImage == null || !decodedImage.isAnimated()) {
+            return;
+        }
+        if (playbackAllowed && aggregatedVisible && isAttachedToWindow()) {
+            decodedImage.start();
+        } else {
+            decodedImage.stop();
+        }
     }
 
     private int dp(int value) {

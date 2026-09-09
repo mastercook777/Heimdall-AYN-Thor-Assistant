@@ -6,7 +6,6 @@ import android.util.Log;
 import android.view.View;
 import android.view.ViewParent;
 import android.view.inputmethod.InputMethodManager;
-import android.widget.EditText;
 
 /** Grants Heimdall window focus only for an explicit lower-screen text-input session. */
 final class ThorTextInputFocusLease {
@@ -14,7 +13,7 @@ final class ThorTextInputFocusLease {
     private static final int RELEASE_MAX_FRAMES = 6;
 
     private Activity activity;
-    private EditText activeInput;
+    private View activeInput;
     private Runnable onReleased;
     private Runnable pendingAfterRelease;
     private boolean holdingWindowFocus;
@@ -42,7 +41,7 @@ final class ThorTextInputFocusLease {
         }
     };
 
-    void acquire(Activity activity, ThorGameFocusProtection focusProtection, EditText input) {
+    void acquire(Activity activity, ThorGameFocusProtection focusProtection, View input) {
         if (activity == null || focusProtection == null || input == null
                 || releasingWindowFocus) {
             return;
@@ -133,7 +132,7 @@ final class ThorTextInputFocusLease {
     }
 
     private void requestInputFocus() {
-        EditText input = activeInput;
+        View input = activeInput;
         if (input == null) {
             return;
         }
@@ -152,7 +151,7 @@ final class ThorTextInputFocusLease {
     }
 
     private void hideKeyboard() {
-        EditText input = activeInput;
+        View input = activeInput;
         if (input == null) {
             return;
         }
@@ -164,7 +163,7 @@ final class ThorTextInputFocusLease {
     }
 
     private void finishRelease(boolean windowFocusReleased) {
-        EditText input = activeInput;
+        View input = activeInput;
         if (input != null) {
             input.removeCallbacks(releaseCheck);
             input.clearFocus();

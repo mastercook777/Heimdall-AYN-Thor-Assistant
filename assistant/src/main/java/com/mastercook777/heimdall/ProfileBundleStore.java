@@ -60,7 +60,7 @@ final class ProfileBundleStore {
     private static final Pattern JOB_NAME = Pattern.compile(
             "^job-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$");
     private static final Pattern ASSET_PATH = Pattern.compile(
-            "^assets/([0-9a-f]{64})\\.(jpg|png|webp|gif|pdf|txt|md|html|htm)$");
+            "^assets/([0-9a-f]{64})\\.(jpg|png|webp|gif|mp4|pdf|txt|md|html|htm)$");
     private static final long MAX_ASSET_BYTES = 128L * 1024L * 1024L;
     private static final long MAX_TOTAL_ASSET_BYTES = 512L * 1024L * 1024L;
     private static final long MAX_BUNDLE_BYTES = 512L * 1024L * 1024L;
@@ -742,6 +742,7 @@ final class ProfileBundleStore {
             JSONObject layout = profile.optJSONObject("widgetLayout");
             JSONArray items = layout == null ? null : layout.optJSONArray("items");
             if (items != null) {
+                boolean animatedCanvasFound = false;
                 for (int i = 0; i < items.length(); i++) {
                     JSONObject item = items.optJSONObject(i);
                     if (item == null || !WidgetLayout.TYPE_CANVAS.equals(
@@ -758,6 +759,21 @@ final class ProfileBundleStore {
                         throw new Failure(ErrorCode.MISSING_ASSET,
                                 profileName + " Canvas " + (i + 1));
                     }
+                    CanvasAssetStore.AssetInfo info;
+                    try {
+                        info = CanvasAssetStore.inspectBundledAsset(
+                                source, extension(source.getName()));
+                    } catch (IOException ex) {
+                        throw new Failure(ErrorCode.UNSUPPORTED_ASSET,
+                                profileName + " Canvas " + (i + 1), ex);
+                    }
+                    if (info.animated && animatedCanvasFound) {
+                        throw new Failure(ErrorCode.UNSUPPORTED_ASSET,
+                                profileName + " has multiple animated Canvas items");
+                    }
+                    animatedCanvasFound |= info.animated;
+                    canvas.put("animated", info.animated);
+                    canvas.put("video", info.video);
                     String reference = collector.addFile(source, AssetKind.CANVAS,
                             source.getName(), mimeFromExtension(extension(source.getName())));
                     canvas.put("assetId", reference);
@@ -828,6 +844,7 @@ final class ProfileBundleStore {
             JSONObject layout = profile.optJSONObject("widgetLayout");
             JSONArray items = layout == null ? null : layout.optJSONArray("items");
             if (items != null) {
+                boolean animatedCanvasFound = false;
                 for (int i = 0; i < items.length(); i++) {
                     JSONObject item = items.optJSONObject(i);
                     if (item == null || !WidgetLayout.TYPE_CANVAS.equals(
@@ -849,6 +866,21 @@ final class ProfileBundleStore {
                     requireSupported(AssetKind.CANVAS,
                             new AssetType(asset.extension, asset.mimeType),
                             asset.file, asset.displayName);
+                    CanvasAssetStore.AssetInfo info;
+                    try {
+                        info = CanvasAssetStore.inspectBundledAsset(
+                                asset.file, asset.extension);
+                    } catch (IOException ex) {
+                        throw new Failure(ErrorCode.UNSUPPORTED_ASSET,
+                                asset.displayName, ex);
+                    }
+                    if (info.animated && animatedCanvasFound) {
+                        throw new Failure(ErrorCode.UNSUPPORTED_ASSET,
+                                "Profile has multiple animated Canvas items");
+                    }
+                    animatedCanvasFound |= info.animated;
+                    canvas.put("animated", info.animated);
+                    canvas.put("video", info.video);
                     String installed = asset.sha256 + "." + asset.extension;
                     canvas.put("assetId", installed);
                     rewrite.add(InstallKind.CANVAS, asset, installed);
@@ -978,6 +1010,9 @@ final class ProfileBundleStore {
         }
         if (count >= 6 && asciiEquals(header, 0, "GIF8") && isImage(file, -1, -1)) {
             return new AssetType("gif", "image/gif");
+        }
+        if (count >= 12 && asciiEquals(header, 4, "ftyp")) {
+            return new AssetType("mp4", "video/mp4");
         }
         if (count >= 5 && asciiEquals(header, 0, "%PDF-")) {
             return new AssetType("pdf", "application/pdf");
@@ -1346,6 +1381,9 @@ final class ProfileBundleStore {
         }
         if ("gif".equals(value)) {
             return "image/gif";
+        }
+        if ("mp4".equals(value)) {
+            return "video/mp4";
         }
         if ("pdf".equals(value)) {
             return "application/pdf";

@@ -289,6 +289,10 @@ public final class ShizukuNativeUserService extends Binder {
             reply.writeString(DESCRIPTOR);
             return true;
         }
+        if (ShizukuUserServiceLifecycle.isDestroyTransaction(code)) {
+            destroy();
+            return true;
+        }
         data.enforceInterface(DESCRIPTOR);
         if (code == TRANSACTION_PING) {
             reply.writeNoException();

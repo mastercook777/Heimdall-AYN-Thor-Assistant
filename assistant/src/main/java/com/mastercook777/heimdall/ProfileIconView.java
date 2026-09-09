@@ -36,7 +36,7 @@ public final class ProfileIconView extends View {
                 : HeimdallUi.glass(context, 0xB2131B27, 0xD0080D14,
                         0xAA70B7FF, 0x55445A72, HeimdallUi.RADIUS_CARD, 1));
         textPaint.setColor(HeimdallUi.isPearl(context) ? 0xFF344457 : 0xFFD7EEFF);
-        textPaint.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        textPaint.setTypeface(HeimdallUi.typeface(true));
         textPaint.setTextAlign(Paint.Align.CENTER);
     }
 

@@ -2,7 +2,6 @@ package com.mastercook777.heimdall;
 
 import android.annotation.SuppressLint;
 import android.content.Context;
-import android.graphics.Bitmap;
 import android.graphics.Outline;
 import android.graphics.Rect;
 import android.view.Gravity;
@@ -24,14 +23,19 @@ final class CanvasCompositionEditor extends LinearLayout {
     private final CanvasConfig initialConfig;
     private final boolean initialFill;
     private final Listener listener;
+    private final CanvasCompositionSurface compositionSurface;
+    private final View compositionView;
     private final CanvasImageView imageView;
+    private final CanvasVideoView videoView;
     private final TextView stateView;
     private final Button fitButton;
     private final Button fillButton;
     private final Button resetButton;
     private final Button doneButton;
     private CanvasImageLoader.Request loadRequest;
-    private Bitmap bitmap;
+    private CanvasImageLoader.DecodedImage decodedImage;
+    private boolean playbackAllowed;
+    private boolean aggregatedVisible;
 
     CanvasCompositionEditor(Context context, CanvasConfig config, boolean initialFill,
             int targetFrameWidth, int targetFrameHeight, Listener listener) {
@@ -100,10 +104,20 @@ final class CanvasCompositionEditor extends LinearLayout {
         viewportParams.setMargins(viewportInset, viewportInset, viewportInset, viewportInset);
         referenceFrame.addView(viewport, viewportParams);
 
-        imageView = new CanvasImageView(context);
-        imageView.setInteractive(true);
-        viewport.addView(imageView, new FrameLayout.LayoutParams(-1, -1));
-        previewStage.setGestureTarget(imageView);
+        if (this.initialConfig.video) {
+            videoView = new CanvasVideoView(context);
+            imageView = null;
+            compositionSurface = videoView;
+            compositionView = videoView;
+        } else {
+            imageView = new CanvasImageView(context);
+            videoView = null;
+            compositionSurface = imageView;
+            compositionView = imageView;
+        }
+        compositionSurface.setInteractive(true);
+        viewport.addView(compositionView, new FrameLayout.LayoutParams(-1, -1));
+        previewStage.setGestureTarget(compositionView);
 
         stateView = new TextView(context);
         stateView.setText(R.string.canvas_loading);
@@ -116,11 +130,11 @@ final class CanvasCompositionEditor extends LinearLayout {
         compositionActions.setOrientation(HORIZONTAL);
         addView(compositionActions, new LayoutParams(-1, dp(44)));
         fitButton = addAction(compositionActions, R.string.canvas_fit,
-                imageView::fitImage, false, false);
+                compositionSurface::fitImage, false, false);
         fillButton = addAction(compositionActions, R.string.canvas_fill,
-                imageView::fillImage, false, false);
+                compositionSurface::fillImage, false, false);
         resetButton = addAction(compositionActions, R.string.canvas_reset,
-                imageView::resetImage, false, false);
+                compositionSurface::resetImage, false, false);
 
         LinearLayout commitActions = new LinearLayout(context);
         commitActions.setOrientation(HORIZONTAL);
@@ -130,15 +144,17 @@ final class CanvasCompositionEditor extends LinearLayout {
         addAction(commitActions, R.string.common_cancel, listener::onCancel,
                 false, true);
         doneButton = addAction(commitActions, R.string.canvas_done, () -> {
-            CanvasConfig result = imageView.composition();
+            CanvasConfig result = compositionSurface.composition();
             result.assetId = initialConfig.assetId;
             result.sourceType = CanvasConfig.SOURCE_LOCAL_IMAGE;
+            result.animated = initialConfig.animated;
+            result.video = initialConfig.video;
             result.normalize();
             listener.onDone(result);
         }, true, true);
 
         setEditingEnabled(false);
-        post(this::loadImage);
+        post(this::loadMedia);
     }
 
     @Override
@@ -147,50 +163,119 @@ final class CanvasCompositionEditor extends LinearLayout {
         super.onDetachedFromWindow();
     }
 
+    @Override
+    public void onVisibilityAggregated(boolean isVisible) {
+        super.onVisibilityAggregated(isVisible);
+        aggregatedVisible = isVisible;
+        updatePlayback();
+    }
+
+    void setPlaybackAllowed(boolean allowed) {
+        playbackAllowed = allowed;
+        updatePlayback();
+    }
+
     void release() {
         if (loadRequest != null) {
             loadRequest.cancel();
             loadRequest = null;
         }
-        imageView.setImageDrawable(null);
-        CanvasImageLoader.recycle(bitmap);
-        bitmap = null;
+        if (imageView != null) {
+            imageView.setImageDrawable(null);
+        }
+        if (videoView != null) {
+            videoView.release();
+        }
+        if (decodedImage != null) {
+            decodedImage.release();
+            decodedImage = null;
+        }
     }
 
-    private void loadImage() {
+    private void loadMedia() {
+        if (initialConfig.video) {
+            loadVideo();
+            return;
+        }
         if (loadRequest != null || !initialConfig.hasAsset()) {
-            showError();
+            showError(CanvasImageLoader.Error.DECODE);
             return;
         }
         loadRequest = CanvasImageLoader.load(getContext(), initialConfig.assetId, 2400,
                 new CanvasImageLoader.Callback() {
                     @Override
-                    public void onLoaded(Bitmap loaded) {
+                    public void onLoaded(CanvasImageLoader.DecodedImage loaded) {
                         loadRequest = null;
-                        bitmap = loaded;
-                        imageView.setImageBitmap(bitmap);
+                        decodedImage = loaded;
+                        if (loaded.bitmap() != null) {
+                            imageView.setImageBitmap(loaded.bitmap());
+                        } else {
+                            imageView.setImageDrawable(loaded.drawable());
+                        }
                         imageView.setComposition(initialConfig, initialFill);
                         stateView.setVisibility(View.GONE);
                         setEditingEnabled(true);
+                        updatePlayback();
                     }
 
                     @Override
                     public void onError(CanvasImageLoader.Error error) {
                         loadRequest = null;
-                        showError();
+                        showError(error);
                     }
                 });
     }
 
-    private void showError() {
-        stateView.setText(R.string.canvas_decode_error);
+    private void loadVideo() {
+        if (videoView == null || !initialConfig.hasAsset()) {
+            showError(CanvasImageLoader.Error.DECODE);
+            return;
+        }
+        videoView.setSource(initialConfig, new CanvasVideoView.Listener() {
+            @Override
+            public void onReady() {
+                videoView.setComposition(initialConfig, initialFill);
+                stateView.setVisibility(View.GONE);
+                setEditingEnabled(true);
+                updatePlayback();
+            }
+
+            @Override
+            public void onError() {
+                showError(CanvasImageLoader.Error.DECODE);
+            }
+        });
+        videoView.setComposition(initialConfig, initialFill);
+        updatePlayback();
+    }
+
+    private void showError(CanvasImageLoader.Error error) {
+        stateView.setText(error == CanvasImageLoader.Error.PLATFORM_UNSUPPORTED
+                ? R.string.canvas_animation_platform_unsupported
+                : R.string.canvas_decode_error);
         stateView.setTextColor(HeimdallUi.COLOR_DANGER);
         stateView.setVisibility(View.VISIBLE);
         setEditingEnabled(false);
     }
 
+    private void updatePlayback() {
+        if (videoView != null) {
+            videoView.setPlaybackAllowed(
+                    playbackAllowed && aggregatedVisible && isAttachedToWindow());
+            return;
+        }
+        if (decodedImage == null || !decodedImage.isAnimated()) {
+            return;
+        }
+        if (playbackAllowed && aggregatedVisible && isAttachedToWindow()) {
+            decodedImage.start();
+        } else {
+            decodedImage.stop();
+        }
+    }
+
     private void setEditingEnabled(boolean enabled) {
-        imageView.setInteractive(enabled);
+        compositionSurface.setInteractive(enabled);
         fitButton.setEnabled(enabled);
         fillButton.setEnabled(enabled);
         resetButton.setEnabled(enabled);
@@ -261,13 +346,13 @@ final class CanvasCompositionEditor extends LinearLayout {
 
     private static final class GestureStage extends FrameLayout {
         private final Rect targetBounds = new Rect();
-        private CanvasImageView gestureTarget;
+        private View gestureTarget;
 
         GestureStage(Context context) {
             super(context);
         }
 
-        void setGestureTarget(CanvasImageView target) {
+        void setGestureTarget(View target) {
             gestureTarget = target;
         }
 

@@ -13,6 +13,14 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class InputBridge {
+    enum AdvancedControlsState {
+        SHIZUKU_STOPPED,
+        AUTHORIZATION_REQUIRED,
+        AUTHORIZED,
+        PREPARING,
+        READY
+    }
+
     public interface Callback {
         void onStatus(String message);
 
@@ -62,6 +70,8 @@ public final class InputBridge {
 
     private static final String PREFS = "input_backend";
     private static final String KEY_SELECTED_BACKEND = "selected_backend";
+    private static final String KEY_ADVANCED_CONTROLS_ENABLED =
+            "advanced_controls_enabled";
     private static final InputBackend ACCESSIBILITY_BACKEND = new AccessibilityInputBackend();
     private static final ShizukuInputBackend SHIZUKU_BACKEND = new ShizukuInputBackend();
     private static final ExecutorService CONTROLLER_REPLAY_EXECUTOR =
@@ -125,6 +135,73 @@ public final class InputBridge {
         return true;
     }
 
+    static boolean advancedControlsEnabled(Context context) {
+        if (context == null) {
+            return false;
+        }
+        SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        if (prefs.contains(KEY_ADVANCED_CONTROLS_ENABLED)) {
+            return prefs.getBoolean(KEY_ADVANCED_CONTROLS_ENABLED, false);
+        }
+        boolean selectedShizuku = BACKEND_SHIZUKU.equals(
+                prefs.getString(KEY_SELECTED_BACKEND, BACKEND_ACCESSIBILITY));
+        if (selectedShizuku) {
+            prefs.edit().putBoolean(KEY_ADVANCED_CONTROLS_ENABLED, true).apply();
+            return true;
+        }
+        if (!ShizukuNativeController.isBinderAlive()) {
+            return false;
+        }
+        boolean authorized = ShizukuNativeController.isPermissionGranted();
+        prefs.edit().putBoolean(KEY_ADVANCED_CONTROLS_ENABLED, authorized).apply();
+        return authorized;
+    }
+
+    static boolean enableAdvancedControls(Context context) {
+        if (context == null || !ShizukuNativeController.isPermissionGranted()) {
+            return false;
+        }
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .edit()
+                .putBoolean(KEY_ADVANCED_CONTROLS_ENABLED, true)
+                .apply();
+        return true;
+    }
+
+    static AdvancedControlsState advancedControlsState(Context context) {
+        return resolveAdvancedControlsState(
+                ShizukuNativeController.isBinderAlive(),
+                ShizukuNativeController.isPermissionGranted(),
+                advancedControlsEnabled(context),
+                ShizukuNativeController.isServiceBound(),
+                ShizukuNativeController.isServiceBinding());
+    }
+
+    static AdvancedControlsState resolveAdvancedControlsState(boolean binderAlive,
+            boolean permissionGranted, boolean enabled, boolean serviceBound,
+            boolean serviceBinding) {
+        if (!binderAlive) {
+            return AdvancedControlsState.SHIZUKU_STOPPED;
+        }
+        if (!permissionGranted) {
+            return AdvancedControlsState.AUTHORIZATION_REQUIRED;
+        }
+        if (!enabled) {
+            return AdvancedControlsState.AUTHORIZED;
+        }
+        if (serviceBound) {
+            return AdvancedControlsState.READY;
+        }
+        if (serviceBinding) {
+            return AdvancedControlsState.PREPARING;
+        }
+        return AdvancedControlsState.AUTHORIZED;
+    }
+
+    static boolean advancedControlsReady(Context context) {
+        return advancedControlsState(context) == AdvancedControlsState.READY;
+    }
+
     public static boolean isReady() {
         return ACCESSIBILITY_BACKEND.isReady();
     }
@@ -135,6 +212,10 @@ public final class InputBridge {
 
     public static void openSettings(Context context) {
         activeBackend(context).openSettings(context);
+    }
+
+    public static void openAccessibilitySettings(Context context) {
+        ACCESSIBILITY_BACKEND.openSettings(context);
     }
 
     public static MacroDispatchResult dispatch(Context context, Macro macro, Callback callback) {
@@ -152,6 +233,11 @@ public final class InputBridge {
             return MacroDispatchResult.REJECTED;
         }
         if (enhancedTouchMode) {
+            if (!advancedControlsEnabled(context)) {
+                callback.onError(context.getString(
+                        R.string.controller_enhancement_unavailable));
+                return MacroDispatchResult.REJECTED;
+            }
             return dispatchMacro(context, macro, SHIZUKU_BACKEND, true,
                     !protectThorMapping, callback);
         }
@@ -267,7 +353,7 @@ public final class InputBridge {
 
     public static String emitNativeRightStick(Context context, NativeGamepadPath.Device device,
             float x, float y) {
-        if (BACKEND_SHIZUKU.equals(selectedBackendId(context)) && ShizukuNativeController.isReady()) {
+        if (advancedControlsEnabled(context) && ShizukuNativeController.isReady()) {
             return ShizukuNativeController.emitRightStick(context, device, x, y);
         }
         String path = NativeGamepadPath.requireWritable();
@@ -276,7 +362,7 @@ public final class InputBridge {
     }
 
     public static String captureNativeGamepadSequence(Context context, String path, int durationMs) {
-        if (BACKEND_SHIZUKU.equals(selectedBackendId(context))) {
+        if (advancedControlsEnabled(context)) {
             if (!ShizukuNativeController.isReady()) {
                 return context.getString(R.string.controller_enhancement_unavailable);
             }
@@ -301,7 +387,7 @@ public final class InputBridge {
             return replay.get(inspection.replayTimeoutMs(), TimeUnit.MILLISECONDS);
         } catch (TimeoutException e) {
             replay.cancel(true);
-            if (BACKEND_SHIZUKU.equals(selectedBackendId(appContext))) {
+            if (advancedControlsEnabled(appContext)) {
                 ShizukuNativeController.invalidateService();
             }
             return context.getString(R.string.native_controller_replay_timed_out);
@@ -315,7 +401,7 @@ public final class InputBridge {
     }
 
     private static String replayNativeGamepadSequenceBlocking(Context context, String sequence) {
-        if (BACKEND_SHIZUKU.equals(selectedBackendId(context))) {
+        if (advancedControlsEnabled(context)) {
             if (!ShizukuNativeController.isReady()) {
                 return context.getString(R.string.controller_enhancement_unavailable);
             }

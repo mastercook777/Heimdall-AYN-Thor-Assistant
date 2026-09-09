@@ -53,7 +53,6 @@ import android.util.DisplayMetrics;
 import android.view.Gravity;
 import android.view.HapticFeedbackConstants;
 import android.view.Display;
-import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewConfiguration;
@@ -76,6 +75,7 @@ import android.widget.ScrollView;
 import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
+import android.webkit.CookieManager;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
@@ -108,6 +108,8 @@ public class AssistantActivity extends Activity {
     private static final long CONTENT_TRANSITION_MS = 160L;
     private static final long FULL_KEYBOARD_ENTER_MS = 150L;
     private static final long FULL_KEYBOARD_EXIT_MS = 120L;
+    private static final long STARTUP_READINESS_MIN_VISIBLE_MS = 550L;
+    private static final long STARTUP_READINESS_MAX_VISIBLE_MS = 2_400L;
     private static final int CONTENT_ENTER_TRANSLATION_DP = 32;
     private static final long SETTINGS_DOCK_EXIT_MS = 120L;
     private static final long SETTINGS_DOCK_ENTER_MS = 140L;
@@ -158,6 +160,7 @@ public class AssistantActivity extends Activity {
     private static final int SETTINGS_MAGNIFIER = 5;
     private static final int SETTINGS_APPEARANCE = 6;
     private static final int SETTINGS_DIAGNOSTICS = 7;
+    private static final int SETTINGS_GETTING_STARTED = 8;
     private static final String STATE_ACTIVE_SCREEN = "heimdall.active_screen";
     private static final String STATE_SETTINGS_SECTION = "heimdall.settings_section";
     private static final String STATE_SETTINGS_SCROLL_Y = "heimdall.settings_scroll_y";
@@ -174,7 +177,8 @@ public class AssistantActivity extends Activity {
     private static final String STATE_PROFILE_INPUTS_PRESENT = "heimdall.profile_inputs_present";
     private static final String STATE_PROFILE_NAME_DRAFT = "heimdall.profile_name_draft";
     private static final String STATE_PROFILE_PACKAGE_DRAFT = "heimdall.profile_package_draft";
-    private static final String STATE_PROFILE_ROM_DRAFT = "heimdall.profile_rom_draft";
+    private static final String STATE_PROFILE_CONTEXT_BINDING_DRAFT =
+            "heimdall.profile_context_binding_draft";
     private static final String STATE_PROFILE_DEFAULT_DRAFT = "heimdall.profile_default_draft";
 
     private List<GameProfile> profiles;
@@ -220,6 +224,10 @@ public class AssistantActivity extends Activity {
     private boolean keyboardPadEditorActive;
     private FullVirtualKeyboardView fullVirtualKeyboardView;
     private boolean fullVirtualKeyboardClosing;
+    private StartupReadinessCoordinator startupReadinessCoordinator;
+    private StartupReadinessView startupReadinessView;
+    private long startupReadinessShownAt;
+    private FirstSetupView firstSetupView;
     private int targetDisplayId = Display.DEFAULT_DISPLAY;
     private int targetDisplayWidth;
     private int targetDisplayHeight;
@@ -230,7 +238,9 @@ public class AssistantActivity extends Activity {
     private boolean virtualMouseEntryHintPending;
     private EditText settingsProfileNameInput;
     private EditText settingsProfilePackageInput;
-    private EditText settingsProfileRomInput;
+    private GameContextBinding settingsGameContextBindingDraft;
+    private TextView settingsDetectedGameStatus;
+    private Button settingsBindPlatformButton;
     private CheckBox settingsProfileDefaultInput;
     private WidgetLayout.Item settingsMagnifierDraft;
     private String settingsThemeDraft;
@@ -299,7 +309,7 @@ public class AssistantActivity extends Activity {
     private boolean editingInteractiveMapInline;
     private int activeMapViewerMode = MAP_VIEW_LOCAL;
     private WebView activeMapWebView;
-    private TextView activeMapWebStatus;
+    private InteractiveMapLoadIndicator activeMapLoadIndicator;
     private boolean activeMapWebError;
     private Bitmap activeLocalMapBitmap;
     private final List<Bitmap> activeLocalMapThumbnails = new ArrayList<>();
@@ -320,6 +330,7 @@ public class AssistantActivity extends Activity {
     private boolean imeVisibleForPerformanceCompatibility;
     private View fullscreenMapControls;
     private View fullscreenMapReveal;
+    private boolean fullscreenMapControlsPersistent;
     private View fullscreenGuideControls;
     private View fullscreenGuideReveal;
     private MapMarker editingMapMarkerInline;
@@ -341,6 +352,12 @@ public class AssistantActivity extends Activity {
     private boolean captureInProgress;
     private GamepadRecordingSession activeGamepadRecordingSession;
     private final Handler uiHandler = new Handler(Looper.getMainLooper());
+    private final Runnable hideStartupReadiness = () -> dismissStartupReadiness(true);
+    private final ShizukuNativeController.PermissionResultListener
+            shizukuPermissionResultListener = granted ->
+                    uiHandler.post(() -> handleShizukuPermissionResult(granted));
+    private final Runnable shizukuServiceStateListener =
+            () -> uiHandler.post(this::refreshConnectionCapabilitySurfaces);
     private final InputBridge.Callback inputStatusCallback = new InputBridge.Callback() {
         @Override
         public void onStatus(String message) {
@@ -352,11 +369,20 @@ public class AssistantActivity extends Activity {
             showErrorAction(message);
         }
     };
-    private final ForegroundAppTracker.Listener foregroundAppListener =
-            snapshot -> uiHandler.post(() -> maybeAutoSwitchProfile(snapshot));
+    private ShizukuGameContextController gameContextController;
+    private final ManualProfileSelectionGuard manualProfileSelectionGuard =
+            new ManualProfileSelectionGuard();
+    private final ForegroundAppTracker.Listener foregroundAppListener = snapshot ->
+            uiHandler.post(() -> {
+                if (gameContextController != null) gameContextController.refresh(snapshot);
+                maybeAutoSwitchProfile(snapshot);
+            });
     private boolean profileAwarenessActive;
+    private String lastProfileAutoSwitchDiagnostic = "";
     private boolean activityStarted;
-    private boolean upperDisplayFocusHandoffRequested;
+    private boolean activityResumed;
+    private final UpperDisplayStartedLifecycleHandoff upperDisplayStartedHandoff =
+            new UpperDisplayStartedLifecycleHandoff();
     private final Runnable profileAwarenessTicker = new Runnable() {
         @Override
         public void run() {
@@ -369,7 +395,9 @@ public class AssistantActivity extends Activity {
                 if (service != null) {
                     service.refreshForegroundApp();
                 }
-                maybeAutoSwitchProfile(ForegroundAppTracker.latest());
+                ForegroundAppTracker.Snapshot foreground = ForegroundAppTracker.latest();
+                if (gameContextController != null) gameContextController.refresh(foreground);
+                maybeAutoSwitchProfile(foreground);
             }
             DebugPerformanceDiagnostics.endTask("App-aware upper-window scan", started);
             uiHandler.postDelayed(this, 1200L);
@@ -395,6 +423,8 @@ public class AssistantActivity extends Activity {
     private int pendingCanvasImportFrameHeight = 1;
     private CanvasAssetStore.Request pendingCanvasImportRequest;
     private boolean canvasOverlayActive;
+    private CanvasCompositionEditor activeCanvasCompositionEditor;
+    private FullscreenImageViewer activeCanvasFullscreenViewer;
     private final Runnable hideFullscreenMapControls = new Runnable() {
         @Override
         public void run() {
@@ -460,16 +490,30 @@ public class AssistantActivity extends Activity {
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        // Establish the final lower-window focus policy before Activity restoration or
+        // decor attachment can make this task a key-focus candidate.
+        thorGameFocusProtection.apply(this, true);
         super.onCreate(savedInstanceState);
         DebugPerformanceDiagnostics.initialize(this);
+        gameContextController = new ShizukuGameContextController(this, snapshot -> {
+            updateSettingsDetectedGameStatus(snapshot);
+            maybeAutoSwitchProfile(ForegroundAppTracker.latest());
+        });
+        ShizukuNativeController.addPermissionResultListener(
+                shizukuPermissionResultListener);
+        ShizukuNativeController.addServiceStateListener(
+                shizukuServiceStateListener);
         HeimdallStabilityDiagnostics.reportPreviousExit(this);
         requestWindowFeature(Window.FEATURE_NO_TITLE);
-        // Protect the upper-screen focus before the lower-screen content window is attached.
-        // A normal launch must never acquire lower-display key focus just to release it later.
-        thorGameFocusProtection.apply(this, true);
+        recordFocusBoundary("create-protected");
+        Intent launchIntent = getIntent();
+        recordFocusBoundary("create-intent-flags-"
+                + Integer.toHexString(launchIntent == null ? 0 : launchIntent.getFlags()));
         enterImmersiveMode();
 
+        boolean hadStoredProfiles = ProfileStore.hasStoredProfiles(this);
         profiles = ProfileStore.loadProfiles(this);
+        FirstSetupState.initialize(this, hadStoredProfiles);
         selectedProfileIndex = ProfileStore.loadSelectedIndex(this, profiles.size());
         selectedProfile = profiles.get(selectedProfileIndex);
         touchpadSettings = selectedProfile.safeTouchpadSettings();
@@ -477,9 +521,11 @@ public class AssistantActivity extends Activity {
         registerCaptureReceiver();
         updateTargetDisplayInfo();
         setContentView(createLayout());
+        getWindow().getDecorView().post(() -> recordFocusBoundary("content-attached"));
         restoreVisibleProfileDraft(savedInstanceState);
         renderProfiles();
         renderSelectedProfile();
+        startStartupReadiness();
         systemStatusController.start();
         DebugPerformanceDiagnostics.attachRootObservers(this);
         installTextInputCompatibilityObservers();
@@ -526,18 +572,32 @@ public class AssistantActivity extends Activity {
         outState.putBoolean(STATE_INPUT_DIAGNOSTICS, showInputDiagnostics);
         outState.putBoolean(STATE_PROFILE_DETAILS, showProfileDetectionDetails);
         if (settingsProfileNameInput != null && settingsProfilePackageInput != null
-                && settingsProfileRomInput != null && settingsProfileDefaultInput != null) {
+                && settingsProfileDefaultInput != null) {
             outState.putBoolean(STATE_PROFILE_INPUTS_PRESENT, true);
             outState.putString(STATE_PROFILE_NAME_DRAFT,
                     settingsProfileNameInput.getText().toString());
             outState.putString(STATE_PROFILE_PACKAGE_DRAFT,
                     settingsProfilePackageInput.getText().toString());
-            outState.putString(STATE_PROFILE_ROM_DRAFT,
-                    settingsProfileRomInput.getText().toString());
+            if (settingsGameContextBindingDraft != null) {
+                try {
+                    outState.putString(STATE_PROFILE_CONTEXT_BINDING_DRAFT,
+                            settingsGameContextBindingDraft.toJson().toString());
+                } catch (JSONException ignored) {
+                    // Profile persistence is unaffected by malformed transient state.
+                }
+            }
             outState.putBoolean(STATE_PROFILE_DEFAULT_DRAFT,
                     settingsProfileDefaultInput.isChecked());
         }
         super.onSaveInstanceState(outState);
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        int flags = intent == null ? 0 : intent.getFlags();
+        recordFocusBoundary("new-intent-flags-" + Integer.toHexString(flags));
     }
 
     private void restoreUiInstanceState(Bundle state) {
@@ -563,6 +623,11 @@ public class AssistantActivity extends Activity {
                 settingsMagnifierDraft = WidgetLayout.Item.fromJson(
                         new JSONObject(magnifierJson));
             }
+            String bindingJson = state.getString(STATE_PROFILE_CONTEXT_BINDING_DRAFT);
+            if (bindingJson != null) {
+                settingsGameContextBindingDraft = GameContextBinding.fromJson(
+                        new JSONObject(bindingJson));
+            }
         } catch (JSONException ignored) {
             // A malformed transient bundle must never overwrite persisted Profile data.
         }
@@ -583,12 +648,11 @@ public class AssistantActivity extends Activity {
     private void restoreVisibleProfileDraft(Bundle state) {
         if (state == null || !state.getBoolean(STATE_PROFILE_INPUTS_PRESENT, false)
                 || settingsProfileNameInput == null || settingsProfilePackageInput == null
-                || settingsProfileRomInput == null || settingsProfileDefaultInput == null) {
+                || settingsProfileDefaultInput == null) {
             return;
         }
         settingsProfileNameInput.setText(state.getString(STATE_PROFILE_NAME_DRAFT, ""));
         settingsProfilePackageInput.setText(state.getString(STATE_PROFILE_PACKAGE_DRAFT, ""));
-        settingsProfileRomInput.setText(state.getString(STATE_PROFILE_ROM_DRAFT, ""));
         settingsProfileDefaultInput.setChecked(
                 state.getBoolean(STATE_PROFILE_DEFAULT_DRAFT, false));
     }
@@ -628,6 +692,12 @@ public class AssistantActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        uiHandler.removeCallbacks(hideStartupReadiness);
+        StartupReadinessCoordinator readinessCoordinator = startupReadinessCoordinator;
+        startupReadinessCoordinator = null;
+        if (readinessCoordinator != null) readinessCoordinator.close();
+        dismissStartupReadiness(false);
+        dismissFirstSetup(false);
         flushGuideReadingPosition();
         dismissFullVirtualKeyboard(false);
         parkVirtualMouseDispatcher();
@@ -656,6 +726,11 @@ public class AssistantActivity extends Activity {
         stabilityDiagnostics.stop();
         thorPerformanceCompatibility.release();
         DebugPerformanceDiagnostics.shutdown();
+        if (gameContextController != null) gameContextController.close();
+        ShizukuNativeController.removePermissionResultListener(
+                shizukuPermissionResultListener);
+        ShizukuNativeController.removeServiceStateListener(
+                shizukuServiceStateListener);
         super.onDestroy();
     }
 
@@ -663,6 +738,7 @@ public class AssistantActivity extends Activity {
     protected void onStart() {
         super.onStart();
         activityStarted = true;
+        recordFocusBoundary("start");
         stabilityDiagnostics.start(this);
         getWindow().getDecorView().post(() -> {
             if (activityStarted && !isFinishing() && !isDestroyed()) {
@@ -675,6 +751,10 @@ public class AssistantActivity extends Activity {
             return;
         }
         ThorAccessibilityService.setDiagnosticScanningSuspended(false);
+        ThorAccessibilityService accessibilityService = ThorAccessibilityService.getInstance();
+        if (accessibilityService != null) {
+            accessibilityService.refreshForegroundApp();
+        }
         systemStatusController.start();
         updateProfileAwarenessRegistration();
     }
@@ -682,26 +762,33 @@ public class AssistantActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        activityResumed = true;
         updateGameFocusProtection(true);
-        requestUpperDisplayFocusHandoffOnce();
+        recordFocusBoundary("resume-protected");
+        requestUpperDisplayFocusHandoffForStartedLifecycle();
         if (!DebugPerformanceDiagnostics.isStaticUi()) {
             resumeMagnifierViews();
         }
+        updateCanvasPlayback();
         if (activeMapWebView != null) {
             activeMapWebView.onResume();
         }
         if (touchPadView != null) {
             touchPadView.requestAdvancedInputPreparation();
         }
+        uiHandler.post(this::refreshConnectionCapabilitySurfaces);
     }
 
     @Override
     protected void onPause() {
+        activityResumed = false;
+        recordFocusBoundary("pause");
         saveGuideReadingPosition();
         dismissFullVirtualKeyboard(false);
         if (!magnifierRegionCaptureInProgress) {
             pauseMagnifierViews();
         }
+        pauseCanvasPlayback();
         resetRightStickIfNeeded();
         parkVirtualMouseDispatcher();
         parkKeyboardInputSession();
@@ -715,6 +802,9 @@ public class AssistantActivity extends Activity {
     @Override
     protected void onStop() {
         activityStarted = false;
+        upperDisplayStartedHandoff.rearmAfterStop();
+        recordFocusBoundary("stop-handoff-generation-"
+                + upperDisplayStartedHandoff.generation());
         stabilityDiagnostics.stop();
         thorPerformanceCompatibility.release();
         profileAwarenessActive = false;
@@ -722,6 +812,7 @@ public class AssistantActivity extends Activity {
         DebugPerformanceDiagnostics.unregisterRepeatingTask(
                 "App-aware upper-window scan");
         ForegroundAppTracker.clearListener(foregroundAppListener);
+        if (gameContextController != null) gameContextController.suspend();
         systemStatusController.stop();
         super.onStop();
     }
@@ -887,8 +978,9 @@ public class AssistantActivity extends Activity {
         });
     }
 
-    private void requestTextInputFocus(EditText input) {
+    private void requestTextInputFocus(View input) {
         thorTextInputFocusLease.acquire(this, thorGameFocusProtection, input);
+        recordFocusBoundary("text-lease-acquire");
         if (thorTextInputFocusLease.isHoldingWindowFocus() && !textInputFocused) {
             textInputFocused = true;
             updatePerformanceCompatibilityTextInputPause();
@@ -902,6 +994,8 @@ public class AssistantActivity extends Activity {
                 () -> {
                     textInputFocused = false;
                     updatePerformanceCompatibilityTextInputPause();
+                    recordFocusBoundary("text-lease-released");
+                    requestDeterministicUpperDisplayHandoff("text-lease-released");
                 },
                 afterRelease);
     }
@@ -912,18 +1006,39 @@ public class AssistantActivity extends Activity {
         }
     }
 
-    private void requestUpperDisplayFocusHandoffOnce() {
-        if (upperDisplayFocusHandoffRequested
+    private void requestDeterministicUpperDisplayHandoff(String reason) {
+        UpperDisplaySingleTouchHandoff.Result result =
+                UpperDisplaySingleTouchHandoff.attempt(this);
+        recordFocusBoundary("deterministic-handoff-" + reason + "-"
+                + result.name().toLowerCase(Locale.US));
+    }
+
+    private void requestUpperDisplayFocusHandoffForStartedLifecycle() {
+        if (!activityStarted
+                || !activityResumed
                 || DebugPerformanceDiagnostics.isStaticUi()
                 || isFinishing()
                 || isDestroyed()) {
             return;
         }
-        upperDisplayFocusHandoffRequested = true;
+        int generation = upperDisplayStartedHandoff.claim();
+        if (generation == UpperDisplayStartedLifecycleHandoff.NO_CLAIM) {
+            return;
+        }
+        recordFocusBoundary("explicit-handoff-claimed-generation-" + generation);
         getWindow().getDecorView().post(() -> {
-            if (activityStarted && !isFinishing() && !isDestroyed()) {
-                UpperDisplayFocusHandoffActivity.launch(this);
+            if (!upperDisplayStartedHandoff.isCurrent(generation)
+                    || !activityStarted
+                    || !activityResumed
+                    || isFinishing()
+                    || isDestroyed()) {
+                HeimdallStabilityDiagnostics.recordFocusDiagnostic(this,
+                        "explicit-handoff stale generation=" + generation);
+                return;
             }
+            boolean launched = UpperDisplayFocusHandoffActivity.launch(this);
+            recordFocusBoundary("explicit-handoff-generation-" + generation + "-"
+                    + (launched ? "launched" : "failed"));
         });
     }
 
@@ -935,6 +1050,11 @@ public class AssistantActivity extends Activity {
         profileAwarenessActive = activityStarted
                 && !DebugPerformanceDiagnostics.isStaticUi()
                 && ForegroundAppTracker.isEnabled(this);
+        if (gameContextController != null) {
+            gameContextController.setEnabled(profileAwarenessActive
+                    && InputBridge.advancedControlsEnabled(this)
+                    && ShizukuNativeController.isPermissionGranted());
+        }
         if (!profileAwarenessActive) {
             return;
         }
@@ -943,16 +1063,45 @@ public class AssistantActivity extends Activity {
         if (service != null) {
             service.refreshForegroundApp();
         }
-        maybeAutoSwitchProfile(ForegroundAppTracker.latest());
+        ForegroundAppTracker.Snapshot foreground = ForegroundAppTracker.latest();
+        if (gameContextController != null
+                && InputBridge.advancedControlsEnabled(this)
+                && ShizukuNativeController.isPermissionGranted()) {
+            gameContextController.refresh(foreground);
+        }
+        maybeAutoSwitchProfile(foreground);
         DebugPerformanceDiagnostics.registerRepeatingTask(
                 "App-aware upper-window scan", 1200L);
         uiHandler.postDelayed(profileAwarenessTicker, 1200L);
     }
 
+    private static boolean isDeterministicLowerFocusActivityResult(int requestCode) {
+        switch (requestCode) {
+            case REQUEST_GUIDE_FILE:
+            case REQUEST_MAP_FILE:
+            case REQUEST_EXPORT_PROFILES:
+            case REQUEST_IMPORT_PROFILES:
+            case REQUEST_GUIDE_TEXT_FILE:
+            case REQUEST_PROFILE_ICON:
+            case REQUEST_MACRO_ICON:
+            case REQUEST_SCREEN_RECORDING:
+            case REQUEST_MAGNIFIER_PROJECTION:
+            case REQUEST_CANVAS_IMAGE:
+            case REQUEST_DIAGNOSTIC_EXPORT:
+                return true;
+            default:
+                return false;
+        }
+    }
+
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        uiHandler.post(() -> updateGameFocusProtection(true));
+        recordFocusBoundary("activity-result-" + requestCode);
+        updateGameFocusProtection(true);
+        if (isDeterministicLowerFocusActivityResult(requestCode)) {
+            requestDeterministicUpperDisplayHandoff("activity-result-" + requestCode);
+        }
         if (requestCode == REQUEST_MAGNIFIER_PROJECTION) {
             if (resultCode == RESULT_OK && data != null && pendingMagnifierProjectionItem != null) {
                 startApprovedMagnifierProjection(resultCode, data, pendingMagnifierProjectionItem);
@@ -1125,11 +1274,16 @@ public class AssistantActivity extends Activity {
         if (requestCode != REQUEST_RECORD_AUDIO) {
             return;
         }
+        updateGameFocusProtection(true);
         if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-            launchScreenRecordingConsent();
+            if (!launchScreenRecordingConsent()) {
+                requestDeterministicUpperDisplayHandoff(
+                        "record-audio-permission-finished");
+            }
         } else {
             pendingRecordingProfileName = null;
             showErrorAction(getString(R.string.permission_record_audio_required));
+            requestDeterministicUpperDisplayHandoff("record-audio-permission-finished");
         }
     }
 
@@ -1137,6 +1291,7 @@ public class AssistantActivity extends Activity {
     public void onWindowFocusChanged(boolean hasFocus) {
         super.onWindowFocusChanged(hasFocus);
         thorTextInputFocusLease.onWindowFocusChanged(hasFocus);
+        recordFocusBoundary(hasFocus ? "window-focus-gained" : "window-focus-lost");
         if (hasFocus) {
             enterImmersiveMode();
             if (!DebugPerformanceDiagnostics.isStaticUi()) {
@@ -1172,6 +1327,9 @@ public class AssistantActivity extends Activity {
         }
         if (guideReaderFullscreen) {
             closeGuideFullscreen();
+            return;
+        }
+        if (releaseInteractiveMapTextInputThen(null)) {
             return;
         }
         if (mapViewerFullscreen) {
@@ -1313,19 +1471,245 @@ public class AssistantActivity extends Activity {
         }
     }
 
-    private void closeKeyboardInputSession() {
-        KeyboardInputSession session = keyboardInputSession;
-        keyboardInputSession = null;
-        if (session != null) {
-            session.close();
-        } else {
-            VirtualKeyboardDispatcher.destroyParkedDevice(this);
+    private void startStartupReadiness() {
+        if (DebugPerformanceDiagnostics.isStaticUi() || startupReadinessCoordinator != null) {
+            return;
+        }
+        startupReadinessShownAt = SystemClock.uptimeMillis();
+        startupReadinessView = new StartupReadinessView(this);
+        startupReadinessView.render(new StartupReadinessCoordinator.Snapshot(
+                StartupReadinessCoordinator.Status.CHECKING,
+                StartupReadinessCoordinator.Status.CHECKING,
+                StartupReadinessCoordinator.Status.CHECKING,
+                false));
+        attachStartupReadiness();
+        recordFocusBoundary("readiness-shown");
+
+        startupReadinessCoordinator = new StartupReadinessCoordinator(this,
+                this::onStartupReadinessSnapshot);
+        startupReadinessCoordinator.start();
+        uiHandler.removeCallbacks(hideStartupReadiness);
+        uiHandler.postDelayed(hideStartupReadiness, STARTUP_READINESS_MAX_VISIBLE_MS);
+    }
+
+    private void onStartupReadinessSnapshot(StartupReadinessCoordinator.Snapshot snapshot) {
+        StartupReadinessView view = startupReadinessView;
+        if (view != null) view.render(snapshot);
+        if (!snapshot.terminal) return;
+
+        applyStartupCapabilityDefaults(snapshot);
+
+        StartupReadinessCoordinator coordinator = startupReadinessCoordinator;
+        startupReadinessCoordinator = null;
+        if (coordinator != null) coordinator.close();
+        if (view == null) return;
+
+        long elapsed = SystemClock.uptimeMillis() - startupReadinessShownAt;
+        long remaining = Math.max(0L, STARTUP_READINESS_MIN_VISIBLE_MS - elapsed);
+        uiHandler.removeCallbacks(hideStartupReadiness);
+        uiHandler.postDelayed(hideStartupReadiness, remaining);
+    }
+
+    private void applyStartupCapabilityDefaults(StartupReadinessCoordinator.Snapshot snapshot) {
+        boolean explicitlyConfigured =
+                ForegroundAppTracker.hasExplicitEnabledPreference(this);
+        boolean accessibilityReady =
+                snapshot.accessibility == StartupReadinessCoordinator.Status.READY;
+        boolean shizukuReady = snapshot.shizuku == StartupReadinessCoordinator.Status.READY;
+        boolean shouldAutoEnable = ForegroundAppTracker.shouldAutoEnable(
+                explicitlyConfigured, accessibilityReady, shizukuReady);
+        boolean autoEnabled = shouldAutoEnable && ForegroundAppTracker.enableIfUnset(this);
+        HeimdallStabilityDiagnostics.recordGameContextDiagnostic(this,
+                "startup-capabilities accessibility=" + snapshot.accessibility
+                        + " shizuku=" + snapshot.shizuku
+                        + " appAwarenessExplicit=" + explicitlyConfigured
+                        + " appAwarenessAutoEnabled=" + autoEnabled
+                        + " inputBackend=" + InputBridge.selectedBackendId(this));
+        if (autoEnabled) {
+            updateProfileAwarenessRegistration();
         }
     }
 
-    private void closeKeyboardInputSessionIfUnused() {
+    private void attachStartupReadiness() {
+        StartupReadinessView view = startupReadinessView;
+        if (view == null || overlayHost == null || view.getParent() == overlayHost) return;
+        if (view.getParent() instanceof ViewGroup) {
+            ((ViewGroup) view.getParent()).removeView(view);
+        }
+        overlayHost.addView(view, new FrameLayout.LayoutParams(-1, -1));
+        view.bringToFront();
+    }
+
+    private void dismissStartupReadiness(boolean animate) {
+        uiHandler.removeCallbacks(hideStartupReadiness);
+        StartupReadinessView view = startupReadinessView;
+        startupReadinessView = null;
+        if (view == null) return;
+        recordFocusBoundary("readiness-dismissed");
+        view.animate().cancel();
+        if (!animate || !shouldAnimateUi() || view.getParent() == null) {
+            if (view.getParent() instanceof ViewGroup) {
+                ((ViewGroup) view.getParent()).removeView(view);
+            }
+            if (animate) maybeShowFirstSetupAfterStartup();
+            return;
+        }
+        view.animate().alpha(0f).setDuration(PANEL_EXIT_MS).withEndAction(() -> {
+            if (view.getParent() instanceof ViewGroup) {
+                ((ViewGroup) view.getParent()).removeView(view);
+            }
+            maybeShowFirstSetupAfterStartup();
+        }).start();
+    }
+
+    private void maybeShowFirstSetupAfterStartup() {
+        if (isFinishing() || isDestroyed() || DebugPerformanceDiagnostics.isStaticUi()) return;
+        int phase = FirstSetupState.phase(this);
+        if (phase == FirstSetupState.PHASE_RESOLVED || firstSetupView != null) return;
+
+        firstSetupView = new FirstSetupView(this, new FirstSetupView.Listener() {
+            @Override
+            public void onGetStarted() {
+                FirstSetupState.markChecklistStarted(AssistantActivity.this);
+                FirstSetupView view = firstSetupView;
+                if (view != null) {
+                    view.showChecklist();
+                    refreshFirstSetupView();
+                }
+            }
+
+            @Override
+            public void onFinishSetup() {
+                FirstSetupState.markResolved(AssistantActivity.this);
+                dismissFirstSetup(true);
+            }
+
+            @Override
+            public void onCreateProfile() {
+                addBlankProfile();
+                refreshFirstSetupView();
+            }
+
+            @Override
+            public void onImportProfile() {
+                showProfileImportDialog(null);
+            }
+
+            @Override
+            public void onOpenBasicTouch() {
+                InputBridge.openAccessibilitySettings(AssistantActivity.this);
+            }
+
+            @Override
+            public void onOpenAdvancedControls() {
+                openAdvancedControlsFromFirstSetup();
+            }
+        });
+        if (phase == FirstSetupState.PHASE_CHECKLIST) {
+            firstSetupView.showChecklist();
+            refreshFirstSetupView();
+        } else {
+            firstSetupView.showWelcome();
+        }
+        attachFirstSetup();
+    }
+
+    private void attachFirstSetup() {
+        FirstSetupView view = firstSetupView;
+        if (view == null || overlayHost == null || view.getParent() == overlayHost) return;
+        if (view.getParent() instanceof ViewGroup) {
+            ((ViewGroup) view.getParent()).removeView(view);
+        }
+        overlayHost.addView(view, new FrameLayout.LayoutParams(-1, -1));
+        view.bringToFront();
+    }
+
+    private void dismissFirstSetup(boolean animate) {
+        FirstSetupView view = firstSetupView;
+        firstSetupView = null;
+        if (view == null) return;
+        view.animate().cancel();
+        if (!animate || !shouldAnimateUi() || view.getParent() == null) {
+            if (view.getParent() instanceof ViewGroup) {
+                ((ViewGroup) view.getParent()).removeView(view);
+            }
+            return;
+        }
+        view.animate().alpha(0f).setDuration(PANEL_EXIT_MS).withEndAction(() -> {
+            if (view.getParent() instanceof ViewGroup) {
+                ((ViewGroup) view.getParent()).removeView(view);
+            }
+        }).start();
+    }
+
+    private void refreshFirstSetupView() {
+        FirstSetupView view = firstSetupView;
+        if (view == null) return;
+        view.refresh(FirstSetupState.isProfileCreated(this),
+                ThorAccessibilityService.isReady(),
+                InputBridge.advancedControlsReady(this));
+    }
+
+    private void refreshFirstSetupSurfaces() {
+        refreshFirstSetupView();
+        if (activeScreen == SCREEN_SETTINGS
+                && activeSettingsSection == SETTINGS_GETTING_STARTED
+                && settingsContentContainer != null) {
+            refreshSettingsContent();
+        }
+    }
+
+    private void handleShizukuPermissionResult(boolean granted) {
+        if (isFinishing() || isDestroyed()) {
+            return;
+        }
+        if (granted) {
+            if (!InputBridge.enableAdvancedControls(this)) {
+                showErrorAction(getString(R.string.connection_advanced_enable_failed));
+                refreshConnectionCapabilitySurfaces();
+                return;
+            }
+            ShizukuNativeController.requestServiceBinding(this);
+            showAction(getString(R.string.connection_shizuku_authorized));
+        } else {
+            showErrorAction(getString(R.string.connection_shizuku_denied));
+        }
+        updateProfileAwarenessRegistration();
+        refreshConnectionCapabilitySurfaces();
+    }
+
+    private void refreshConnectionCapabilitySurfaces() {
+        if (isFinishing() || isDestroyed()) {
+            return;
+        }
+        updateBridgeStatus();
+        refreshFirstSetupSurfaces();
+        if (activeScreen == SCREEN_SETTINGS
+                && activeSettingsSection == SETTINGS_INPUT
+                && settingsContentContainer != null) {
+            refreshSettingsContent();
+        }
+    }
+
+    private void openAdvancedControlsFromFirstSetup() {
+        dismissFirstSetup(false);
+        activeSettingsSection = SETTINGS_INPUT;
+        settingsContentScrollY = 0;
+        activeScreen = SCREEN_SETTINGS;
+        rebuildContent();
+    }
+
+    private void recordFocusBoundary(String event) {
+        ThorFocusDiagnostics.record(
+                this,
+                event,
+                thorTextInputFocusLease.isHoldingWindowFocus(),
+                startupReadinessView != null);
+    }
+
+    private void parkKeyboardInputSessionIfUnused() {
         if (selectedProfile == null) {
-            closeKeyboardInputSession();
+            parkKeyboardInputSession();
             return;
         }
         for (WidgetLayout.Item item : selectedProfile.safeWidgetLayout().items) {
@@ -1333,7 +1717,9 @@ public class AssistantActivity extends Activity {
                 return;
             }
         }
-        closeKeyboardInputSession();
+        // The uinput device follows the Shizuku UserService lifetime. Profile and page changes
+        // release held keys but do not hot-unplug the already enumerated keyboard.
+        parkKeyboardInputSession();
     }
 
     private void openFullVirtualKeyboard() {
@@ -1408,7 +1794,6 @@ public class AssistantActivity extends Activity {
         if (view == null) return;
         view.releaseForDismiss();
         parkKeyboardInputSession();
-        closeKeyboardInputSessionIfUnused();
         setHeaderProfileInteractionEnabled(true);
         view.animate().cancel();
         finishAnimatedView(view);
@@ -1574,40 +1959,44 @@ public class AssistantActivity extends Activity {
         HeimdallUi.applyBottomDockPanel(this, bottomDock);
         root.addView(bottomDock, new LinearLayout.LayoutParams(-1, dp(HeimdallUi.HEIGHT_DOCK)));
 
-        dockNavBar = new DockNavBar(this, dockIndexForScreen(activeScreen));
-        bottomDock.addView(dockNavBar, new LinearLayout.LayoutParams(0, -1, 3));
+        if (activeScreen == SCREEN_MAIN && hasUnsavedWidgetLayout()) {
+            populateWidgetLayoutDraftDock(bottomDock);
+        } else {
+            dockNavBar = new DockNavBar(this, dockIndexForScreen(activeScreen));
+            bottomDock.addView(dockNavBar, new LinearLayout.LayoutParams(0, -1, 3));
 
-        LinearLayout bottomBar = new LinearLayout(this);
-        bottomBar.setOrientation(LinearLayout.HORIZONTAL);
-        dockNavBar.addView(bottomBar, new FrameLayout.LayoutParams(-1, -1));
+            LinearLayout bottomBar = new LinearLayout(this);
+            bottomBar.setOrientation(LinearLayout.HORIZONTAL);
+            dockNavBar.addView(bottomBar, new FrameLayout.LayoutParams(-1, -1));
 
-        addDockItem(bottomBar, navIconButton(getString(R.string.nav_home),
-                R.drawable.ic_overview, SCREEN_MAIN,
-                () -> switchPlayScreen(SCREEN_MAIN)));
-        addDockItem(bottomBar, navIconButton(getString(R.string.nav_map),
-                R.drawable.ic_map, SCREEN_MAP, this::showMapPanel));
-        addDockItem(bottomBar, navIconButton(getString(R.string.nav_guide),
-                R.drawable.ic_guide, SCREEN_GUIDE, this::showGuidePanel));
+            addDockItem(bottomBar, navIconButton(getString(R.string.nav_home),
+                    R.drawable.ic_overview, SCREEN_MAIN,
+                    () -> switchPlayScreen(SCREEN_MAIN)));
+            addDockItem(bottomBar, navIconButton(getString(R.string.nav_map),
+                    R.drawable.ic_map, SCREEN_MAP, this::showMapPanel));
+            addDockItem(bottomBar, navIconButton(getString(R.string.nav_guide),
+                    R.drawable.ic_guide, SCREEN_GUIDE, this::showGuidePanel));
 
-        FrameLayout settingsSlot = new FrameLayout(this);
-        bottomDock.addView(settingsSlot, new LinearLayout.LayoutParams(0, -1, 1));
-        Button settingsButton = navIconButton("", R.drawable.ic_settings, SCREEN_SETTINGS,
-                this::showSettingsPanel);
-        settingsButton.setContentDescription(getString(R.string.nav_settings));
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            settingsButton.setTooltipText(getString(R.string.nav_settings));
+            FrameLayout settingsSlot = new FrameLayout(this);
+            bottomDock.addView(settingsSlot, new LinearLayout.LayoutParams(0, -1, 1));
+            Button settingsButton = navIconButton("", R.drawable.ic_settings, SCREEN_SETTINGS,
+                    this::showSettingsPanel);
+            settingsButton.setContentDescription(getString(R.string.nav_settings));
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                settingsButton.setTooltipText(getString(R.string.nav_settings));
+            }
+            settingsSlot.addView(settingsButton, new FrameLayout.LayoutParams(-1, -1));
+
+            View settingsDivider = new View(this);
+            settingsDivider.setBackgroundColor(HeimdallUi.isPearl(this)
+                    ? 0x40657386
+                    : 0x405F7C9A);
+            FrameLayout.LayoutParams dividerParams = new FrameLayout.LayoutParams(dp(1), -1);
+            dividerParams.gravity = Gravity.LEFT;
+            dividerParams.setMargins(0, dp(10), 0, dp(10));
+            settingsSlot.addView(settingsDivider, dividerParams);
+            updateDockNavSelection(false);
         }
-        settingsSlot.addView(settingsButton, new FrameLayout.LayoutParams(-1, -1));
-
-        View settingsDivider = new View(this);
-        settingsDivider.setBackgroundColor(HeimdallUi.isPearl(this)
-                ? 0x40657386
-                : 0x405F7C9A);
-        FrameLayout.LayoutParams dividerParams = new FrameLayout.LayoutParams(dp(1), -1);
-        dividerParams.gravity = Gravity.LEFT;
-        dividerParams.setMargins(0, dp(10), 0, dp(10));
-        settingsSlot.addView(settingsDivider, dividerParams);
-        updateDockNavSelection(false);
         if (activeScreen == SCREEN_SETTINGS) {
             bottomDock.setVisibility(View.GONE);
         }
@@ -1657,7 +2046,99 @@ public class AssistantActivity extends Activity {
         if (touchPadView == null) {
             closeVirtualMouseDispatcher();
         }
-        return widgetGrid;
+        return hasUnsavedWidgetLayout()
+                ? createWidgetLayoutDraftPreview(widgetGrid)
+                : widgetGrid;
+    }
+
+    private View createWidgetLayoutDraftPreview(WidgetHostLayout widgetGrid) {
+        FrameLayout preview = new FrameLayout(this);
+        preview.addView(widgetGrid, new FrameLayout.LayoutParams(-1, -1));
+        widgetGrid.setDescendantFocusability(ViewGroup.FOCUS_BLOCK_DESCENDANTS);
+        widgetGrid.setImportantForAccessibility(
+                View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);
+
+        View interactionShield = new View(this);
+        interactionShield.setClickable(true);
+        interactionShield.setFocusable(false);
+        interactionShield.setBackgroundColor(HeimdallUi.isPearl(this)
+                ? 0x12000000
+                : 0x24000000);
+        interactionShield.setContentDescription(
+                getString(R.string.grid_draft_preview_accessibility));
+        interactionShield.setOnClickListener(v ->
+                showAction(getString(R.string.grid_draft_controls_paused)));
+        preview.addView(interactionShield, new FrameLayout.LayoutParams(-1, -1));
+        return preview;
+    }
+
+    private void populateWidgetLayoutDraftDock(LinearLayout dock) {
+        HeimdallUi.applySemanticPanel(this, dock, HeimdallUi.SEMANTIC_WARNING);
+        dock.setGravity(Gravity.CENTER_VERTICAL);
+        dock.setPadding(dp(8), dp(4), dp(8), dp(4));
+
+        LinearLayout status = new LinearLayout(this);
+        status.setOrientation(LinearLayout.VERTICAL);
+        status.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
+        status.setPadding(dp(6), 0, dp(8), 0);
+        int warningColor = HeimdallUi.isPearl(this)
+                ? 0xFF96500E
+                : HeimdallUi.COLOR_WARNING;
+        TextView title = text(getString(R.string.grid_draft_title),
+                HeimdallUi.TYPE_LABEL, warningColor, true);
+        title.setSingleLine(true);
+        status.addView(title, new LinearLayout.LayoutParams(-1, 0, 1));
+        TextView subtitle = text(getString(R.string.grid_draft_subtitle),
+                HeimdallUi.TYPE_META, MUTED, false);
+        subtitle.setSingleLine(true);
+        subtitle.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        status.addView(subtitle, new LinearLayout.LayoutParams(-1, 0, 1));
+        dock.addView(status, new LinearLayout.LayoutParams(0, -1, 1.45f));
+
+        addWidgetLayoutDraftAction(dock, R.string.grid_draft_continue_editing,
+                R.drawable.ic_edit, false, false, this::showWidgetGridEditor);
+        addWidgetLayoutDraftAction(dock, R.string.grid_draft_discard,
+                R.drawable.ic_trash, false, true, this::discardWidgetLayoutDraft);
+        addWidgetLayoutDraftAction(dock, R.string.grid_draft_save,
+                R.drawable.ic_check, true, false, this::saveWidgetLayoutDraft);
+    }
+
+    private void addWidgetLayoutDraftAction(LinearLayout dock, int labelRes, int iconRes,
+            boolean primary, boolean destructive, Runnable action) {
+        Button button = actionButton(getString(labelRes), action);
+        button.setTextSize(HeimdallUi.TYPE_BUTTON_COMPACT);
+        button.setGravity(Gravity.CENTER);
+        if (primary) {
+            HeimdallUi.applyPrimaryActionButton(this, button);
+        }
+        int color = destructive
+                ? (HeimdallUi.isPearl(this) ? 0xFFB34A4F : DANGER)
+                : HeimdallUi.textColor(this);
+        button.setTextColor(color);
+        setLeftIcon(button, iconRes, color, dp(16));
+        button.setCompoundDrawablePadding(dp(5));
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, -1, 0.62f);
+        params.setMargins(dp(2), 0, dp(2), 0);
+        dock.addView(button, params);
+    }
+
+    private void discardWidgetLayoutDraft() {
+        draftWidgetLayout = null;
+        rebuildContent();
+        showAction(getString(R.string.grid_draft_discarded));
+    }
+
+    private void saveWidgetLayoutDraft() {
+        if (draftWidgetLayout == null) {
+            return;
+        }
+        draftWidgetLayout.sanitize();
+        selectedProfile.widgetLayout = draftWidgetLayout.copy();
+        draftWidgetLayout = null;
+        ProfileStore.saveProfiles(this, profiles);
+        parkKeyboardInputSessionIfUnused();
+        rebuildContent();
+        showAction(getString(R.string.grid_layout_saved));
     }
 
     private WidgetLayout currentWidgetLayout() {
@@ -1740,6 +2221,8 @@ public class AssistantActivity extends Activity {
                             showErrorAction(getString(R.string.canvas_save_layout_first));
                         }
                     });
+            view.setPlaybackAllowed(activityResumed && activeScreen == SCREEN_MAIN
+                    && !canvasOverlayActive);
             canvasViews.add(view);
             return view;
         }
@@ -2206,13 +2689,13 @@ public class AssistantActivity extends Activity {
         launchScreenRecordingConsent();
     }
 
-    private void launchScreenRecordingConsent() {
+    private boolean launchScreenRecordingConsent() {
         MediaProjectionManager manager =
                 (MediaProjectionManager) getSystemService(MEDIA_PROJECTION_SERVICE);
         if (manager == null) {
             showErrorAction(getString(R.string.error_recording_unsupported));
             pendingRecordingProfileName = null;
-            return;
+            return false;
         }
         Intent consent;
         if (Build.VERSION.SDK_INT >= 34) {
@@ -2221,7 +2704,14 @@ public class AssistantActivity extends Activity {
         } else {
             consent = manager.createScreenCaptureIntent();
         }
-        startActivityForResult(consent, REQUEST_SCREEN_RECORDING);
+        try {
+            startActivityForResult(consent, REQUEST_SCREEN_RECORDING);
+            return true;
+        } catch (RuntimeException error) {
+            pendingRecordingProfileName = null;
+            showErrorAction(getString(R.string.error_recording_unsupported));
+            return false;
+        }
     }
 
     private void startApprovedScreenRecording(int resultCode, Intent resultData) {
@@ -2581,6 +3071,34 @@ public class AssistantActivity extends Activity {
         canvasViews.clear();
     }
 
+    private void pauseCanvasPlayback() {
+        for (CanvasWidgetView view : canvasViews) {
+            view.setPlaybackAllowed(false);
+        }
+        if (activeCanvasCompositionEditor != null) {
+            activeCanvasCompositionEditor.setPlaybackAllowed(false);
+        }
+        if (activeCanvasFullscreenViewer != null) {
+            activeCanvasFullscreenViewer.setPlaybackAllowed(false);
+        }
+    }
+
+    private void updateCanvasPlayback() {
+        boolean runtimeAllowed = activityResumed && activeScreen == SCREEN_MAIN
+                && !canvasOverlayActive && panelOverlays.isEmpty();
+        for (CanvasWidgetView view : canvasViews) {
+            view.setPlaybackAllowed(runtimeAllowed);
+        }
+        if (activeCanvasCompositionEditor != null) {
+            activeCanvasCompositionEditor.setPlaybackAllowed(
+                    activityResumed && canvasOverlayActive);
+        }
+        if (activeCanvasFullscreenViewer != null) {
+            activeCanvasFullscreenViewer.setPlaybackAllowed(
+                    activityResumed && canvasOverlayActive);
+        }
+    }
+
     private void chooseCanvasImage(WidgetLayout.Item item, int frameWidth, int frameHeight) {
         if (hasUnsavedWidgetLayout()) {
             showErrorAction(getString(R.string.canvas_save_layout_first));
@@ -2598,9 +3116,10 @@ public class AssistantActivity extends Activity {
         pendingCanvasImportFrameHeight = Math.max(1, frameHeight);
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         intent.addCategory(Intent.CATEGORY_OPENABLE);
-        intent.setType("image/*");
+        intent.setType("*/*");
         intent.putExtra(Intent.EXTRA_MIME_TYPES,
-                new String[]{"image/jpeg", "image/png", "image/webp"});
+                new String[]{"image/jpeg", "image/png", "image/webp", "image/gif",
+                        "video/mp4"});
         intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
         try {
             startActivityForResult(intent, REQUEST_CANVAS_IMAGE);
@@ -2619,14 +3138,21 @@ public class AssistantActivity extends Activity {
         pendingCanvasImportRequest = CanvasAssetStore.importAsync(this, uri,
                 new CanvasAssetStore.ImportCallback() {
                     @Override
-                    public void onImported(String assetId) {
+                    public void onImported(CanvasAssetStore.ImportedAsset importedAsset) {
                         pendingCanvasImportRequest = null;
                         if (!isCanvasTargetValid(profile, item)
                                 || selectedProfile != profile || isFinishing() || isDestroyed()) {
                             return;
                         }
+                        if (!CanvasAnimationPolicy.canAssign(profile.safeWidgetLayout(), item,
+                                importedAsset.animated)) {
+                            showErrorAction(getString(R.string.canvas_animated_profile_limit));
+                            return;
+                        }
                         CanvasConfig draft = new CanvasConfig();
-                        draft.assetId = assetId;
+                        draft.assetId = importedAsset.assetId;
+                        draft.animated = importedAsset.animated;
+                        draft.video = importedAsset.video;
                         if (item.canvasConfig != null) {
                             draft.shape = item.canvasConfig.shape;
                         }
@@ -2646,8 +3172,11 @@ public class AssistantActivity extends Activity {
         if (error == CanvasAssetStore.ImportError.TOO_LARGE) {
             return R.string.canvas_import_too_large;
         }
-        if (error == CanvasAssetStore.ImportError.ANIMATED) {
-            return R.string.canvas_animated_unsupported;
+        if (error == CanvasAssetStore.ImportError.APNG_UNSUPPORTED) {
+            return R.string.canvas_apng_unsupported;
+        }
+        if (error == CanvasAssetStore.ImportError.PLATFORM_UNSUPPORTED) {
+            return R.string.canvas_animation_platform_unsupported;
         }
         if (error == CanvasAssetStore.ImportError.UNSUPPORTED) {
             return R.string.canvas_format_unsupported;
@@ -2700,15 +3229,23 @@ public class AssistantActivity extends Activity {
         FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER);
         params.setMargins(dp(8), dp(8), dp(8), dp(8));
         canvasOverlayActive = true;
+        activeCanvasCompositionEditor = editor;
+        updateCanvasPlayback();
         overlayHolder[0] = showPanelOverlay(editor, params, () -> {
             canvasOverlayActive = false;
+            if (activeCanvasCompositionEditor == editorHolder[0]) {
+                activeCanvasCompositionEditor = null;
+            }
             if (editorHolder[0] != null) {
                 editorHolder[0].release();
             }
+            updateCanvasPlayback();
         });
         if (overlayHolder[0] == null) {
             canvasOverlayActive = false;
+            activeCanvasCompositionEditor = null;
             editor.release();
+            updateCanvasPlayback();
         }
     }
 
@@ -2727,7 +3264,7 @@ public class AssistantActivity extends Activity {
         CanvasConfig config = targetItem.canvasConfig.copy();
         final PanelOverlay[] overlayHolder = new PanelOverlay[1];
         final FullscreenImageViewer[] viewerHolder = new FullscreenImageViewer[1];
-        FullscreenImageViewer viewer = new FullscreenImageViewer(this, config.assetId,
+        FullscreenImageViewer viewer = new FullscreenImageViewer(this, config,
                 new FullscreenImageViewer.Listener() {
                     @Override
                     public void onClose() {
@@ -2749,15 +3286,23 @@ public class AssistantActivity extends Activity {
         viewerHolder[0] = viewer;
         FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER);
         canvasOverlayActive = true;
+        activeCanvasFullscreenViewer = viewer;
+        updateCanvasPlayback();
         overlayHolder[0] = showPanelOverlay(viewer, params, () -> {
             canvasOverlayActive = false;
+            if (activeCanvasFullscreenViewer == viewerHolder[0]) {
+                activeCanvasFullscreenViewer = null;
+            }
             if (viewerHolder[0] != null) {
                 viewerHolder[0].release();
             }
+            updateCanvasPlayback();
         });
         if (overlayHolder[0] == null) {
             canvasOverlayActive = false;
+            activeCanvasFullscreenViewer = null;
             viewer.release();
+            updateCanvasPlayback();
         }
     }
 
@@ -2814,10 +3359,15 @@ public class AssistantActivity extends Activity {
                 settingsOverlayWidth(520), -2, Gravity.CENTER);
         params.setMargins(dp(12), dp(12), dp(12), dp(12));
         canvasOverlayActive = true;
+        updateCanvasPlayback();
         overlayHolder[0] = showPanelOverlay(shell, params,
-                () -> canvasOverlayActive = false);
+                () -> {
+                    canvasOverlayActive = false;
+                    updateCanvasPlayback();
+                });
         if (overlayHolder[0] == null) {
             canvasOverlayActive = false;
+            updateCanvasPlayback();
         }
     }
 
@@ -2853,6 +3403,7 @@ public class AssistantActivity extends Activity {
 
     private void confirmRemoveCanvasImage(GameProfile profile, WidgetLayout.Item item) {
         canvasOverlayActive = true;
+        updateCanvasPlayback();
         PanelOverlay overlay = showSettingsDecisionPanel(getString(R.string.canvas_remove_image),
                 getString(R.string.canvas_remove_confirm), null, null,
                 getString(R.string.canvas_remove_image), () -> {
@@ -2867,9 +3418,13 @@ public class AssistantActivity extends Activity {
                     ProfileStore.saveProfiles(this, profiles);
                     rebuildContent();
                     showAction(getString(R.string.canvas_image_removed));
-                }, () -> canvasOverlayActive = false);
+                }, () -> {
+                    canvasOverlayActive = false;
+                    updateCanvasPlayback();
+                });
         if (overlay == null) {
             canvasOverlayActive = false;
+            updateCanvasPlayback();
         }
     }
 
@@ -3037,14 +3592,23 @@ public class AssistantActivity extends Activity {
     }
 
     private void selectProfile(int index) {
+        selectProfile(index, true);
+    }
+
+    private void selectProfile(int index, boolean userInitiated) {
         if (index < 0 || index >= profiles.size()) {
             return;
+        }
+        if (userInitiated) {
+            manualProfileSelectionGuard.record(
+                    ForegroundAppTracker.latest(), GameContextTracker.latest());
         }
         flushGuideReadingPosition();
         invalidateGuideTextCache();
         draftWidgetLayout = null;
         settingsTouchpadDraft = null;
         settingsMagnifierDraft = null;
+        settingsGameContextBindingDraft = null;
         settingsMacroMappingProtectionInput = null;
         settingsMacroMappingProtectionDraft = null;
         viewingGuideInline = null;
@@ -3062,32 +3626,72 @@ public class AssistantActivity extends Activity {
         selectedProfile = profiles.get(index);
         touchpadSettings = selectedProfile.safeTouchpadSettings();
         closeVirtualMouseDispatcherIfUnused();
-        closeKeyboardInputSessionIfUnused();
         ProfileStore.saveSelectedIndex(this, selectedProfileIndex);
         rebuildContent();
     }
 
     private void maybeAutoSwitchProfile(ForegroundAppTracker.Snapshot snapshot) {
-        if (!ForegroundAppTracker.isEnabled(this)
-                || snapshot == null
-                || !snapshot.isUpperOrUnknownDisplay()
-                || activeScreen == SCREEN_SETTINGS
-                || hasUnsavedWidgetLayout()
-                || activeDraftSteps != null
-                || captureInProgress
-                || magnifierRegionCaptureInProgress
-                || canvasOverlayActive
-                || keyboardPadEditorActive
-                || fullVirtualKeyboardView != null
-                || pendingCanvasImportProfile != null
-                || pendingCanvasImportRequest != null
-                || (widgetGridDialog != null && widgetGridDialog.isShowing())) {
+        String blocker = profileAutoSwitchBlocker(snapshot);
+        if (blocker.length() > 0) {
+            recordProfileAutoSwitchDiagnostic("blocked reason=" + blocker
+                    + " foreground=" + (snapshot == null ? "" : snapshot.packageName)
+                    + " display=" + (snapshot == null ? Display.INVALID_DISPLAY
+                            : snapshot.displayId));
             return;
         }
-        int match = ProfileAutoSwitchResolver.resolve(profiles, selectedProfileIndex, snapshot);
-        if (match != ProfileAutoSwitchResolver.NO_MATCH && match != selectedProfileIndex) {
-            selectProfile(match);
+        GameContextSnapshot gameContext = GameContextTracker.latest();
+        if (manualProfileSelectionGuard.shouldSuppress(snapshot, gameContext)) {
+            recordProfileAutoSwitchDiagnostic("suppressed reason=manual-selection"
+                    + " foreground=" + snapshot.packageName
+                    + " contextState=" + gameContext.state
+                    + " contextKind=" + gameContext.kind);
+            return;
         }
+        int match = ProfileAutoSwitchResolver.resolve(profiles, selectedProfileIndex,
+                snapshot, gameContext);
+        recordProfileAutoSwitchDiagnostic("decision current=" + selectedProfileIndex
+                + " match=" + match
+                + " foreground=" + snapshot.packageName
+                + " contextState=" + gameContext.state
+                + " contextKind=" + gameContext.kind
+                + " platform=" + gameContext.hasPlatformIdentity()
+                + " " + ProfileAutoSwitchResolver.diagnosticSummary(
+                        profiles, selectedProfileIndex, snapshot, gameContext));
+        if (match != ProfileAutoSwitchResolver.NO_MATCH && match != selectedProfileIndex) {
+            int previous = selectedProfileIndex;
+            selectProfile(match, false);
+            recordProfileAutoSwitchDiagnostic("applied from=" + previous + " to=" + match
+                    + " foreground=" + snapshot.packageName
+                    + " contextKind=" + gameContext.kind);
+        }
+    }
+
+    private String profileAutoSwitchBlocker(ForegroundAppTracker.Snapshot snapshot) {
+        if (!ForegroundAppTracker.isEnabled(this)) return "disabled";
+        if (snapshot == null) return "missing-foreground";
+        if (!snapshot.isUpperOrUnknownDisplay()) return "non-upper-foreground";
+        if (activeScreen == SCREEN_SETTINGS) return "settings";
+        if (hasUnsavedWidgetLayout()) return "unsaved-layout";
+        if (activeDraftSteps != null) return "macro-editor";
+        if (captureInProgress) return "capture";
+        if (magnifierRegionCaptureInProgress) return "magnifier-capture";
+        if (canvasOverlayActive) return "canvas-overlay";
+        if (keyboardPadEditorActive) return "keypad-editor";
+        if (fullVirtualKeyboardView != null) return "full-keyboard";
+        if (pendingCanvasImportProfile != null || pendingCanvasImportRequest != null) {
+            return "canvas-import";
+        }
+        if (widgetGridDialog != null && widgetGridDialog.isShowing()) return "grid-editor";
+        return "";
+    }
+
+    private void recordProfileAutoSwitchDiagnostic(String message) {
+        if (message == null || message.equals(lastProfileAutoSwitchDiagnostic)) {
+            return;
+        }
+        lastProfileAutoSwitchDiagnostic = message;
+        HeimdallStabilityDiagnostics.recordGameContextDiagnostic(
+                this, "auto-switch " + message);
     }
 
     private boolean hasUnsavedWidgetLayout() {
@@ -3609,6 +4213,10 @@ public class AssistantActivity extends Activity {
     }
 
     private void showProfileQuickPicker() {
+        if (hasUnsavedWidgetLayout()) {
+            showErrorAction(getString(R.string.grid_draft_resolve_before_profile_switch));
+            return;
+        }
         final PanelOverlay[] holder = new PanelOverlay[1];
         LinearLayout panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL);
@@ -4070,6 +4678,8 @@ public class AssistantActivity extends Activity {
         nav.setOrientation(LinearLayout.VERTICAL);
         rail.addView(nav, new LinearLayout.LayoutParams(-1, 0, 1));
 
+        nav.addView(settingsCategoryButton(getString(R.string.settings_category_getting_started),
+                R.drawable.ic_heimdall_header_mark_blue, SETTINGS_GETTING_STARTED));
         nav.addView(settingsCategoryButton(getString(R.string.settings_category_main),
                 R.drawable.ic_overview, SETTINGS_LAYOUT));
         nav.addView(settingsCategoryButton(getString(R.string.settings_category_controls),
@@ -4110,13 +4720,22 @@ public class AssistantActivity extends Activity {
         rightColumn.setOrientation(LinearLayout.VERTICAL);
         shell.addView(rightColumn, new LinearLayout.LayoutParams(0, -1, 1));
 
+        FrameLayout contentFrame = new FrameLayout(this);
+        contentFrame.setBackground(HeimdallUi.isPearl(this)
+                ? HeimdallUi.cncFlush(this, 12)
+                : rounded(0xFF0B1018, HeimdallUi.border(this), 12));
+        rightColumn.addView(contentFrame, new LinearLayout.LayoutParams(-1, 0, 1));
+
         ScrollView contentScroll = new ScrollView(this);
         settingsContentScroll = contentScroll;
         contentScroll.setFillViewport(true);
-        contentScroll.setBackground(HeimdallUi.isPearl(this)
-                ? HeimdallUi.cncFlush(this, 12)
-                : rounded(0xFF0B1018, HeimdallUi.border(this), 12));
-        rightColumn.addView(contentScroll, new LinearLayout.LayoutParams(-1, 0, 1));
+        contentScroll.setClipToPadding(true);
+        contentScroll.setBackgroundColor(Color.TRANSPARENT);
+        int contentFrameInset = HeimdallUi.isPearl(this) ? dp(2) : dp(1);
+        FrameLayout.LayoutParams contentScrollParams = new FrameLayout.LayoutParams(-1, -1);
+        contentScrollParams.setMargins(contentFrameInset, contentFrameInset,
+                contentFrameInset, contentFrameInset);
+        contentFrame.addView(contentScroll, contentScrollParams);
 
         LinearLayout content = new LinearLayout(this);
         settingsContentContainer = content;
@@ -4135,19 +4754,22 @@ public class AssistantActivity extends Activity {
         footer.addView(settingsFooterButton(getString(R.string.common_back),
                 this::closeSettingsPanel, false, true));
         boolean canReset = activeSettingsSection != SETTINGS_PROFILE
-                && activeSettingsSection != SETTINGS_DIAGNOSTICS;
+                && activeSettingsSection != SETTINGS_DIAGNOSTICS
+                && activeSettingsSection != SETTINGS_INPUT
+                && activeSettingsSection != SETTINGS_GETTING_STARTED;
         String resetLabel = !canReset
                 ? getString(R.string.settings_no_reset)
-                : (activeSettingsSection == SETTINGS_INPUT
-                        ? getString(R.string.settings_use_basic_connection)
-                        : getString(R.string.settings_restore_defaults));
+                : getString(R.string.settings_restore_defaults);
         footer.addView(settingsFooterButton(resetLabel,
                 () -> runAfterTextInputFocusRelease(this::resetActiveSettingsSection),
                 false, canReset));
         boolean canSave = activeSettingsSection != SETTINGS_INPUT
-                && activeSettingsSection != SETTINGS_DIAGNOSTICS;
+                && activeSettingsSection != SETTINGS_DIAGNOSTICS
+                && activeSettingsSection != SETTINGS_GETTING_STARTED;
         String saveLabel = canSave ? getString(R.string.common_save)
                 : getString(activeSettingsSection == SETTINGS_DIAGNOSTICS
+                        || activeSettingsSection == SETTINGS_INPUT
+                        || activeSettingsSection == SETTINGS_GETTING_STARTED
                         ? R.string.settings_no_save
                         : R.string.settings_selection_applies_immediately);
         footer.addView(settingsFooterButton(saveLabel,
@@ -4250,6 +4872,8 @@ public class AssistantActivity extends Activity {
     }
 
     private void populateSettingsContent(LinearLayout content) {
+        settingsDetectedGameStatus = null;
+        settingsBindPlatformButton = null;
         TextView title = text(settingsSectionTitle(), 16, TEXT, true);
         title.setGravity(Gravity.CENTER_VERTICAL | Gravity.LEFT);
         content.addView(title, new LinearLayout.LayoutParams(-1, dp(32)));
@@ -4261,7 +4885,9 @@ public class AssistantActivity extends Activity {
         summaryParams.setMargins(0, 0, 0, dp(6));
         content.addView(summary, summaryParams);
 
-        if (activeSettingsSection == SETTINGS_LAYOUT) {
+        if (activeSettingsSection == SETTINGS_GETTING_STARTED) {
+            populateGettingStartedSettingsContent(content);
+        } else if (activeSettingsSection == SETTINGS_LAYOUT) {
             populateLayoutSettingsContent(content);
         } else if (activeSettingsSection == SETTINGS_TOUCHPAD) {
             populateTouchpadSettingsContent(content);
@@ -4278,6 +4904,36 @@ public class AssistantActivity extends Activity {
         } else {
             populateProfileSettingsContent(content);
         }
+    }
+
+    private void populateGettingStartedSettingsContent(LinearLayout content) {
+        FirstSetupChecklistView checklist = new FirstSetupChecklistView(this,
+                new FirstSetupChecklistView.Listener() {
+                    @Override
+                    public void onCreateProfile() {
+                        addBlankProfile();
+                        refreshSettingsContent();
+                    }
+
+                    @Override
+                    public void onImportProfile() {
+                        showProfileImportDialog(null);
+                    }
+
+                    @Override
+                    public void onOpenBasicTouch() {
+                        InputBridge.openAccessibilitySettings(AssistantActivity.this);
+                    }
+
+                    @Override
+                    public void onOpenAdvancedControls() {
+                        openSettingsSection(SETTINGS_INPUT);
+                    }
+                });
+        checklist.refresh(FirstSetupState.isProfileCreated(this),
+                ThorAccessibilityService.isReady(),
+                InputBridge.advancedControlsReady(this));
+        content.addView(checklist, new LinearLayout.LayoutParams(-1, -2));
     }
 
     private void populateAppearanceSettingsContent(LinearLayout content) {
@@ -4413,7 +5069,7 @@ public class AssistantActivity extends Activity {
         card.setBackground(HeimdallUi.isPearl(this)
                 ? HeimdallUi.pearlMenuPanel(this, 10)
                 : HeimdallUi.fieldPanel(this, 10));
-        LinearLayout.LayoutParams cardParams = new LinearLayout.LayoutParams(-1, dp(204));
+        LinearLayout.LayoutParams cardParams = new LinearLayout.LayoutParams(-1, -2);
         cardParams.setMargins(0, dp(5), 0, dp(7));
         content.addView(card, cardParams);
 
@@ -4423,7 +5079,7 @@ public class AssistantActivity extends Activity {
 
         LinearLayout rangeRow = new LinearLayout(this);
         rangeRow.setOrientation(LinearLayout.HORIZONTAL);
-        card.addView(rangeRow, new LinearLayout.LayoutParams(-1, dp(46)));
+        card.addView(rangeRow, new LinearLayout.LayoutParams(-1, dp(62)));
 
         NumberStepper startInput = compactNumberStepper(1, 24, item.macroStart + 1);
         rangeRow.addView(labeledNumberStepper(
@@ -4437,7 +5093,7 @@ public class AssistantActivity extends Activity {
 
         LinearLayout layoutRow = new LinearLayout(this);
         layoutRow.setOrientation(LinearLayout.HORIZONTAL);
-        card.addView(layoutRow, new LinearLayout.LayoutParams(-1, dp(46)));
+        card.addView(layoutRow, new LinearLayout.LayoutParams(-1, dp(62)));
 
         NumberStepper columnsInput = compactNumberStepper(1, 4, item.macroColumns);
         layoutRow.addView(labeledNumberStepper(getString(R.string.common_columns),
@@ -4476,76 +5132,44 @@ public class AssistantActivity extends Activity {
         boolean accessibilityReady = ThorAccessibilityService.isReady();
         boolean shizukuReady = ShizukuNativeController.isReady();
         boolean nativeReady = nativeDevice != null && shizukuReady;
-        InputBridge.BackendOption accessibilityOption = null;
-        InputBridge.BackendOption shizukuOption = null;
-        InputBridge.BackendOption[] options = InputBridge.backendOptions(this);
-        for (InputBridge.BackendOption option : options) {
-            if (InputBridge.BACKEND_ACCESSIBILITY.equals(option.id)) {
-                accessibilityOption = option;
-            } else if (InputBridge.BACKEND_SHIZUKU.equals(option.id)) {
-                shizukuOption = option;
-            }
-        }
-        String selectedBackend = InputBridge.selectedBackendId(this);
-        boolean accessibilitySelected = InputBridge.BACKEND_ACCESSIBILITY.equals(selectedBackend);
-        boolean shizukuSelected = InputBridge.BACKEND_SHIZUKU.equals(selectedBackend);
+        InputBridge.AdvancedControlsState advancedState =
+                InputBridge.advancedControlsState(this);
+        boolean advancedReady = advancedState == InputBridge.AdvancedControlsState.READY;
 
         addSettingsInfoCard(content, getString(R.string.connection_capabilities),
                 getString(R.string.connection_capability_summary,
-                        getString(accessibilityReady ? R.string.connection_available
-                                : R.string.connection_basic_required),
-                        getString(nativeReady ? R.string.connection_available
-                                : R.string.connection_controller_required)),
-                accessibilityReady && nativeReady
-                        ? HeimdallUi.SEMANTIC_SUCCESS : HeimdallUi.SEMANTIC_WARNING);
+                        getString(accessibilityReady
+                                ? R.string.connection_state_ready
+                                : R.string.connection_state_not_enabled),
+                        getString(advancedControlsStateLabel(advancedState))),
+                advancedReady || accessibilityReady
+                        ? HeimdallUi.SEMANTIC_NEUTRAL : HeimdallUi.SEMANTIC_WARNING);
 
-        addSettingsLabel(content, getString(R.string.connection_methods));
-        if (accessibilityOption != null) {
-            InputBridge.BackendOption option = accessibilityOption;
-            addConnectionSettingsOption(content, getString(R.string.connection_basic_touch),
-                    getString(R.string.connection_basic_touch_summary),
-                    accessibilitySelected, accessibilityReady,
-                    accessibilitySelected
-                            ? getString(accessibilityReady
-                                    ? R.string.connection_manage_permission
-                                    : R.string.connection_enable)
-                            : getString(R.string.connection_use_this),
-                    true, () -> {
-                        if (!accessibilitySelected) {
-                            selectInputBackendFromSettings(option);
-                            if (accessibilityReady) {
-                                return;
-                            }
-                        }
-                        showAction(getString(accessibilityReady
-                                ? R.string.connection_accessibility_manage
-                                : R.string.connection_accessibility_enable));
-                        InputBridge.openSettings(this);
-                    });
-        }
-        if (shizukuOption != null) {
-            InputBridge.BackendOption option = shizukuOption;
-            String actionLabel = shizukuSelected && shizukuReady
-                    ? getString(nativeReady ? R.string.connection_connected
-                            : R.string.connection_waiting_controller)
-                    : getString(shizukuReady ? R.string.connection_use_this
-                            : R.string.connection_connect);
-            addConnectionSettingsOption(content,
-                    getString(R.string.connection_controller_enhancement),
-                    getString(R.string.connection_controller_summary),
-                    shizukuSelected, nativeReady, actionLabel,
-                    !(shizukuSelected && shizukuReady), () -> {
-                        if (!ShizukuNativeController.isBinderAlive()) {
-                            showErrorAction(getString(R.string.connection_start_shizuku));
-                            return;
-                        }
-                        if (!shizukuSelected || !ShizukuNativeController.isPermissionGranted()) {
-                            selectInputBackendFromSettings(option);
-                            return;
-                        }
-                        showAction(getString(R.string.connection_controller_connected));
-                    });
-        }
+        addSettingsLabel(content, getString(R.string.connection_capabilities_setup));
+        addConnectionCapabilityOption(content,
+                getString(R.string.connection_basic_touch),
+                getString(R.string.connection_basic_touch_summary),
+                getString(accessibilityReady
+                        ? R.string.connection_state_ready
+                        : R.string.connection_state_not_enabled),
+                accessibilityReady,
+                getString(accessibilityReady
+                        ? R.string.connection_manage_permission
+                        : R.string.connection_enable),
+                true, () -> {
+                    showAction(getString(accessibilityReady
+                            ? R.string.connection_accessibility_manage
+                            : R.string.connection_accessibility_enable));
+                    InputBridge.openAccessibilitySettings(this);
+                });
+        addConnectionCapabilityOption(content,
+                getString(R.string.first_setup_advanced_controls_title),
+                getString(R.string.connection_advanced_controls_summary),
+                getString(advancedControlsStateLabel(advancedState)),
+                advancedReady,
+                getString(advancedControlsActionLabel(advancedState)),
+                advancedState != InputBridge.AdvancedControlsState.PREPARING,
+                () -> handleAdvancedControlsAction(advancedState));
 
         LinearLayout detailsRow = settingsActionRow(content);
         detailsRow.addView(editorButton(showInputDiagnostics
@@ -4577,6 +5201,82 @@ public class AssistantActivity extends Activity {
                 diagnosticView.setText(inputDiagnosticText(InputBackendDiagnostics.inspect(this)));
                 showDebugAction(getString(R.string.connection_details_refreshed));
             }));
+        }
+    }
+
+    private int advancedControlsStateLabel(InputBridge.AdvancedControlsState state) {
+        switch (state) {
+            case SHIZUKU_STOPPED:
+                return R.string.connection_state_shizuku_stopped;
+            case AUTHORIZATION_REQUIRED:
+                return R.string.connection_state_authorization_required;
+            case AUTHORIZED:
+                return R.string.connection_state_authorized;
+            case PREPARING:
+                return R.string.connection_state_preparing;
+            case READY:
+            default:
+                return R.string.connection_state_ready;
+        }
+    }
+
+    private int advancedControlsActionLabel(InputBridge.AdvancedControlsState state) {
+        switch (state) {
+            case SHIZUKU_STOPPED:
+                return R.string.connection_open_shizuku;
+            case AUTHORIZATION_REQUIRED:
+                return R.string.connection_authorize;
+            case AUTHORIZED:
+                return R.string.connection_prepare_advanced_controls;
+            case PREPARING:
+                return R.string.connection_preparing;
+            case READY:
+            default:
+                return R.string.connection_manage_shizuku;
+        }
+    }
+
+    private void handleAdvancedControlsAction(InputBridge.AdvancedControlsState state) {
+        switch (state) {
+            case SHIZUKU_STOPPED:
+                openShizukuManager(R.string.connection_shizuku_opened);
+                return;
+            case AUTHORIZATION_REQUIRED:
+                if (ShizukuNativeController.requestPermission()) {
+                    showAction(getString(R.string.connection_shizuku_request_sent));
+                } else {
+                    openShizukuManager(R.string.connection_shizuku_open_for_permission);
+                }
+                refreshConnectionCapabilitySurfaces();
+                return;
+            case AUTHORIZED:
+                if (!InputBridge.enableAdvancedControls(this)) {
+                    showErrorAction(getString(R.string.connection_advanced_enable_failed));
+                    return;
+                }
+                if (ShizukuNativeController.requestServiceBinding(this)) {
+                    showAction(getString(ShizukuNativeController.isServiceBound()
+                            ? R.string.connection_advanced_ready
+                            : R.string.connection_advanced_preparing));
+                } else {
+                    showErrorAction(getString(R.string.connection_advanced_prepare_failed));
+                }
+                refreshConnectionCapabilitySurfaces();
+                return;
+            case PREPARING:
+                refreshConnectionCapabilitySurfaces();
+                return;
+            case READY:
+            default:
+                openShizukuManager(R.string.connection_shizuku_opened);
+        }
+    }
+
+    private void openShizukuManager(int successMessageRes) {
+        if (ShizukuNativeController.openManager(this)) {
+            showAction(getString(successMessageRes));
+        } else {
+            showErrorAction(getString(R.string.connection_shizuku_app_missing));
         }
     }
 
@@ -4636,6 +5336,9 @@ public class AssistantActivity extends Activity {
     }
 
     private void populateProfileSettingsContent(LinearLayout content) {
+        if (settingsGameContextBindingDraft == null) {
+            settingsGameContextBindingDraft = selectedProfile.safeGameContextBinding().copy();
+        }
         ThorAccessibilityService detectionService = ThorAccessibilityService.getInstance();
         if (detectionService != null && ForegroundAppTracker.isEnabled(this)) {
             detectionService.refreshForegroundApp();
@@ -4677,9 +5380,6 @@ public class AssistantActivity extends Activity {
                 return;
             }
             settingsProfilePackageInput.setText(latest.packageName);
-            if (hasUsableRomTitle(latest)) {
-                settingsProfileRomInput.setText(latest.windowTitle);
-            }
         }));
         detectionActions.addView(editorButton(showProfileDetectionDetails
                 ? getString(R.string.profile_collapse_recognition_details)
@@ -4711,14 +5411,88 @@ public class AssistantActivity extends Activity {
         recentAppRow.addView(editorButton(getString(R.string.profile_choose_recent_app), () ->
                 showRecentAppPicker(settingsProfilePackageInput)));
 
-        addSettingsLabel(content, getString(R.string.profile_emulator_game_optional));
-
-        settingsProfileRomInput = settingsEditText(selectedProfile.romContextHint);
-        settingsProfileRomInput.setHint(getString(R.string.profile_rom_hint));
-        settingsProfileRomInput.setHintTextColor(HeimdallUi.mutedTextColor(this));
-        LinearLayout.LayoutParams romParams = new LinearLayout.LayoutParams(-1, dp(42));
-        romParams.setMargins(0, 0, 0, dp(4));
-        content.addView(settingsProfileRomInput, romParams);
+        addSettingsLabel(content, getString(R.string.profile_game_context));
+        GameContextSnapshot detectedGame = GameContextTracker.latest();
+        settingsDetectedGameStatus = addSettingsInfoCard(content,
+                getString(R.string.profile_current_game),
+                profileCurrentGameSummary(detectedGame),
+                HeimdallUi.SEMANTIC_NEUTRAL);
+        TextView gameContextStatus = addSettingsInfoCard(content,
+                getString(R.string.profile_game_context_binding),
+                profileGameContextBindingSummary(settingsGameContextBindingDraft),
+                settingsGameContextBindingDraft.isBound()
+                        ? HeimdallUi.SEMANTIC_SUCCESS : HeimdallUi.SEMANTIC_NEUTRAL);
+        LinearLayout gameContextActions = settingsActionRow(content);
+        final Button[] clearGameContext = new Button[1];
+        gameContextActions.addView(editorButton(
+                getString(R.string.profile_bind_current_game), () -> {
+            if (!ForegroundAppTracker.isEnabled(this)) {
+                showErrorAction(getString(
+                        R.string.profile_game_detection_requires_app_awareness));
+                return;
+            }
+            if (!InputBridge.advancedControlsEnabled(this)
+                    || !ShizukuNativeController.isPermissionGranted()) {
+                showErrorAction(getString(
+                        R.string.profile_game_detection_requires_shizuku));
+                return;
+            }
+            GameContextSnapshot current = GameContextTracker.latest();
+            if (current.state != GameContextSnapshot.State.ACTIVE) {
+                showErrorAction(getString(R.string.profile_current_game_unavailable));
+                return;
+            }
+            GameContextBinding binding = new GameContextBinding();
+            binding.kind = current.kind;
+            binding.identityKey = current.identityKey;
+            binding.label = current.label;
+            settingsGameContextBindingDraft = binding;
+            settingsProfilePackageInput.setText(current.packageName);
+            updateProfileGameContextStatus(gameContextStatus, binding);
+            if (clearGameContext[0] != null) clearGameContext[0].setEnabled(true);
+            showAction(getString(R.string.profile_game_bound_draft, binding.label));
+        }));
+        settingsBindPlatformButton = editorButton(
+                getString(R.string.profile_bind_current_platform), () -> {
+            if (!ForegroundAppTracker.isEnabled(this)) {
+                showErrorAction(getString(
+                        R.string.profile_game_detection_requires_app_awareness));
+                return;
+            }
+            if (!InputBridge.advancedControlsEnabled(this)
+                    || !ShizukuNativeController.isPermissionGranted()) {
+                showErrorAction(getString(
+                        R.string.profile_game_detection_requires_shizuku));
+                return;
+            }
+            GameContextSnapshot current = GameContextTracker.latest();
+            if (!current.hasPlatformIdentity()) {
+                showErrorAction(getString(R.string.profile_current_platform_unavailable));
+                return;
+            }
+            GameContextBinding binding = new GameContextBinding();
+            binding.kind = current.platformKind;
+            binding.identityKey = current.platformIdentityKey;
+            binding.label = current.platformLabel;
+            settingsGameContextBindingDraft = binding;
+            settingsProfilePackageInput.setText(current.packageName);
+            updateProfileGameContextStatus(gameContextStatus, binding);
+            if (clearGameContext[0] != null) clearGameContext[0].setEnabled(true);
+            showAction(getString(R.string.profile_platform_bound_draft, binding.label));
+        });
+        settingsBindPlatformButton.setEnabled(detectedGame.hasPlatformIdentity());
+        clearGameContext[0] = editorButton(
+                getString(R.string.profile_clear_game_binding), () -> {
+            settingsGameContextBindingDraft = new GameContextBinding();
+            updateProfileGameContextStatus(gameContextStatus,
+                    settingsGameContextBindingDraft);
+            clearGameContext[0].setEnabled(false);
+            showAction(getString(R.string.profile_game_binding_cleared_draft));
+        });
+        clearGameContext[0].setEnabled(settingsGameContextBindingDraft.isBound());
+        gameContextActions.addView(clearGameContext[0]);
+        LinearLayout platformContextActions = settingsActionRow(content);
+        platformContextActions.addView(settingsBindPlatformButton);
 
         settingsProfileDefaultInput = new CheckBox(this);
         settingsProfileDefaultInput.setText(getString(R.string.profile_default_for_app));
@@ -4754,8 +5528,6 @@ public class AssistantActivity extends Activity {
                 : settingsProfileNameInput.getText().toString();
         String packageHint = settingsProfilePackageInput == null ? null
                 : settingsProfilePackageInput.getText().toString();
-        String romHint = settingsProfileRomInput == null ? null
-                : settingsProfileRomInput.getText().toString();
         Boolean defaultForPackage = settingsProfileDefaultInput == null ? null
                 : settingsProfileDefaultInput.isChecked();
         showProfileDetectionDetails = !showProfileDetectionDetails;
@@ -4765,9 +5537,6 @@ public class AssistantActivity extends Activity {
         }
         if (packageHint != null && settingsProfilePackageInput != null) {
             settingsProfilePackageInput.setText(packageHint);
-        }
-        if (romHint != null && settingsProfileRomInput != null) {
-            settingsProfileRomInput.setText(romHint);
         }
         if (defaultForPackage != null && settingsProfileDefaultInput != null) {
             settingsProfileDefaultInput.setChecked(defaultForPackage);
@@ -5089,13 +5858,15 @@ public class AssistantActivity extends Activity {
 
     private void applyProfileSettingsInputs() {
         if (settingsProfileNameInput == null || settingsProfilePackageInput == null
-                || settingsProfileRomInput == null || settingsProfileDefaultInput == null) {
+                || settingsProfileDefaultInput == null) {
             return;
         }
         selectedProfile.name = nonEmpty(settingsProfileNameInput.getText().toString(), selectedProfile.name);
         selectedProfile.mode = "\u901a\u7528";
         selectedProfile.packageHint = settingsProfilePackageInput.getText().toString().trim();
-        selectedProfile.romContextHint = settingsProfileRomInput.getText().toString().trim();
+        selectedProfile.gameContextBinding = settingsGameContextBindingDraft == null
+                ? selectedProfile.safeGameContextBinding()
+                : settingsGameContextBindingDraft.copy();
         selectedProfile.defaultForPackage = settingsProfileDefaultInput.isChecked()
                 && selectedProfile.packageHint.length() > 0;
         if (selectedProfile.defaultForPackage) {
@@ -5126,15 +5897,60 @@ public class AssistantActivity extends Activity {
         if (snapshot == null) {
             return getString(R.string.profile_detection_unavailable_summary);
         }
-        if (hasUsableRomTitle(snapshot)) {
-            return getString(R.string.profile_detection_app_and_game_summary);
-        }
         return getString(R.string.profile_detection_app_only_summary);
     }
 
-    private static boolean hasUsableRomTitle(ForegroundAppTracker.Snapshot snapshot) {
-        return snapshot != null && snapshot.windowTitle.length() > 0
-                && snapshot.isUpperOrUnknownDisplay();
+    private String profileGameContextBindingSummary(GameContextBinding binding) {
+        if (binding == null || !binding.isBound()) {
+            return getString(R.string.profile_game_not_bound);
+        }
+        if (binding.isPlatformBinding()) {
+            return getString(R.string.profile_platform_bound, nonEmpty(binding.label,
+                    getString(R.string.profile_platform_unknown_label)));
+        }
+        return getString(R.string.profile_game_bound, nonEmpty(binding.label,
+                getString(R.string.profile_game_unknown_label)));
+    }
+
+    private String profileCurrentGameSummary(GameContextSnapshot snapshot) {
+        if (snapshot == null || snapshot.state == GameContextSnapshot.State.UNKNOWN) {
+            return getString(R.string.profile_current_game_unknown);
+        }
+        if (snapshot.state == GameContextSnapshot.State.NONE) {
+            return getString(R.string.profile_current_game_none);
+        }
+        String game = nonEmpty(snapshot.label,
+                getString(R.string.profile_game_unknown_label));
+        if (snapshot.hasPlatformIdentity()) {
+            return getString(R.string.profile_current_game_and_platform_detected,
+                    game, nonEmpty(snapshot.platformLabel,
+                            getString(R.string.profile_platform_unknown_label)));
+        }
+        return getString(R.string.profile_current_game_detected, game);
+    }
+
+    private void updateSettingsDetectedGameStatus(GameContextSnapshot snapshot) {
+        TextView status = settingsDetectedGameStatus;
+        if (status == null || !status.isAttachedToWindow()) return;
+        status.setText(profileCurrentGameSummary(snapshot));
+        if (settingsBindPlatformButton != null
+                && settingsBindPlatformButton.isAttachedToWindow()) {
+            settingsBindPlatformButton.setEnabled(
+                    snapshot != null && snapshot.hasPlatformIdentity());
+        }
+        if (status.getParent() instanceof LinearLayout) {
+            HeimdallUi.applySemanticPanel(this, (LinearLayout) status.getParent(),
+                    HeimdallUi.SEMANTIC_NEUTRAL);
+        }
+    }
+
+    private void updateProfileGameContextStatus(TextView status, GameContextBinding binding) {
+        status.setText(profileGameContextBindingSummary(binding));
+        if (status.getParent() instanceof LinearLayout) {
+            HeimdallUi.applySemanticPanel(this, (LinearLayout) status.getParent(),
+                    binding != null && binding.isBound()
+                            ? HeimdallUi.SEMANTIC_SUCCESS : HeimdallUi.SEMANTIC_NEUTRAL);
+        }
     }
 
     private LinearLayout settingsActionRow(LinearLayout content) {
@@ -5151,10 +5967,10 @@ public class AssistantActivity extends Activity {
         content.addView(title, params);
     }
 
-    private void addConnectionSettingsOption(LinearLayout content, String title, String summary,
-                                             boolean selected, boolean ready,
-                                             String actionLabel, boolean actionEnabled,
-                                             Runnable action) {
+    private void addConnectionCapabilityOption(LinearLayout content, String title, String summary,
+                                               String stateLabel, boolean ready,
+                                               String actionLabel, boolean actionEnabled,
+                                               Runnable action) {
         LinearLayout copy = new LinearLayout(this);
         copy.setOrientation(LinearLayout.VERTICAL);
         copy.setPadding(dp(12), dp(9), dp(12), dp(9));
@@ -5163,14 +5979,9 @@ public class AssistantActivity extends Activity {
         copyParams.setMargins(0, dp(4), 0, 0);
         content.addView(copy, copyParams);
 
-        int stateRes = selected
-                ? (ready ? R.string.connection_state_current_ready
-                        : R.string.connection_state_current_setup)
-                : (ready ? R.string.connection_state_available_ready
-                        : R.string.connection_state_available_setup);
         TextView titleView = text(getString(R.string.connection_option_title,
-                        title, getString(stateRes)), 12,
-                selected ? HeimdallUi.accent(this) : TEXT, true);
+                        title, stateLabel), 12,
+                ready ? HeimdallUi.accent(this) : TEXT, true);
         copy.addView(titleView, new LinearLayout.LayoutParams(-1, -2));
         TextView summaryView = text(summary, 11, MUTED, false);
         LinearLayout.LayoutParams summaryParams = new LinearLayout.LayoutParams(-1, -2);
@@ -5184,7 +5995,7 @@ public class AssistantActivity extends Activity {
         button.setMinHeight(dp(52));
         LinearLayout.LayoutParams buttonParams = new LinearLayout.LayoutParams(-1, -2);
         buttonParams.setMargins(0, dp(4), 0, dp(8));
-        content.addView(button, buttonParams);
+        copy.addView(button, buttonParams);
     }
 
     private EditText settingsEditText(String value) {
@@ -5409,27 +6220,10 @@ public class AssistantActivity extends Activity {
         selectTouchpadModeDraft(mode);
     }
 
-    private void selectInputBackendFromSettings(InputBridge.BackendOption option) {
-        if (!option.available) {
-            showErrorAction(getString(InputBridge.BACKEND_SHIZUKU.equals(option.id)
-                    ? R.string.connection_start_shizuku
-                    : R.string.settings_connection_unavailable));
-            return;
-        }
-        if (InputBridge.setSelectedBackendId(this, option.id)) {
-            if (InputBridge.BACKEND_SHIZUKU.equals(option.id) && !ShizukuNativeController.isPermissionGranted()) {
-                ShizukuNativeController.requestPermission();
-            }
-            updateBridgeStatus();
-            refreshSettingsContent();
-            showAction(getString(R.string.settings_connection_using,
-                    getString(InputBridge.BACKEND_SHIZUKU.equals(option.id)
-                            ? R.string.connection_controller_enhancement
-                            : R.string.connection_basic_touch)));
-        }
-    }
-
     private String settingsSectionTitle() {
+        if (activeSettingsSection == SETTINGS_GETTING_STARTED) {
+            return getString(R.string.settings_category_getting_started);
+        }
         if (activeSettingsSection == SETTINGS_LAYOUT) {
             return getString(R.string.settings_category_main);
         }
@@ -5455,10 +6249,13 @@ public class AssistantActivity extends Activity {
     }
 
     private String settingsSectionSummary() {
+        if (activeSettingsSection == SETTINGS_GETTING_STARTED) {
+            return getString(R.string.settings_summary_getting_started);
+        }
         if (activeSettingsSection == SETTINGS_LAYOUT) {
-            return getString(draftWidgetLayout == null
-                    ? R.string.settings_summary_layout_saved
-                    : R.string.settings_summary_layout_draft);
+            return getString(hasUnsavedWidgetLayout()
+                    ? R.string.settings_summary_layout_draft
+                    : R.string.settings_summary_layout_saved);
         }
         if (activeSettingsSection == SETTINGS_TOUCHPAD) {
             return getString(R.string.settings_summary_touchpad);
@@ -5518,11 +6315,6 @@ public class AssistantActivity extends Activity {
             showDebugAction(getString(R.string.settings_reset_magnifier_draft));
             refreshSettingsContent();
             return;
-        } else if (activeSettingsSection == SETTINGS_INPUT) {
-            InputBridge.setSelectedBackendId(this, InputBridge.BACKEND_ACCESSIBILITY);
-            showDebugAction(getString(R.string.settings_reset_connection_basic));
-            refreshSettingsContent();
-            return;
         } else if (activeSettingsSection == SETTINGS_APPEARANCE) {
             settingsThemeDraft = HeimdallUi.THEME_DARK;
             settingsPerformanceCompatibilityDraft = false;
@@ -5531,7 +6323,7 @@ public class AssistantActivity extends Activity {
             return;
         }
         ProfileStore.saveProfiles(this, profiles);
-        closeKeyboardInputSessionIfUnused();
+        parkKeyboardInputSessionIfUnused();
         showDebugAction(getString(R.string.settings_section_reset, settingsSectionTitle()));
         refreshSettingsContent();
     }
@@ -5588,7 +6380,7 @@ public class AssistantActivity extends Activity {
             enterImmersiveMode();
         }
         ProfileStore.saveProfiles(this, profiles);
-        closeKeyboardInputSessionIfUnused();
+        parkKeyboardInputSessionIfUnused();
         showDebugAction(savingLayout
                 ? getString(R.string.grid_layout_saved)
                 : getString(R.string.settings_section_saved, settingsSectionTitle()));
@@ -5784,16 +6576,20 @@ public class AssistantActivity extends Activity {
         widgetGridDialog = new AlertDialog.Builder(this)
                 .setView(editor)
                 .create();
+        widgetGridDialog.setCancelable(false);
         widgetGridDialog.setCanceledOnTouchOutside(false);
-        widgetGridDialog.setOnKeyListener((dialog, keyCode, event) -> keyCode == KeyEvent.KEYCODE_BACK);
         widgetGridDialog.setOnDismissListener(dialog -> {
             rebuildContent();
             if (widgetGridDialog == dialog) {
                 widgetGridDialog = null;
             }
         });
-        widgetGridDialog.show();
         Window window = widgetGridDialog.getWindow();
+        if (window != null) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                    | WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM);
+        }
+        widgetGridDialog.show();
         if (window != null) {
             window.getDecorView().setPadding(0, 0, 0, 0);
             applySystemGestureExclusion(window.getDecorView());
@@ -5852,6 +6648,10 @@ public class AssistantActivity extends Activity {
     }
 
     private void openMapFullscreen(int mode) {
+        if (mode == MAP_VIEW_INTERACTIVE
+                && releaseInteractiveMapTextInputThen(() -> openMapFullscreen(mode))) {
+            return;
+        }
         if (mode == MAP_VIEW_LOCAL && selectedLocalMap() == null) {
             showErrorAction(getString(R.string.map_select_local_first));
             return;
@@ -5934,9 +6734,8 @@ public class AssistantActivity extends Activity {
     }
 
     private void addFullscreenInteractiveMap(FrameLayout root) {
-        LinearLayout toolbar = fullscreenMapToolbar(
-                nonEmpty(selectedProfile.interactiveMapTitle,
-                        getString(R.string.map_interactive)));
+        LinearLayout toolbar = interactiveMapToolbar();
+        addInteractiveMapLoadIndicator(toolbar, true);
         addMapIconTool(toolbar, R.drawable.ic_arrow_back,
                 getString(R.string.common_previous), () -> {
             if (activeMapWebView != null && activeMapWebView.canGoBack()) {
@@ -5955,28 +6754,26 @@ public class AssistantActivity extends Activity {
                 activeMapWebView.reload();
             }
         });
+        addInteractiveMapBrowserTools(toolbar);
         addMapIconTool(toolbar, R.drawable.ic_open_external,
                 getString(R.string.common_open_external), this::openInteractiveMapExternally);
         addMapIconTool(toolbar, R.drawable.ic_fullscreen_exit,
                 getString(R.string.common_exit_fullscreen), this::closeMapFullscreen);
+        compactFullscreenInteractiveToolbar(toolbar);
 
         try {
             activeMapWebView = buildInteractiveMapWebView();
             root.addView(activeMapWebView, new FrameLayout.LayoutParams(-1, -1));
-            activeMapWebStatus = floatingMapStatus();
-            FrameLayout.LayoutParams statusParams = new FrameLayout.LayoutParams(-2, dp(30));
-            statusParams.gravity = Gravity.LEFT | Gravity.BOTTOM;
-            statusParams.setMargins(dp(10), 0, dp(10), dp(10));
-            root.addView(activeMapWebStatus, statusParams);
-            installFullscreenMapControls(root, toolbar, activeMapWebView);
+            installFullscreenMapControls(root, toolbar, activeMapWebView, true);
             loadInteractiveMap(activeMapWebView);
         } catch (Exception ex) {
             activeMapWebView = null;
+            updateMapWebStatusError(R.string.map_embedded_browser_unavailable);
             TextView error = text(getString(R.string.map_embedded_browser_unavailable),
                     14, DANGER, false);
             error.setGravity(Gravity.CENTER);
             root.addView(error, new FrameLayout.LayoutParams(-1, -1));
-            installFullscreenMapControls(root, toolbar, error);
+            installFullscreenMapControls(root, toolbar, error, true);
         }
     }
 
@@ -5996,11 +6793,89 @@ public class AssistantActivity extends Activity {
         return toolbar;
     }
 
+    private LinearLayout interactiveMapToolbar() {
+        LinearLayout toolbar = fullscreenMapToolbar("");
+        toolbar.getChildAt(0).setVisibility(View.GONE);
+        if (HeimdallUi.isPearl(this)) {
+            toolbar.setBackground(HeimdallUi.glass(this,
+                    0xDDF6F5F3, 0xEEEEF0EF,
+                    0xAAFFFFFF, 0x669EABB8,
+                    HeimdallUi.RADIUS_PANEL, 2));
+        }
+        return toolbar;
+    }
+
     private void addMapIconTool(LinearLayout toolbar, int iconRes, String description, Runnable action) {
         ImageButton button = compactMapIconButton(iconRes, description, action);
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(42), dp(42));
         params.setMargins(dp(2), 0, dp(2), 0);
         toolbar.addView(button, params);
+    }
+
+    private void addInteractiveMapBrowserTools(LinearLayout toolbar) {
+        boolean desktop = InteractiveMapBrowserSettings.isDesktop(
+                selectedProfile.interactiveMapBrowserMode);
+        String currentMode = getString(desktop
+                ? R.string.map_browser_desktop
+                : R.string.map_browser_mobile);
+        addMapIconTool(toolbar,
+                desktop ? R.drawable.ic_desktop_mode : R.drawable.ic_mobile_mode,
+                getString(R.string.map_browser_identity_current, currentMode),
+                this::toggleInteractiveMapBrowserMode);
+    }
+
+    private void addInteractiveMapLoadIndicator(LinearLayout toolbar, boolean revealsControls) {
+        InteractiveMapLoadIndicator indicator = new InteractiveMapLoadIndicator(this);
+        if (revealsControls) {
+            indicator.setRevealControlsAction(this::showFullscreenMapControls);
+        }
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                dp(revealsControls ? 38 : 46), dp(42));
+        int horizontalMargin = dp(revealsControls ? 1 : 2);
+        params.setMargins(horizontalMargin, 0, horizontalMargin, 0);
+        toolbar.addView(indicator, 1, params);
+        activeMapLoadIndicator = indicator;
+    }
+
+    private void compactFullscreenInteractiveToolbar(LinearLayout toolbar) {
+        toolbar.setPadding(dp(4), dp(3), dp(4), dp(3));
+    }
+
+    private void requestInteractiveMapTextInput() {
+        if (activeMapWebView == null) {
+            return;
+        }
+        requestTextInputFocus(activeMapWebView);
+    }
+
+    private boolean releaseInteractiveMapTextInputThen(Runnable afterRelease) {
+        return activeMapWebView != null
+                && thorTextInputFocusLease.isActiveInputInside(activeMapWebView)
+                && releaseTextInputFocusThen(afterRelease);
+    }
+
+    private void toggleInteractiveMapBrowserMode() {
+        runAfterTextInputFocusRelease(() -> {
+            if (activeMapWebView != null) {
+                String current = activeMapWebView.getUrl();
+                if (current != null
+                        && (current.startsWith("https://") || current.startsWith("http://"))) {
+                    mapWebCurrentUrl = current;
+                }
+            }
+            boolean useDesktop = !InteractiveMapBrowserSettings.isDesktop(
+                    selectedProfile.interactiveMapBrowserMode);
+            selectedProfile.interactiveMapBrowserMode = useDesktop
+                    ? InteractiveMapBrowserSettings.MODE_DESKTOP
+                    : InteractiveMapBrowserSettings.MODE_MOBILE;
+            ProfileStore.saveProfiles(this, profiles);
+            Toast.makeText(this,
+                    getString(R.string.map_browser_mode_changed, getString(useDesktop
+                            ? R.string.map_browser_desktop
+                            : R.string.map_browser_mobile)),
+                    Toast.LENGTH_SHORT).show();
+            rebuildContent();
+        });
     }
 
     private ImageButton compactMapIconButton(int iconRes, String description, Runnable action) {
@@ -6024,11 +6899,33 @@ public class AssistantActivity extends Activity {
     }
 
     private void installFullscreenMapControls(FrameLayout root, LinearLayout toolbar, View content) {
-        FrameLayout.LayoutParams toolbarParams = new FrameLayout.LayoutParams(-1, dp(50));
-        toolbarParams.gravity = Gravity.TOP;
+        installFullscreenMapControls(root, toolbar, content, false);
+    }
+
+    private void installFullscreenMapControls(FrameLayout root, LinearLayout toolbar, View content,
+            boolean persistentCompact) {
+        fullscreenMapControlsPersistent = persistentCompact;
+        FrameLayout.LayoutParams toolbarParams = new FrameLayout.LayoutParams(
+                persistentCompact ? ViewGroup.LayoutParams.WRAP_CONTENT
+                        : ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(50));
+        toolbarParams.gravity = Gravity.TOP | Gravity.LEFT;
         toolbarParams.setMargins(dp(8), dp(8), dp(8), 0);
         root.addView(toolbar, toolbarParams);
         fullscreenMapControls = toolbar;
+
+        if (persistentCompact) {
+            fullscreenMapReveal = null;
+            toolbar.setOnTouchListener((view, event) -> {
+                if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
+                    showFullscreenMapControls();
+                }
+                return false;
+            });
+            uiHandler.removeCallbacks(hideFullscreenMapControls);
+            setFullscreenMapControlsVisible(false);
+            return;
+        }
 
         ImageButton reveal = compactMapIconButton(R.drawable.ic_toolbar_reveal,
                 getString(R.string.map_show_navigation), this::showFullscreenMapControls);
@@ -6065,6 +6962,18 @@ public class AssistantActivity extends Activity {
     }
 
     private void setFullscreenMapControlsVisible(boolean visible) {
+        if (fullscreenMapControlsPersistent
+                && fullscreenMapControls instanceof LinearLayout) {
+            LinearLayout toolbar = (LinearLayout) fullscreenMapControls;
+            toolbar.setVisibility(View.VISIBLE);
+            for (int index = 0; index < toolbar.getChildCount(); index++) {
+                View child = toolbar.getChildAt(index);
+                child.setVisibility(index == 0
+                        ? View.GONE
+                        : index == 1 || visible ? View.VISIBLE : View.GONE);
+            }
+            return;
+        }
         if (fullscreenMapControls != null) {
             fullscreenMapControls.setVisibility(visible ? View.VISIBLE : View.GONE);
         }
@@ -6074,6 +6983,9 @@ public class AssistantActivity extends Activity {
     }
 
     private void closeMapFullscreen() {
+        if (releaseInteractiveMapTextInputThen(this::closeMapFullscreen)) {
+            return;
+        }
         uiHandler.removeCallbacks(hideFullscreenMapControls);
         if (activeMapWebView != null) {
             String current = activeMapWebView.getUrl();
@@ -6083,6 +6995,7 @@ public class AssistantActivity extends Activity {
         }
         fullscreenMapControls = null;
         fullscreenMapReveal = null;
+        fullscreenMapControlsPersistent = false;
         mapViewerFullscreen = false;
         rebuildContent();
     }
@@ -6307,9 +7220,8 @@ public class AssistantActivity extends Activity {
             return panel;
         }
 
-        LinearLayout toolbar = fullscreenMapToolbar(
-                nonEmpty(selectedProfile.interactiveMapTitle,
-                        getString(R.string.map_interactive)));
+        LinearLayout toolbar = interactiveMapToolbar();
+        addInteractiveMapLoadIndicator(toolbar, false);
         addMapIconTool(toolbar, R.drawable.ic_arrow_back,
                 getString(R.string.common_previous), () -> {
             if (activeMapWebView != null && activeMapWebView.canGoBack()) {
@@ -6328,6 +7240,7 @@ public class AssistantActivity extends Activity {
                 activeMapWebView.reload();
             }
         });
+        addInteractiveMapBrowserTools(toolbar);
         addMapIconTool(toolbar, R.drawable.ic_fullscreen,
                 getString(R.string.common_fullscreen),
                 () -> openMapFullscreen(MAP_VIEW_INTERACTIVE));
@@ -6348,28 +7261,16 @@ public class AssistantActivity extends Activity {
         try {
             activeMapWebView = buildInteractiveMapWebView();
             browserFrame.addView(activeMapWebView, new FrameLayout.LayoutParams(-1, -1));
-            activeMapWebStatus = floatingMapStatus();
-            FrameLayout.LayoutParams statusParams = new FrameLayout.LayoutParams(-2, dp(30));
-            statusParams.gravity = Gravity.LEFT | Gravity.BOTTOM;
-            statusParams.setMargins(dp(8), 0, dp(8), dp(8));
-            browserFrame.addView(activeMapWebStatus, statusParams);
             loadInteractiveMap(activeMapWebView);
         } catch (Exception ex) {
             activeMapWebView = null;
+            updateMapWebStatusError(R.string.map_embedded_browser_unavailable);
             TextView error = text(getString(R.string.map_embedded_browser_unavailable),
                     13, DANGER, false);
             error.setGravity(Gravity.CENTER);
             browserFrame.addView(error, new FrameLayout.LayoutParams(-1, -1));
         }
         return panel;
-    }
-
-    private TextView floatingMapStatus() {
-        TextView status = text(getString(R.string.map_loading), 11, MUTED, false);
-        status.setGravity(Gravity.CENTER_VERTICAL | Gravity.LEFT);
-        status.setPadding(dp(10), 0, dp(10), 0);
-        status.setBackground(HeimdallUi.surfacePanel(this, 8));
-        return status;
     }
 
     private void addInteractiveMapEditor(LinearLayout panel) {
@@ -6387,6 +7288,36 @@ public class AssistantActivity extends Activity {
                 "https://map.example.com");
         urlInput.setSingleLine(true);
         card.addView(urlInput, blockParams(42, 0, 8));
+
+        String[] browserModeDraft = {
+                InteractiveMapBrowserSettings.normalize(
+                        selectedProfile.interactiveMapBrowserMode)
+        };
+        LinearLayout browserModeRow = new LinearLayout(this);
+        browserModeRow.setOrientation(LinearLayout.HORIZONTAL);
+        browserModeRow.setGravity(Gravity.CENTER_VERTICAL);
+        TextView browserModeLabel = text(getString(R.string.map_browser_identity),
+                HeimdallUi.TYPE_LABEL, TEXT, true);
+        browserModeRow.addView(browserModeLabel,
+                new LinearLayout.LayoutParams(dp(116), -1));
+        Button[] browserModeButtons = new Button[2];
+        browserModeButtons[0] = editorButton(getString(R.string.map_browser_mobile), () -> {
+            browserModeDraft[0] = InteractiveMapBrowserSettings.MODE_MOBILE;
+            HeimdallUi.applyChoiceButton(this, browserModeButtons[0], true);
+            HeimdallUi.applyChoiceButton(this, browserModeButtons[1], false);
+        });
+        browserModeButtons[1] = editorButton(getString(R.string.map_browser_desktop), () -> {
+            browserModeDraft[0] = InteractiveMapBrowserSettings.MODE_DESKTOP;
+            HeimdallUi.applyChoiceButton(this, browserModeButtons[0], false);
+            HeimdallUi.applyChoiceButton(this, browserModeButtons[1], true);
+        });
+        HeimdallUi.applyChoiceButton(this, browserModeButtons[0],
+                InteractiveMapBrowserSettings.MODE_MOBILE.equals(browserModeDraft[0]));
+        HeimdallUi.applyChoiceButton(this, browserModeButtons[1],
+                InteractiveMapBrowserSettings.MODE_DESKTOP.equals(browserModeDraft[0]));
+        browserModeRow.addView(browserModeButtons[0]);
+        browserModeRow.addView(browserModeButtons[1]);
+        card.addView(browserModeRow, new LinearLayout.LayoutParams(-1, dp(48)));
 
         LinearLayout actions = new LinearLayout(this);
         actions.setOrientation(LinearLayout.HORIZONTAL);
@@ -6407,6 +7338,7 @@ public class AssistantActivity extends Activity {
             selectedProfile.interactiveMapTitle = nonEmpty(titleInput.getText().toString(),
                     getString(R.string.map_interactive));
             selectedProfile.interactiveMapUrl = normalized;
+            selectedProfile.interactiveMapBrowserMode = browserModeDraft[0];
             ProfileStore.saveProfiles(this, profiles);
             editingInteractiveMapInline = false;
             activeMapViewerMode = MAP_VIEW_INTERACTIVE;
@@ -6416,7 +7348,8 @@ public class AssistantActivity extends Activity {
     }
 
     private WebView buildInteractiveMapWebView() {
-        WebView webView = new WebView(this);
+        InteractiveMapWebView webView = new InteractiveMapWebView(this);
+        webView.setOnTextInputRequested(this::requestInteractiveMapTextInput);
         webView.setBackgroundColor(0xFF05070A);
         webView.setOverScrollMode(View.OVER_SCROLL_NEVER);
         WebSettings settings = webView.getSettings();
@@ -6433,14 +7366,21 @@ public class AssistantActivity extends Activity {
         settings.setAllowFileAccessFromFileURLs(false);
         settings.setAllowUniversalAccessFromFileURLs(false);
         settings.setMediaPlaybackRequiresUserGesture(true);
+        InteractiveMapBrowserSettings.apply(this, settings,
+                selectedProfile.interactiveMapBrowserMode);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             settings.setSafeBrowsingEnabled(true);
+        }
+        CookieManager cookieManager = CookieManager.getInstance();
+        cookieManager.setAcceptCookie(true);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            cookieManager.setAcceptThirdPartyCookies(webView, true);
         }
         webView.setWebChromeClient(new WebChromeClient() {
             @Override
             public void onProgressChanged(WebView view, int progress) {
                 if (progress < 100) {
-                updateMapWebStatus(getString(R.string.map_loading_progress, progress), false);
+                    updateMapWebStatusLoading();
                 }
             }
         });
@@ -6448,7 +7388,7 @@ public class AssistantActivity extends Activity {
             @Override
             public void onPageStarted(WebView view, String url, Bitmap favicon) {
                 activeMapWebError = false;
-                updateMapWebStatus(getString(R.string.map_loading), false);
+                updateMapWebStatusLoading();
             }
 
             @Override
@@ -6467,7 +7407,7 @@ public class AssistantActivity extends Activity {
                     mapWebCurrentUrl = url;
                 }
                 if (!activeMapWebError) {
-                updateMapWebStatus(getString(R.string.map_loaded), false);
+                    updateMapWebStatusLoaded();
                 }
             }
 
@@ -6475,7 +7415,7 @@ public class AssistantActivity extends Activity {
             public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
                 if (request.isForMainFrame()) {
                     activeMapWebError = true;
-                updateMapWebStatus(getString(R.string.map_load_failed), true);
+                    updateMapWebStatusError(R.string.map_load_failed);
                 }
             }
         });
@@ -6496,7 +7436,7 @@ public class AssistantActivity extends Activity {
         try {
             startActivity(new Intent(Intent.ACTION_VIEW, uri));
         } catch (Exception ex) {
-                updateMapWebStatus(getString(R.string.map_link_open_failed), true);
+            updateMapWebStatusError(R.string.map_link_open_failed);
         }
         return true;
     }
@@ -6522,6 +7462,9 @@ public class AssistantActivity extends Activity {
     }
 
     private void openInteractiveMapExternally() {
+        if (releaseInteractiveMapTextInputThen(this::openInteractiveMapExternally)) {
+            return;
+        }
         String url = normalizeInteractiveMapUrl(selectedProfile.interactiveMapUrl);
         if (url.length() == 0) {
             showErrorAction(getString(R.string.map_add_interactive_first));
@@ -6534,12 +7477,23 @@ public class AssistantActivity extends Activity {
         }
     }
 
-    private void updateMapWebStatus(String message, boolean error) {
-        if (activeMapWebStatus == null) {
+    private void updateMapWebStatusLoading() {
+        if (activeMapLoadIndicator != null) {
+            activeMapLoadIndicator.setLoading();
+        }
+    }
+
+    private void updateMapWebStatusLoaded() {
+        if (activeMapLoadIndicator != null) {
+            activeMapLoadIndicator.setLoaded();
+        }
+    }
+
+    private void updateMapWebStatusError(int descriptionRes) {
+        if (activeMapLoadIndicator == null) {
             return;
         }
-        activeMapWebStatus.setText(message);
-        activeMapWebStatus.setTextColor(error ? DANGER : MUTED);
+        activeMapLoadIndicator.setError(descriptionRes);
     }
 
     private void chooseMapFile() {
@@ -8375,12 +9329,14 @@ public class AssistantActivity extends Activity {
         selectedProfile = profiles.get(selectedProfileIndex);
         draftWidgetLayout = null;
         settingsTouchpadDraft = null;
+        settingsGameContextBindingDraft = null;
         settingsMacroMappingProtectionInput = null;
         settingsMacroMappingProtectionDraft = null;
         touchpadSettings = selectedProfile.safeTouchpadSettings();
         closeVirtualMouseDispatcherIfUnused();
         ProfileStore.saveSelectedIndex(this, selectedProfileIndex);
         ProfileStore.saveProfiles(this, profiles);
+        FirstSetupState.markProfileCreated(this);
         renderProfiles();
         renderSelectedProfile();
         rebuildContent();
@@ -8407,13 +9363,15 @@ public class AssistantActivity extends Activity {
         return false;
     }
 
-    private String safeFilename(String rawName) {
-        String name = nonEmpty(rawName, "profile").trim();
+    static String safeFilename(String rawName) {
+        String name = rawName == null ? "" : rawName.trim();
+        if (name.length() == 0) {
+            name = "profile";
+        }
         StringBuilder builder = new StringBuilder();
         for (int i = 0; i < name.length(); i++) {
             char c = name.charAt(i);
-            boolean safe = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
-                    || (c >= '0' && c <= '9') || c == '-' || c == '_';
+            boolean safe = Character.isLetterOrDigit(c) || c == '-' || c == '_';
             builder.append(safe ? c : '-');
         }
         String result = builder.toString();
@@ -8426,10 +9384,13 @@ public class AssistantActivity extends Activity {
             return true;
         }
         if (TouchpadSettings.MODE_RIGHT_STICK.equals(normalized)) {
-            return true;
+            NativeGamepadPath.Device device = NativeGamepadPath.resolveDevice();
+            return (InputBridge.advancedControlsEnabled(this)
+                    && ShizukuNativeController.isReady())
+                    || (device != null && device.writable);
         }
         if (TouchpadSettings.MODE_SHIZUKU_TOUCH.equals(normalized)) {
-            return InputBridge.BACKEND_SHIZUKU.equals(InputBridge.selectedBackendId(this))
+            return InputBridge.advancedControlsEnabled(this)
                     && ShizukuNativeController.isReady();
         }
         if (TouchpadSettings.MODE_RELATIVE_MOUSE.equals(normalized)) {
@@ -8442,13 +9403,14 @@ public class AssistantActivity extends Activity {
             return InputBridge.supportsMouseMode(this);
         }
         if (TouchpadSettings.MODE_VIRTUAL_MOUSE.equals(normalized)) {
-            return ShizukuNativeController.isReady();
+            return InputBridge.advancedControlsEnabled(this)
+                    && ShizukuNativeController.isReady();
         }
         return false;
     }
 
     private boolean relativeMouseBackendAvailable() {
-        return InputBridge.BACKEND_SHIZUKU.equals(InputBridge.selectedBackendId(this))
+        return InputBridge.advancedControlsEnabled(this)
                 && ShizukuNativeController.isReady()
                 && NativeGamepadPath.resolveDevice() != null;
     }
@@ -8471,6 +9433,8 @@ public class AssistantActivity extends Activity {
         releaseLocalMapBitmap();
         releaseLocalMapThumbnails();
         setContentView(createLayout());
+        attachStartupReadiness();
+        attachFirstSetup();
         systemStatusController.resetCachedLabels();
         renderProfiles();
         renderSelectedProfile();
@@ -8717,11 +9681,14 @@ public class AssistantActivity extends Activity {
 
     private void releaseMapWebView() {
         if (activeMapWebView == null) {
-            activeMapWebStatus = null;
+            activeMapLoadIndicator = null;
             activeMapWebError = false;
             return;
         }
         try {
+            if (activeMapWebView instanceof InteractiveMapWebView) {
+                ((InteractiveMapWebView) activeMapWebView).setOnTextInputRequested(null);
+            }
             activeMapWebView.stopLoading();
             activeMapWebView.setWebChromeClient(null);
             activeMapWebView.setWebViewClient(null);
@@ -8731,7 +9698,7 @@ public class AssistantActivity extends Activity {
         } catch (Exception ignored) {
         }
         activeMapWebView = null;
-        activeMapWebStatus = null;
+        activeMapLoadIndicator = null;
         activeMapWebError = false;
     }
 
@@ -8969,14 +9936,15 @@ public class AssistantActivity extends Activity {
 
     private LinearLayout labeledNumberStepper(String label, NumberStepper stepper) {
         LinearLayout container = new LinearLayout(this);
-        container.setOrientation(LinearLayout.HORIZONTAL);
-        container.setGravity(Gravity.CENTER_VERTICAL);
+        container.setOrientation(LinearLayout.VERTICAL);
         container.setPadding(0, 0, dp(4), 0);
         TextView title = text(label, 10, MUTED, true);
         title.setGravity(Gravity.CENTER_VERTICAL | Gravity.LEFT);
         title.setSingleLine(true);
-        container.addView(title, new LinearLayout.LayoutParams(dp(50), -1));
-        container.addView(stepper, new LinearLayout.LayoutParams(0, dp(38), 1));
+        container.addView(title, new LinearLayout.LayoutParams(-1, dp(20)));
+        LinearLayout.LayoutParams stepperParams = new LinearLayout.LayoutParams(-1, dp(38));
+        stepperParams.setMargins(0, dp(2), 0, 0);
+        container.addView(stepper, stepperParams);
         return container;
     }
 
@@ -8999,14 +9967,14 @@ public class AssistantActivity extends Activity {
             setBackground(HeimdallUi.fieldPanel(AssistantActivity.this, 7));
 
             decrement = stepButton("-");
-            valueLabel = text(String.valueOf(current), 12, TEXT, true);
+            valueLabel = text(String.valueOf(current), 14, TEXT, true);
             valueLabel.setGravity(Gravity.CENTER);
             valueLabel.setSingleLine(true);
             increment = stepButton("+");
 
-            addView(decrement, new LinearLayout.LayoutParams(dp(30), -1));
+            addView(decrement, new LinearLayout.LayoutParams(dp(40), -1));
             addView(valueLabel, new LinearLayout.LayoutParams(0, -1, 1));
-            addView(increment, new LinearLayout.LayoutParams(dp(30), -1));
+            addView(increment, new LinearLayout.LayoutParams(dp(40), -1));
             decrement.setOnClickListener(v -> setValue(current - 1));
             increment.setOnClickListener(v -> setValue(current + 1));
             refresh();
@@ -9442,6 +10410,7 @@ public class AssistantActivity extends Activity {
                 getString(R.string.profile_generic_game),
                 source.packageHint, source.macroCount, macros);
         profile.romContextHint = "";
+        profile.gameContextBinding = new GameContextBinding();
         profile.defaultForPackage = false;
         profile.iconUri = source.iconUri;
         for (GuideEntry guide : source.guides) {
@@ -9453,6 +10422,8 @@ public class AssistantActivity extends Activity {
         profile.syncLegacyMapFields();
         profile.interactiveMapTitle = source.interactiveMapTitle;
         profile.interactiveMapUrl = source.interactiveMapUrl;
+        profile.interactiveMapBrowserMode = InteractiveMapBrowserSettings.normalize(
+                source.interactiveMapBrowserMode);
         for (MapMarker marker : source.mapMarkers) {
             profile.mapMarkers.add(new MapMarker(marker.title, marker.note, marker.position));
         }
@@ -9469,12 +10440,14 @@ public class AssistantActivity extends Activity {
         selectedProfile = profile;
         draftWidgetLayout = null;
         settingsTouchpadDraft = null;
+        settingsGameContextBindingDraft = null;
         settingsMacroMappingProtectionInput = null;
         settingsMacroMappingProtectionDraft = null;
         touchpadSettings = selectedProfile.safeTouchpadSettings();
         closeVirtualMouseDispatcherIfUnused();
         ProfileStore.saveSelectedIndex(this, selectedProfileIndex);
         ProfileStore.saveProfiles(this, profiles);
+        FirstSetupState.markProfileCreated(this);
         renderProfiles();
         renderSelectedProfile();
         showAction(getString(R.string.profile_copied, profile.name));
@@ -9498,12 +10471,14 @@ public class AssistantActivity extends Activity {
         selectedProfile = profile;
         draftWidgetLayout = null;
         settingsTouchpadDraft = null;
+        settingsGameContextBindingDraft = null;
         settingsMacroMappingProtectionInput = null;
         settingsMacroMappingProtectionDraft = null;
         touchpadSettings = selectedProfile.safeTouchpadSettings();
         closeVirtualMouseDispatcherIfUnused();
         ProfileStore.saveSelectedIndex(this, selectedProfileIndex);
         ProfileStore.saveProfiles(this, profiles);
+        FirstSetupState.markProfileCreated(this);
         renderProfiles();
         renderSelectedProfile();
         showAction(getString(R.string.profile_created));
@@ -9531,6 +10506,7 @@ public class AssistantActivity extends Activity {
         selectedProfile = profiles.get(selectedProfileIndex);
         draftWidgetLayout = null;
         settingsTouchpadDraft = null;
+        settingsGameContextBindingDraft = null;
         settingsMacroMappingProtectionInput = null;
         settingsMacroMappingProtectionDraft = null;
         touchpadSettings = selectedProfile.safeTouchpadSettings();
@@ -10546,6 +11522,7 @@ public class AssistantActivity extends Activity {
         PanelOverlay overlay = new PanelOverlay(scrim, panel, onDismiss);
         panelOverlays.add(overlay);
         updateGameFocusProtection();
+        updateCanvasPlayback();
         overlayHost.addView(scrim, new FrameLayout.LayoutParams(-1, -1));
         animatePanelOverlayIn(overlay);
         return overlay;
@@ -10659,6 +11636,7 @@ public class AssistantActivity extends Activity {
         closingAnimatedPanels.remove(overlay.panel);
         panelOverlays.remove(overlay);
         updateGameFocusProtection();
+        updateCanvasPlayback();
         if (overlay.scrim.getParent() instanceof ViewGroup) {
             ((ViewGroup) overlay.scrim.getParent()).removeView(overlay.scrim);
         }
@@ -11363,7 +12341,7 @@ public class AssistantActivity extends Activity {
         if (device == null) {
             return false;
         }
-        if (InputBridge.BACKEND_SHIZUKU.equals(InputBridge.selectedBackendId(this))) {
+        if (InputBridge.advancedControlsEnabled(this)) {
             return ShizukuNativeController.isReady();
         }
         return device.writable;
@@ -11390,7 +12368,7 @@ public class AssistantActivity extends Activity {
             title = getString(R.string.gamepad_no_controller_title);
             body = getString(R.string.gamepad_no_controller_body);
             semantic = HeimdallUi.SEMANTIC_WARNING;
-        } else if (InputBridge.BACKEND_SHIZUKU.equals(InputBridge.selectedBackendId(this))) {
+        } else if (InputBridge.advancedControlsEnabled(this)) {
             if (ready) {
             title = getString(R.string.gamepad_enhancement_ready_title, deviceName);
             body = getString(R.string.gamepad_record_ready_body);
@@ -11433,7 +12411,7 @@ public class AssistantActivity extends Activity {
         if (device == null) {
             return false;
         }
-        if (InputBridge.BACKEND_SHIZUKU.equals(InputBridge.selectedBackendId(this))) {
+        if (InputBridge.advancedControlsEnabled(this)) {
             return ShizukuNativeController.isReady();
         }
         return device.readable;
@@ -12359,11 +13337,11 @@ public class AssistantActivity extends Activity {
             String mode = TouchpadSettings.normalizeMode(touchpadSettings.mode);
             boolean shizukuControllerMode = (TouchpadSettings.MODE_RELATIVE_MOUSE.equals(mode)
                     || TouchpadSettings.MODE_RIGHT_STICK.equals(mode))
-                    && InputBridge.BACKEND_SHIZUKU.equals(
-                            InputBridge.selectedBackendId(AssistantActivity.this));
+                    && InputBridge.advancedControlsEnabled(AssistantActivity.this);
             if ((TouchpadSettings.MODE_SHIZUKU_TOUCH.equals(mode)
                     || TouchpadSettings.MODE_VIRTUAL_MOUSE.equals(mode)
                     || shizukuControllerMode)
+                    && InputBridge.advancedControlsEnabled(AssistantActivity.this)
                     && ShizukuNativeController.isPermissionGranted()) {
                 ShizukuNativeController.requestServiceBinding(AssistantActivity.this);
                 if (TouchpadSettings.MODE_VIRTUAL_MOUSE.equals(mode)) {
@@ -12373,8 +13351,7 @@ public class AssistantActivity extends Activity {
         }
 
         private boolean shizukuControllerServicePrepared() {
-            if (!InputBridge.BACKEND_SHIZUKU.equals(
-                    InputBridge.selectedBackendId(AssistantActivity.this))) {
+            if (!InputBridge.advancedControlsEnabled(AssistantActivity.this)) {
                 return true;
             }
             if (ShizukuNativeController.isServiceBound()) {
@@ -13457,7 +14434,8 @@ public class AssistantActivity extends Activity {
             int action = event.getActionMasked();
             int actionIndex = event.getActionIndex();
             int actionPointerId = event.getPointerId(actionIndex);
-            if (!ShizukuNativeController.isReady()) {
+            if (!InputBridge.advancedControlsEnabled(AssistantActivity.this)
+                    || !ShizukuNativeController.isReady()) {
                 if (action == MotionEvent.ACTION_DOWN && !virtualMouseErrorShown) {
                     virtualMouseErrorShown = true;
                     showErrorAction(getString(R.string.virtual_mouse_unavailable));
