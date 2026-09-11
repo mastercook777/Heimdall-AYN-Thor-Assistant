@@ -3446,12 +3446,9 @@ public class AssistantActivity extends Activity {
         boolean requestedFromEquivalentDraft = draftWidgetLayout != null
                 && draftWidgetLayout.items.contains(requestedItem);
         if (profileItem == null && requestedFromEquivalentDraft) {
-            int itemIndex = draftWidgetLayout.items.indexOf(requestedItem);
-            if (itemIndex >= 0 && itemIndex < profileLayout.items.size()) {
-                WidgetLayout.Item candidate = profileLayout.items.get(itemIndex);
-                if (WidgetLayout.TYPE_CANVAS.equals(candidate.type)) {
-                    profileItem = candidate;
-                }
+            WidgetLayout.Item candidate = profileLayout.findItemById(requestedItem.itemId);
+            if (candidate != null && WidgetLayout.TYPE_CANVAS.equals(candidate.type)) {
+                profileItem = candidate;
             }
         }
         if (profileItem == null || !WidgetLayout.TYPE_CANVAS.equals(profileItem.type)) {
@@ -3481,12 +3478,8 @@ public class AssistantActivity extends Activity {
         if (draftWidgetLayout == null || !draftWidgetLayout.items.contains(requestedItem)) {
             return null;
         }
-        int itemIndex = draftWidgetLayout.items.indexOf(requestedItem);
-        if (itemIndex < 0 || itemIndex >= profileLayout.items.size()) {
-            return null;
-        }
-        WidgetLayout.Item candidate = profileLayout.items.get(itemIndex);
-        return expectedType.equals(candidate.type) ? candidate : null;
+        WidgetLayout.Item candidate = profileLayout.findItemById(requestedItem.itemId);
+        return candidate != null && expectedType.equals(candidate.type) ? candidate : null;
     }
 
     private WidgetLayout.Item equivalentDraftWidgetItem(
@@ -3494,13 +3487,8 @@ public class AssistantActivity extends Activity {
         if (selectedProfile == null || profileItem == null || draftWidgetLayout == null) {
             return null;
         }
-        WidgetLayout profileLayout = selectedProfile.safeWidgetLayout();
-        int itemIndex = profileLayout.items.indexOf(profileItem);
-        if (itemIndex < 0 || itemIndex >= draftWidgetLayout.items.size()) {
-            return null;
-        }
-        WidgetLayout.Item candidate = draftWidgetLayout.items.get(itemIndex);
-        return expectedType.equals(candidate.type) ? candidate : null;
+        WidgetLayout.Item candidate = draftWidgetLayout.findItemById(profileItem.itemId);
+        return candidate != null && expectedType.equals(candidate.type) ? candidate : null;
     }
 
     private void mirrorQuickActionsIntoEquivalentDraft(
@@ -3699,12 +3687,11 @@ public class AssistantActivity extends Activity {
         if (draftWidgetLayout == null || selectedProfile == null) {
             return false;
         }
-        try {
-            return !draftWidgetLayout.toJson().toString().equals(
-                    selectedProfile.safeWidgetLayout().toJson().toString());
-        } catch (JSONException ignored) {
-            return true;
+        WidgetLayout savedLayout = selectedProfile.safeWidgetLayout();
+        if (draftWidgetLayout.adoptItemIdsFromEquivalent(savedLayout)) {
+            return false;
         }
+        return true;
     }
 
     private void renderSelectedProfile() {

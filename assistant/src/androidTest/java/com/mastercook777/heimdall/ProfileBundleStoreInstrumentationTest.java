@@ -56,6 +56,7 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
             testVirtualKeyboardTransportContract();
             testKeyboardPadModelContract();
             testQuickActionsModelContract();
+            testWidgetLayoutIdentityContract();
             testCanvasRuntimeDecodePolicy();
             testCanvasAnimationContract();
             testProfileIconDecodePolicy();
@@ -333,6 +334,77 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
         assertFalse(restored.safeQuickActions().mediaVolume);
         assertEquals(HeimdallActionCatalog.ACTION_NONE,
                 HeimdallActionCatalog.normalizeQuickAction("arbitrary_intent"));
+    }
+
+    public void testWidgetLayoutIdentityContract() throws Exception {
+        WidgetLayout layout = WidgetLayout.defaultLayout();
+        layout.sanitize();
+        assertEquals(WidgetLayout.CURRENT_SCHEMA_VERSION, layout.schemaVersion);
+        assertEquals(12, layout.columns);
+        assertEquals(8, layout.rows);
+        assertEquals(WidgetLayout.CURRENT_SCHEMA_VERSION,
+                layout.toJson().getInt("schemaVersion"));
+
+        WidgetLayout.Item source = layout.items.get(0);
+        assertTrue(source.itemId.trim().length() > 0);
+        assertEquals(source.itemId, source.copy().itemId);
+        assertFalse(source.itemId.equals(new WidgetLayout.Item(
+                source.type, source.x, source.y, source.w, source.h).itemId));
+
+        WidgetLayout restored = WidgetLayout.fromJson(layout.toJson());
+        assertEquals(source.itemId, restored.items.get(0).itemId);
+        assertEquals(source, layout.findItemById(source.itemId));
+
+        JSONObject legacyJson = layout.toJson();
+        legacyJson.remove("schemaVersion");
+        JSONArray legacyItems = legacyJson.getJSONArray("items");
+        for (int i = 0; i < legacyItems.length(); i++) {
+            legacyItems.getJSONObject(i).remove("itemId");
+        }
+        WidgetLayout legacyFirst = WidgetLayout.fromJson(legacyJson);
+        WidgetLayout legacySecond = WidgetLayout.fromJson(legacyJson);
+        assertEquals(WidgetLayout.CURRENT_SCHEMA_VERSION, legacyFirst.schemaVersion);
+        assertEquals(legacyFirst.items.get(0).itemId, legacySecond.items.get(0).itemId);
+        assertFalse(legacyFirst.items.get(0).itemId.equals(legacyFirst.items.get(1).itemId));
+
+        JSONObject sixByEightJson = new JSONObject();
+        sixByEightJson.put("preset", WidgetLayout.PRESET_CUSTOM);
+        sixByEightJson.put("columns", 6);
+        sixByEightJson.put("rows", 8);
+        JSONArray sixByEightItems = new JSONArray();
+        JSONObject legacyMagnifier = new JSONObject();
+        legacyMagnifier.put("type", WidgetLayout.TYPE_MAGNIFIER);
+        legacyMagnifier.put("x", 1);
+        legacyMagnifier.put("y", 2);
+        legacyMagnifier.put("w", 3);
+        legacyMagnifier.put("h", 4);
+        legacyMagnifier.put("magnifierShape", WidgetLayout.MAGNIFIER_SHAPE_CIRCLE);
+        sixByEightItems.put(legacyMagnifier);
+        sixByEightJson.put("items", sixByEightItems);
+        WidgetLayout migrated = WidgetLayout.fromJson(sixByEightJson);
+        WidgetLayout.Item migratedMagnifier = migrated.items.get(0);
+        assertEquals(12, migrated.columns);
+        assertEquals(8, migrated.rows);
+        assertEquals(2, migratedMagnifier.x);
+        assertEquals(2, migratedMagnifier.y);
+        assertEquals(6, migratedMagnifier.w);
+        assertEquals(4, migratedMagnifier.h);
+        assertEquals(WidgetLayout.MAGNIFIER_SHAPE_CIRCLE,
+                migratedMagnifier.magnifierShape);
+
+        WidgetLayout equivalentPreset = WidgetLayout.defaultLayout();
+        assertTrue(layout.hasSameContent(equivalentPreset));
+        assertTrue(equivalentPreset.adoptItemIdsFromEquivalent(layout));
+        assertEquals(layout.items.get(0).itemId, equivalentPreset.items.get(0).itemId);
+        equivalentPreset.items.get(0).x += 1;
+        assertFalse(layout.hasSameContent(equivalentPreset));
+
+        JSONObject duplicateIdJson = layout.toJson();
+        JSONArray duplicateItems = duplicateIdJson.getJSONArray("items");
+        duplicateItems.getJSONObject(1).put("itemId",
+                duplicateItems.getJSONObject(0).getString("itemId"));
+        WidgetLayout repaired = WidgetLayout.fromJson(duplicateIdJson);
+        assertFalse(repaired.items.get(0).itemId.equals(repaired.items.get(1).itemId));
     }
 
     public void testProfileIconDecodePolicy() {

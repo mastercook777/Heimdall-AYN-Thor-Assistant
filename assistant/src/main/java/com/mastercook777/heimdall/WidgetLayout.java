@@ -5,9 +5,13 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
+import java.util.UUID;
 
 public final class WidgetLayout {
+    public static final int CURRENT_SCHEMA_VERSION = 2;
     public static final String PRESET_DEFAULT = "default";
     public static final String PRESET_FPS = "fps";
     public static final String PRESET_MACRO_FOCUS = "macro_focus";
@@ -24,9 +28,10 @@ public final class WidgetLayout {
     public static final String MAGNIFIER_SHAPE_RECTANGLE = "rectangle";
     public static final String MAGNIFIER_SHAPE_CIRCLE = "circle";
 
-    private static final int DEFAULT_COLUMNS = 6;
+    private static final int DEFAULT_COLUMNS = 12;
     private static final int DEFAULT_ROWS = 8;
 
+    public int schemaVersion = CURRENT_SCHEMA_VERSION;
     public String preset = PRESET_DEFAULT;
     public int columns = DEFAULT_COLUMNS;
     public int rows = DEFAULT_ROWS;
@@ -34,6 +39,7 @@ public final class WidgetLayout {
 
     public WidgetLayout copy() {
         WidgetLayout layout = new WidgetLayout();
+        layout.schemaVersion = schemaVersion;
         layout.preset = preset;
         layout.columns = columns;
         layout.rows = rows;
@@ -45,13 +51,20 @@ public final class WidgetLayout {
     }
 
     public JSONObject toJson() throws JSONException {
+        return toJson(true);
+    }
+
+    private JSONObject toJson(boolean includeIdentity) throws JSONException {
         JSONObject object = new JSONObject();
+        if (includeIdentity) {
+            object.put("schemaVersion", CURRENT_SCHEMA_VERSION);
+        }
         object.put("preset", preset);
         object.put("columns", columns);
         object.put("rows", rows);
         JSONArray array = new JSONArray();
         for (Item item : items) {
-            array.put(item.toJson());
+            array.put(item.toJson(includeIdentity));
         }
         object.put("items", array);
         return object;
@@ -63,7 +76,7 @@ public final class WidgetLayout {
             return layout;
         }
         layout.preset = object.optString("preset", PRESET_DEFAULT);
-        layout.columns = clamp(object.optInt("columns", DEFAULT_COLUMNS), 4, 8);
+        layout.columns = clamp(object.optInt("columns", 6), 4, DEFAULT_COLUMNS);
         layout.rows = clamp(object.optInt("rows", DEFAULT_ROWS), 4, 10);
         layout.items.clear();
         JSONArray array = object.optJSONArray("items");
@@ -79,42 +92,66 @@ public final class WidgetLayout {
         return layout;
     }
 
+    public boolean hasSameContent(WidgetLayout other) {
+        if (other == null) {
+            return false;
+        }
+        try {
+            return toJson(false).toString().equals(other.toJson(false).toString());
+        } catch (JSONException ignored) {
+            return false;
+        }
+    }
+
+    public boolean adoptItemIdsFromEquivalent(WidgetLayout source) {
+        if (!hasSameContent(source) || items.size() != source.items.size()) {
+            return false;
+        }
+        for (int i = 0; i < items.size(); i++) {
+            items.get(i).itemId = source.items.get(i).itemId;
+        }
+        schemaVersion = CURRENT_SCHEMA_VERSION;
+        return true;
+    }
+
     public static WidgetLayout defaultLayout() {
         WidgetLayout layout = new WidgetLayout();
-        layout.items.add(macroItem(3, 5, 3, 3, 0, 3, 3, 1, true));
-        layout.items.add(new Item(TYPE_TOUCHPAD, 3, 0, 3, 5));
-        layout.items.add(new Item(TYPE_MAGNIFIER, 0, 0, 3, 5));
-        layout.items.add(new Item(TYPE_QUICK_ACTIONS, 0, 5, 3, 3));
+        layout.items.add(macroItem(6, 5, 6, 3, 0, 3, 3, 1, true));
+        layout.items.add(new Item(TYPE_TOUCHPAD, 6, 0, 6, 5));
+        layout.items.add(new Item(TYPE_MAGNIFIER, 0, 0, 6, 5));
+        layout.items.add(new Item(TYPE_QUICK_ACTIONS, 0, 5, 6, 3));
         return layout;
     }
 
     public static WidgetLayout fpsLayout() {
         WidgetLayout layout = new WidgetLayout();
         layout.preset = PRESET_FPS;
-        layout.items.add(macroItem(3, 6, 3, 2, 0, 2, 2, 1, true));
-        layout.items.add(new Item(TYPE_TOUCHPAD, 0, 0, 6, 6));
-        layout.items.add(new Item(TYPE_QUICK_ACTIONS, 0, 6, 3, 2));
+        layout.items.add(macroItem(6, 6, 6, 2, 0, 2, 2, 1, true));
+        layout.items.add(new Item(TYPE_TOUCHPAD, 0, 0, 12, 6));
+        layout.items.add(new Item(TYPE_QUICK_ACTIONS, 0, 6, 6, 2));
         return layout;
     }
 
     public static WidgetLayout macroFocusLayout() {
         WidgetLayout layout = new WidgetLayout();
         layout.preset = PRESET_MACRO_FOCUS;
-        layout.items.add(macroItem(0, 4, 2, 4, 0, 2, 1, 2, true));
-        layout.items.add(new Item(TYPE_TOUCHPAD, 4, 0, 2, 4));
-        layout.items.add(macroItem(4, 4, 2, 4, 2, 2, 1, 2, true));
-        layout.items.add(new Item(TYPE_QUICK_ACTIONS, 2, 4, 2, 4));
-        layout.items.add(macroItem(0, 0, 4, 4, 4, 4, 2, 2, true));
+        layout.items.add(macroItem(0, 4, 4, 4, 0, 2, 1, 2, true));
+        layout.items.add(new Item(TYPE_TOUCHPAD, 8, 0, 4, 4));
+        layout.items.add(macroItem(8, 4, 4, 4, 2, 2, 1, 2, true));
+        layout.items.add(new Item(TYPE_QUICK_ACTIONS, 4, 4, 4, 4));
+        layout.items.add(macroItem(0, 0, 8, 4, 4, 4, 2, 2, true));
         return layout;
     }
 
     public static WidgetLayout customLayout(int macroColumns, int touchpadRows) {
         WidgetLayout layout = new WidgetLayout();
         layout.preset = PRESET_CUSTOM;
-        int macroW = clamp(macroColumns, 1, 4);
+        int macroGridColumns = clamp(macroColumns, 1, 4);
+        int macroW = macroGridColumns * 2;
         int touchH = clamp(touchpadRows, 4, DEFAULT_ROWS - 1);
         int rightW = DEFAULT_COLUMNS - macroW;
-        layout.items.add(macroItem(0, 0, macroW, DEFAULT_ROWS, 0, 4, macroW, 0, true));
+        layout.items.add(macroItem(0, 0, macroW, DEFAULT_ROWS,
+                0, 4, macroGridColumns, 0, true));
         layout.items.add(new Item(TYPE_TOUCHPAD, macroW, 0, rightW, touchH));
         layout.items.add(new Item(TYPE_CANVAS, macroW, touchH, rightW, DEFAULT_ROWS - touchH));
         return layout;
@@ -140,9 +177,22 @@ public final class WidgetLayout {
         return null;
     }
 
+    public Item findItemById(String itemId) {
+        String target = normalizeItemId(itemId);
+        if (target.length() == 0) {
+            return null;
+        }
+        for (Item item : items) {
+            if (target.equals(normalizeItemId(item.itemId))) {
+                return item;
+            }
+        }
+        return null;
+    }
+
     public void sanitize() {
-        columns = clamp(columns, 4, 8);
-        rows = clamp(rows, 4, 10);
+        schemaVersion = CURRENT_SCHEMA_VERSION;
+        migrateToCurrentGrid();
         for (int i = items.size() - 1; i >= 0; i--) {
             Item item = items.get(i);
             if (!isKnownType(item.type)) {
@@ -185,6 +235,53 @@ public final class WidgetLayout {
                 item.canvasConfig.normalize();
             }
         }
+        Set<String> usedItemIds = new HashSet<>();
+        for (int i = 0; i < items.size(); i++) {
+            Item item = items.get(i);
+            item.itemId = uniqueItemId(item.itemId, i, usedItemIds);
+        }
+    }
+
+    private void migrateToCurrentGrid() {
+        int sourceColumns = clamp(columns, 4, DEFAULT_COLUMNS);
+        int sourceRows = clamp(rows, 4, 10);
+        if (sourceColumns == DEFAULT_COLUMNS && sourceRows == DEFAULT_ROWS) {
+            columns = DEFAULT_COLUMNS;
+            rows = DEFAULT_ROWS;
+            return;
+        }
+        for (Item item : items) {
+            int right = scaleBoundary(item.x + item.w, sourceColumns, DEFAULT_COLUMNS);
+            int bottom = scaleBoundary(item.y + item.h, sourceRows, DEFAULT_ROWS);
+            item.x = scaleBoundary(item.x, sourceColumns, DEFAULT_COLUMNS);
+            item.y = scaleBoundary(item.y, sourceRows, DEFAULT_ROWS);
+            item.w = Math.max(1, right - item.x);
+            item.h = Math.max(1, bottom - item.y);
+        }
+        columns = DEFAULT_COLUMNS;
+        rows = DEFAULT_ROWS;
+    }
+
+    private static int scaleBoundary(int value, int sourceSize, int targetSize) {
+        return Math.round(value * targetSize / (float) sourceSize);
+    }
+
+    private static String uniqueItemId(String value, int index, Set<String> usedItemIds) {
+        String candidate = normalizeItemId(value);
+        if (candidate.length() > 0 && usedItemIds.add(candidate)) {
+            return candidate;
+        }
+        candidate = "legacy-item-" + index;
+        int suffix = 2;
+        while (!usedItemIds.add(candidate)) {
+            candidate = "legacy-item-" + index + "-" + suffix;
+            suffix++;
+        }
+        return candidate;
+    }
+
+    private static String normalizeItemId(String value) {
+        return value == null ? "" : value.trim();
     }
 
     private static boolean isKnownType(String type) {
@@ -250,6 +347,7 @@ public final class WidgetLayout {
     }
 
     public static final class Item {
+        public String itemId;
         public String type;
         public int x;
         public int y;
@@ -276,6 +374,7 @@ public final class WidgetLayout {
         public CanvasConfig canvasConfig = new CanvasConfig();
 
         public Item(String type, int x, int y, int w, int h) {
+            this.itemId = UUID.randomUUID().toString();
             this.type = type;
             this.x = x;
             this.y = y;
@@ -285,6 +384,7 @@ public final class WidgetLayout {
 
         public Item copy() {
             Item item = new Item(type, x, y, w, h);
+            item.itemId = itemId;
             item.macroStart = macroStart;
             item.macroCount = macroCount;
             item.macroColumns = macroColumns;
@@ -309,7 +409,14 @@ public final class WidgetLayout {
         }
 
         public JSONObject toJson() throws JSONException {
+            return toJson(true);
+        }
+
+        private JSONObject toJson(boolean includeIdentity) throws JSONException {
             JSONObject object = new JSONObject();
+            if (includeIdentity) {
+                object.put("itemId", itemId);
+            }
             object.put("type", type);
             object.put("x", x);
             object.put("y", y);
@@ -354,6 +461,7 @@ public final class WidgetLayout {
                     object.optInt("y", 0),
                     object.optInt("w", 1),
                     object.optInt("h", 1));
+            item.itemId = normalizeItemId(object.optString("itemId", ""));
             item.macroStart = object.optInt("macroStart", 0);
             item.macroCount = object.optInt("macroCount", 4);
             item.macroColumns = object.optInt("macroColumns", 2);

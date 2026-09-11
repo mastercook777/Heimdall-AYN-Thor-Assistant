@@ -9,7 +9,7 @@ import android.view.MotionEvent;
 import android.view.View;
 
 final class WidgetGridEditor extends View {
-    static final int COLUMNS = 6;
+    static final int COLUMNS = 12;
     static final int ROWS = 8;
 
     interface Host {
@@ -436,13 +436,13 @@ final class WidgetGridEditor extends View {
     }
 
     private int[] defaultWidgetSize(String type) {
-        if (WidgetLayout.TYPE_TOUCHPAD.equals(type)) return new int[]{3, 4};
-        if (WidgetLayout.TYPE_MACRO_GROUP.equals(type)) return new int[]{2, 4};
-        if (WidgetLayout.TYPE_KEYBOARD_PAD.equals(type)) return new int[]{3, 4};
-        if (WidgetLayout.TYPE_QUICK_ACTIONS.equals(type)) return new int[]{2, 2};
-        if (WidgetLayout.TYPE_MAGNIFIER.equals(type)) return new int[]{3, 3};
-        if (WidgetLayout.TYPE_CANVAS.equals(type)) return new int[]{3, 3};
-        return new int[]{2, 1};
+        if (WidgetLayout.TYPE_TOUCHPAD.equals(type)) return new int[]{6, 4};
+        if (WidgetLayout.TYPE_MACRO_GROUP.equals(type)) return new int[]{4, 4};
+        if (WidgetLayout.TYPE_KEYBOARD_PAD.equals(type)) return new int[]{6, 4};
+        if (WidgetLayout.TYPE_QUICK_ACTIONS.equals(type)) return new int[]{4, 2};
+        if (WidgetLayout.TYPE_MAGNIFIER.equals(type)) return new int[]{6, 3};
+        if (WidgetLayout.TYPE_CANVAS.equals(type)) return new int[]{6, 3};
+        return new int[]{4, 1};
     }
 
     private WidgetLayout.Item firstAvailableWidgetItem(WidgetLayout layout,
