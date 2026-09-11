@@ -65,6 +65,7 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
             testForegroundObservationClearAndUnicodeExportFilenameContract();
             testGameContextUserServiceLifetimeContract();
             testEdenGameContextIdentityAndResolverContract();
+            testGameNativeCurrentStateGameContextContract();
             testPpssppPositiveLaunchGameContextContract();
             testRetroArchTwoLevelGameContextContract();
             testAssistantActivitySingleTaskContract();
@@ -732,17 +733,172 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
     }
 
     public void testGameContextUserServiceLifetimeContract() throws Exception {
-        assertEquals("game_context_v12",
+        assertEquals("game_context_v15",
                 ShizukuGameContextController.SERVICE_PROCESS_SUFFIX);
-        assertEquals("heimdall_game_context_v12",
+        assertEquals("heimdall_game_context_v15",
                 ShizukuGameContextController.SERVICE_TAG);
-        assertEquals(11, ShizukuGameContextController.SERVICE_VERSION);
+        assertEquals(14, ShizukuGameContextController.SERVICE_VERSION);
         assertEquals("heimdall_native_controller_v13",
                 ShizukuNativeController.SERVICE_TAG);
         assertEquals(13, ShizukuNativeController.SERVICE_VERSION);
         assertTrue(ShizukuUserServiceLifecycle.isDestroyTransaction(16_777_115));
         assertFalse(ShizukuUserServiceLifecycle.isDestroyTransaction(
                 IBinder.FIRST_CALL_TRANSACTION));
+    }
+
+    public void testGameNativeCurrentStateGameContextContract() throws Exception {
+        String steamLaunch = "1789021668.833 18060 14959 I app.gamenative: "
+                + "I: ID: STEAM_1656780";
+        String customLaunch = "1789022020.037 17056 20312 I app.gamenative: "
+                + "I: ID: CUSTOM_GAME_674942539";
+        String gogLaunch = "1789031683.064 17056 9565 I app.gamenative: "
+                + "I: ID: GOG_1420716694";
+        String epicLaunch = "1789033029.732 17056 16151 I app.gamenative: "
+                + "I: ID: EPIC_175";
+        String steamExit = "1789021899.472 18060 18060 I Exit    : "
+                + "I: Exiting, getting feedback for appId: STEAM_1656780";
+        String gogExit = "1789032062.706 17056 17056 I Exit    : "
+                + "I: Exiting, getting feedback for appId: GOG_1420716694";
+        String epicExit = "1789033181.789 17056 17056 I Exit    : "
+                + "I: Exiting, getting feedback for appId: EPIC_175";
+        String steamLabel = "1789021669.283 18060 14959 I XServerScreen: "
+                + "I: Initiated CPU pinning for: Hero's Hour.exe";
+        String customLabel = "1789022020.086 17056 20312 I XServerScreen: "
+                + "I: Initiated CPU pinning for: A:\\sora_1st.exe";
+        String gogLabel = "1789031683.107 17056 9565 I XServerScreen: "
+                + "I: Initiated CPU pinning for: ddtrilogy.exe";
+        String epicLabel = "1789033029.796 17056 16151 I XServerScreen: "
+                + "I: Initiated CPU pinning for: AstroDuel2_EOS.exe";
+
+        assertEquals("STEAM_1656780", GameNativeGameContext.extractLaunchId(steamLaunch));
+        assertEquals("CUSTOM_GAME_674942539",
+                GameNativeGameContext.extractLaunchId(customLaunch));
+        assertEquals("GOG_1420716694", GameNativeGameContext.extractLaunchId(gogLaunch));
+        assertEquals("EPIC_175", GameNativeGameContext.extractLaunchId(epicLaunch));
+        assertEquals("STEAM_1656780", GameNativeGameContext.extractExitId(steamExit));
+        assertEquals("GOG_1420716694", GameNativeGameContext.extractExitId(gogExit));
+        assertEquals("EPIC_175", GameNativeGameContext.extractExitId(epicExit));
+        assertEquals("Hero's Hour", GameNativeGameContext.extractGameLabel(steamLabel));
+        assertEquals("sora_1st", GameNativeGameContext.extractGameLabel(customLabel));
+        assertEquals("ddtrilogy", GameNativeGameContext.extractGameLabel(gogLabel));
+        assertEquals("AstroDuel2_EOS", GameNativeGameContext.extractGameLabel(epicLabel));
+        assertEquals("", GameNativeGameContext.extractLaunchId(
+                steamLaunch.replace("app.gamenative:", "OtherTag:")));
+        assertEquals("", GameNativeGameContext.extractLaunchId(
+                steamLaunch.replace("STEAM_1656780", "STEAM_bad")));
+        assertEquals("", GameNativeGameContext.extractLaunchId(
+                gogLaunch.replace("GOG_1420716694", "AMAZON_1420716694")));
+        assertEquals("", GameNativeGameContext.extractLaunchId(
+                epicLaunch.replace("EPIC_175", "EPIC_0")));
+        assertEquals("", GameNativeGameContext.extractExitId(
+                steamExit.replace("Exit    :", "app.gamenative:")));
+
+        assertTrue(GameNativeGameContext.supportsPackage("app.gamenative"));
+        assertFalse(GameNativeGameContext.supportsPackage("gamehub.lite"));
+        assertTrue(ShizukuGameContextController.isSupportedPackage("app.gamenative"));
+        assertEquals("app.gamenative", ShizukuGameContextUserService.detectorLogTag(
+                GameNativeGameContext.PACKAGE_NAME));
+        assertFalse(ShizukuGameContextUserService.shouldClearForPackage(
+                GameNativeGameContext.PACKAGE_NAME,
+                AetherSx2GameContext.ACTIVITY_MAIN, 2000L, 1500L));
+
+        assertTrue(GameNativeGameContext.isBaselineSameUidCommand(
+                GameNativeGameContext.PACKAGE_NAME, "app.gamenative"));
+        assertTrue(GameNativeGameContext.isBaselineSameUidCommand(
+                GameNativeGameContext.PACKAGE_NAME,
+                "logcat -v threadtime *:E -T 09-10 12:45:10.045"));
+        assertFalse(GameNativeGameContext.isBaselineSameUidCommand(
+                GameNativeGameContext.PACKAGE_NAME,
+                "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Hero's Hour"
+                        + "\\Hero's Hour.exe"));
+        assertFalse(GameNativeGameContext.isBaselineSameUidCommand(
+                GameNativeGameContext.PACKAGE_NAME, "A:\\sora_1st.exe"));
+
+        GameContextSnapshot steam = GameNativeGameContext.snapshot(
+                GameNativeGameContext.STATE_ACTIVE, 18060, "STEAM_1656780",
+                "Hero's Hour", 100L);
+        GameContextSnapshot steamRepeat = GameNativeGameContext.snapshot(
+                GameNativeGameContext.STATE_ACTIVE, 17056, "STEAM_1656780",
+                "Hero's Hour", 200L);
+        GameContextSnapshot custom = GameNativeGameContext.snapshot(
+                GameNativeGameContext.STATE_ACTIVE, 17056, "CUSTOM_GAME_674942539",
+                "sora_1st", 300L);
+        GameContextSnapshot sameNumericCustom = GameNativeGameContext.snapshot(
+                GameNativeGameContext.STATE_ACTIVE, 17056, "CUSTOM_GAME_1656780",
+                "Local game", 400L);
+        GameContextSnapshot gog = GameNativeGameContext.snapshot(
+                GameNativeGameContext.STATE_ACTIVE, 17056, "GOG_1420716694",
+                "ddtrilogy", 450L);
+        GameContextSnapshot sameNumericGog = GameNativeGameContext.snapshot(
+                GameNativeGameContext.STATE_ACTIVE, 17056, "GOG_1656780",
+                "", 475L);
+        GameContextSnapshot epic = GameNativeGameContext.snapshot(
+                GameNativeGameContext.STATE_ACTIVE, 17056, "EPIC_175",
+                "AstroDuel2_EOS", 480L);
+        GameContextSnapshot sameNumericEpic = GameNativeGameContext.snapshot(
+                GameNativeGameContext.STATE_ACTIVE, 17056, "EPIC_1656780",
+                "", 490L);
+        GameContextSnapshot none = GameNativeGameContext.snapshot(
+                GameNativeGameContext.STATE_NONE, 17056, "", "", 500L);
+        assertEquals(GameContextSnapshot.State.ACTIVE, steam.state);
+        assertEquals(GameContextBinding.KIND_PC_GAME, steam.kind);
+        assertEquals("Hero's Hour", steam.label);
+        assertEquals(steam.identityKey, steamRepeat.identityKey);
+        assertFalse(steam.identityKey.equals(custom.identityKey));
+        assertFalse(steam.identityKey.equals(sameNumericCustom.identityKey));
+        assertFalse(steam.identityKey.equals(sameNumericGog.identityKey));
+        assertFalse(custom.identityKey.equals(gog.identityKey));
+        assertEquals("GOG game", sameNumericGog.label);
+        assertFalse(steam.identityKey.equals(sameNumericEpic.identityKey));
+        assertFalse(gog.identityKey.equals(epic.identityKey));
+        assertEquals("Epic game", sameNumericEpic.label);
+        assertEquals(GameContextSnapshot.State.NONE, none.state);
+        assertEquals(GameContextSnapshot.State.UNKNOWN,
+                GameNativeGameContext.snapshot(GameNativeGameContext.STATE_ACTIVE,
+                        17056, "STEAM_bad", "Bad", 600L).state);
+
+        GameProfile steamProfile = new GameProfile("Hero's Hour", "generic",
+                GameNativeGameContext.PACKAGE_NAME, Collections.emptyList());
+        GameProfile customProfile = new GameProfile("Trails", "generic",
+                GameNativeGameContext.PACKAGE_NAME, Collections.emptyList());
+        GameProfile gogProfile = new GameProfile("Double Dragon", "generic",
+                GameNativeGameContext.PACKAGE_NAME, Collections.emptyList());
+        GameProfile epicProfile = new GameProfile("Astro Duel 2", "generic",
+                GameNativeGameContext.PACKAGE_NAME, Collections.emptyList());
+        steamProfile.gameContextBinding = bindingFrom(steam);
+        customProfile.gameContextBinding = bindingFrom(custom);
+        gogProfile.gameContextBinding = bindingFrom(gog);
+        epicProfile.gameContextBinding = bindingFrom(epic);
+        List<GameProfile> profiles = Arrays.asList(
+                steamProfile, customProfile, gogProfile, epicProfile);
+        ForegroundAppTracker.Snapshot foreground = new ForegroundAppTracker.Snapshot(
+                GameNativeGameContext.PACKAGE_NAME,
+                GameNativeGameContext.PACKAGE_NAME + ".MainActivityAliasAlt", "", 0, 300L);
+        assertEquals(1, ProfileAutoSwitchResolver.resolve(
+                profiles, 0, foreground, custom));
+        assertEquals(2, ProfileAutoSwitchResolver.resolve(
+                profiles, 0, foreground, gog));
+        assertEquals(3, ProfileAutoSwitchResolver.resolve(
+                profiles, 0, foreground, epic));
+
+        JSONObject serialized = customProfile.toJson();
+        assertFalse(serialized.toString().contains("674942539"));
+        assertFalse(serialized.toString().contains("A:\\"));
+        assertEquals(GameContextBinding.KIND_PC_GAME,
+                GameProfile.fromJson(serialized).safeGameContextBinding().kind);
+        JSONObject serializedGog = gogProfile.toJson();
+        assertFalse(serializedGog.toString().contains("1420716694"));
+        assertFalse(serializedGog.toString().contains("GOG_"));
+        JSONObject serializedEpic = epicProfile.toJson();
+        assertFalse(serializedEpic.toString().contains("EPIC_175"));
+        assertFalse(serializedEpic.toString().contains("EPIC_"));
+
+        GameProfile duplicate = new GameProfile("Trails alternate", "generic",
+                GameNativeGameContext.PACKAGE_NAME, Collections.emptyList());
+        duplicate.gameContextBinding = bindingFrom(custom);
+        assertEquals(ProfileAutoSwitchResolver.NO_MATCH,
+                ProfileAutoSwitchResolver.resolve(
+                        Arrays.asList(customProfile, duplicate), -1, foreground, custom));
     }
 
     public void testPpssppPositiveLaunchGameContextContract() throws Exception {

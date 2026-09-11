@@ -375,13 +375,13 @@
     <string name="profile_associated_game">Associated game or emulator</string>
     <string name="profile_package_hint">Choose a recent app or use the current upper-screen content</string>
     <string name="profile_choose_recent_app">Choose from recent apps</string>
-    <string name="profile_game_context">Specific emulator game (optional)</string>
+    <string name="profile_game_context">Specific game context (optional)</string>
     <string name="profile_game_context_binding">Game Context</string>
     <string name="profile_current_game">Game detection status</string>
     <string name="profile_current_game_detected">Detected: %1$s</string>
     <string name="profile_current_game_and_platform_detected">Detected: %1$s · %2$s</string>
-    <string name="profile_current_game_none">No game is currently running in the supported emulator.</string>
-    <string name="profile_current_game_unknown">No supported emulator game is currently detected.</string>
+    <string name="profile_current_game_none">No game is currently running in the supported app.</string>
+    <string name="profile_current_game_unknown">No supported game context is currently detected.</string>
     <string name="profile_bind_current_game">Bind detected game</string>
     <string name="profile_bind_current_platform">Bind detected console</string>
     <string name="profile_clear_game_binding">Clear binding</string>
@@ -390,7 +390,7 @@
     <string name="profile_platform_bound">Bound console: %1$s</string>
     <string name="profile_game_unknown_label">Unnamed game</string>
     <string name="profile_platform_unknown_label">Unknown console</string>
-    <string name="profile_current_game_unavailable">No supported emulator game is currently detected. This version supports AetherSX2, Eden, PPSSPP, and the RetroArch candidate through Shizuku.</string>
+    <string name="profile_current_game_unavailable">No supported game context is currently detected. This version supports AetherSX2, Eden, PPSSPP, the RetroArch candidate, and GameNative through Shizuku.</string>
     <string name="profile_current_platform_unavailable">This RetroArch launch does not expose an unambiguous console identity. Bind the game only, or use an uncompressed ROM/database entry with a recognizable console.</string>
     <string name="profile_game_detection_requires_app_awareness">Enable automatic Profile switching before binding the current game.</string>
     <string name="profile_game_detection_requires_shizuku">Start Shizuku and authorize Heimdall before binding the current game.</string>
@@ -398,7 +398,7 @@
     <string name="profile_platform_bound_draft">Bound console %1$s in this draft. Tap Save to apply.</string>
     <string name="profile_game_binding_cleared_draft">Game binding cleared in this draft. Tap Save to apply.</string>
     <string name="profile_default_for_app">Use as the default Profile for this app</string>
-    <string name="profile_binding_help">RetroArch can bind a detected game or its console: an exact game wins, then the console Profile, then the app-level Profile. RetroArch and PPSSPP keep the most recent positive launch in their menus. Heimdall saves no raw ROM path, content URI, or core path. Ambiguous RetroArch formats do not guess a console.</string>
+    <string name="profile_binding_help">RetroArch can bind a detected game or console. GameNative can bind Steam, GOG, Epic, or local-library games and clears the current game on library return. RetroArch and PPSSPP keep their most recent positive launch in menus. Heimdall saves no raw ROM path, content URI, core path, PC path, or GameNative game ID.</string>
     <string name="profile_create">Create Profile</string>
     <string name="profile_data_management">Data management</string>
     <string name="profile_export">Export Profiles</string>

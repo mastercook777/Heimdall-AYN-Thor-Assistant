@@ -21,9 +21,9 @@ final class ShizukuGameContextController implements AutoCloseable {
     }
 
     private static final long BIND_TIMEOUT_MS = 8_000L;
-    static final String SERVICE_PROCESS_SUFFIX = "game_context_v12";
-    static final String SERVICE_TAG = "heimdall_game_context_v12";
-    static final int SERVICE_VERSION = 11;
+    static final String SERVICE_PROCESS_SUFFIX = "game_context_v15";
+    static final String SERVICE_TAG = "heimdall_game_context_v15";
+    static final int SERVICE_VERSION = 14;
     private final Context appContext;
     private final Listener listener;
     private final Object lock = new Object();
@@ -152,6 +152,10 @@ final class ShizukuGameContextController implements AutoCloseable {
                 } else {
                     snapshot = GameContextSnapshot.UNKNOWN;
                 }
+            } else if (GameNativeGameContext.supportsPackage(packageName)) {
+                snapshot = GameNativeGameContext.snapshot(activityState, pid,
+                        identityValue == null ? "" : identityValue,
+                        identityLabel == null ? "" : identityLabel, observedAt);
             } else if (RetroArchGameContext.supportsPackage(packageName)) {
                 RetroArchGameContext.LaunchRecord record =
                         new RetroArchGameContext.LaunchRecord(
@@ -249,6 +253,7 @@ final class ShizukuGameContextController implements AutoCloseable {
 
     static boolean isSupportedPackage(String packageName) {
         return AetherSx2GameContext.PACKAGE_NAME.equals(packageName)
+                || GameNativeGameContext.supportsPackage(packageName)
                 || RetroArchGameContext.supportsPackage(packageName)
                 || PpssppGameContext.supportsPackage(packageName)
                 || EdenGameContext.supportsPackage(packageName);

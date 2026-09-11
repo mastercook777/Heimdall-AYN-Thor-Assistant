@@ -26,6 +26,7 @@ public final class ShizukuGameContextUserService extends Binder {
 
     private static final long EDEN_LABEL_PAIR_WINDOW_MS = 15_000L;
     private static final long STREAM_PID_CHECK_INTERVAL_MS = 750L;
+    private static final long GAME_NATIVE_RUNTIME_EXIT_GRACE_MS = 5_000L;
     private static final long RETROARCH_POLL_INTERVAL_MS = 1_000L;
     private static final int MAX_RETROARCH_HISTORY_BYTES = 256 * 1024;
 
@@ -44,6 +45,7 @@ public final class ShizukuGameContextUserService extends Binder {
     private long minimumAcceptedAt;
     private String pendingEdenLabel = "";
     private long pendingEdenLabelAt;
+    private int gameNativeState = GameNativeGameContext.STATE_UNKNOWN;
     private String cachedActivityPackage = "";
     private int cachedActivityState = AetherSx2GameContext.ACTIVITY_UNKNOWN;
     private long cachedActivityCheckedAt;
@@ -80,12 +82,15 @@ public final class ShizukuGameContextUserService extends Binder {
                 return true;
             }
             selectTarget(packageName);
-            int activityState = isPositiveLaunchPackage(packageName)
+            int activityState = GameNativeGameContext.supportsPackage(packageName)
+                    || isPositiveLaunchPackage(packageName)
                     ? AetherSx2GameContext.ACTIVITY_UNKNOWN
                     : currentActivityState(packageName);
             synchronized (lock) {
                 boolean ready = packageName.equals(monitoredPackage);
-                if (ready && shouldClearForPackage(packageName, activityState,
+                if (GameNativeGameContext.supportsPackage(packageName)) {
+                    activityState = gameNativeState;
+                } else if (ready && shouldClearForPackage(packageName, activityState,
                         cachedActivityCheckedAt, observedAt)) {
                     clearIdentityLocked(cachedActivityCheckedAt);
                 }
@@ -156,7 +161,14 @@ public final class ShizukuGameContextUserService extends Binder {
             }
             if (!isCurrentTarget(packageName, pid)) {
                 resetForTarget(packageName, pid);
-                if (!RetroArchGameContext.supportsPackage(packageName)) {
+                if (GameNativeGameContext.supportsPackage(packageName)) {
+                    long processStartedAt = processStartEpochMillis(pid);
+                    if (processStartedAt > 0L) {
+                        setMinimumAcceptedAt(packageName, pid, processStartedAt);
+                        bootstrap(packageName, pid);
+                    }
+                    refreshGameNativeRuntimeState(packageName, pid);
+                } else if (!RetroArchGameContext.supportsPackage(packageName)) {
                     bootstrap(packageName, pid);
                 }
             }
@@ -275,6 +287,9 @@ public final class ShizukuGameContextUserService extends Binder {
         while (!destroyed && isCurrentTarget(packageName, pid) && process.isAlive()) {
             pause(STREAM_PID_CHECK_INTERVAL_MS);
             if (Thread.currentThread().isInterrupted()) return;
+            if (GameNativeGameContext.supportsPackage(packageName)) {
+                refreshGameNativeRuntimeState(packageName, pid);
+            }
             if (!streamProcessIsCurrent(packageName, pid)) {
                 process.destroy();
                 return;
@@ -393,6 +408,23 @@ public final class ShizukuGameContextUserService extends Binder {
     private void handleLogLine(String packageName, int pid, String line) {
         long timestamp = AetherSx2GameContext.extractObservedAt(line);
         if (timestamp <= 0L) return;
+        if (GameNativeGameContext.supportsPackage(packageName)) {
+            String launchId = GameNativeGameContext.extractLaunchId(line);
+            if (launchId.length() > 0) {
+                acceptGameNativeLaunch(packageName, pid, launchId, timestamp);
+                return;
+            }
+            String exitId = GameNativeGameContext.extractExitId(line);
+            if (exitId.length() > 0) {
+                acceptGameNativeExit(packageName, pid, exitId, timestamp);
+                return;
+            }
+            String label = GameNativeGameContext.extractGameLabel(line);
+            if (label.length() > 0) {
+                acceptGameNativeLabel(packageName, pid, label, timestamp);
+            }
+            return;
+        }
         if (EdenGameContext.supportsPackage(packageName)) {
             String label = EdenGameContext.extractTitleLabel(line);
             if (label.length() > 0) rememberEdenLabel(packageName, pid, label, timestamp);
@@ -435,6 +467,40 @@ public final class ShizukuGameContextUserService extends Binder {
         }
     }
 
+    private void acceptGameNativeLaunch(String packageName, int pid,
+            String value, long timestamp) {
+        synchronized (lock) {
+            if (!isCurrentTargetLocked(packageName, pid)
+                    || timestamp < minimumAcceptedAt) return;
+            activeValue = value;
+            activeLabel = "";
+            observedAt = timestamp;
+            gameNativeState = GameNativeGameContext.STATE_ACTIVE;
+        }
+    }
+
+    private void acceptGameNativeExit(String packageName, int pid,
+            String value, long timestamp) {
+        synchronized (lock) {
+            if (!isCurrentTargetLocked(packageName, pid)
+                    || timestamp < minimumAcceptedAt) return;
+            if (activeValue.length() > 0 && !activeValue.equals(value)) return;
+            clearIdentityLocked(timestamp);
+            gameNativeState = GameNativeGameContext.STATE_NONE;
+        }
+    }
+
+    private void acceptGameNativeLabel(String packageName, int pid,
+            String label, long timestamp) {
+        synchronized (lock) {
+            if (!isCurrentTargetLocked(packageName, pid)
+                    || gameNativeState != GameNativeGameContext.STATE_ACTIVE
+                    || timestamp < observedAt
+                    || timestamp - observedAt > EDEN_LABEL_PAIR_WINDOW_MS) return;
+            activeLabel = label;
+        }
+    }
+
     private void resetForTarget(String packageName, int pid) {
         stopLogcat();
         synchronized (lock) {
@@ -449,6 +515,99 @@ public final class ShizukuGameContextUserService extends Binder {
             minimumAcceptedAt = 0L;
             pendingEdenLabel = "";
             pendingEdenLabelAt = 0L;
+            gameNativeState = GameNativeGameContext.STATE_UNKNOWN;
+        }
+    }
+
+    private void setMinimumAcceptedAt(String packageName, int pid, long cutoff) {
+        synchronized (lock) {
+            if (!isCurrentTargetLocked(packageName, pid)) return;
+            minimumAcceptedAt = Math.max(minimumAcceptedAt, cutoff);
+        }
+    }
+
+    private void refreshGameNativeRuntimeState(String packageName, int pid) {
+        SameUidProcessScan scan = scanSameUidRuntimeProcesses(packageName, pid);
+        if (!scan.available || scan.runtimePresent) return;
+        long now = System.currentTimeMillis();
+        synchronized (lock) {
+            if (!isCurrentTargetLocked(packageName, pid)) return;
+            if (gameNativeState == GameNativeGameContext.STATE_ACTIVE
+                    && observedAt > 0L
+                    && now - observedAt < GAME_NATIVE_RUNTIME_EXIT_GRACE_MS) {
+                return;
+            }
+            clearIdentityLocked(now);
+            gameNativeState = GameNativeGameContext.STATE_NONE;
+        }
+    }
+
+    private static SameUidProcessScan scanSameUidRuntimeProcesses(
+            String packageName, int pid) {
+        int uid = readRealUid(new File("/proc/" + pid + "/status"));
+        File[] processes = new File("/proc").listFiles();
+        if (uid < 0 || processes == null) return SameUidProcessScan.UNAVAILABLE;
+        for (File process : processes) {
+            String name = process.getName();
+            if (!isNumeric(name)) continue;
+            int candidatePid;
+            try {
+                candidatePid = Integer.parseInt(name);
+            } catch (Throwable ignored) {
+                continue;
+            }
+            if (candidatePid == pid
+                    || readRealUid(new File(process, "status")) != uid) continue;
+            String command = readProcessCommand(new File(process, "cmdline"));
+            if (!GameNativeGameContext.isBaselineSameUidCommand(packageName, command)) {
+                return SameUidProcessScan.RUNTIME_PRESENT;
+            }
+        }
+        return SameUidProcessScan.NONE;
+    }
+
+    private static int readRealUid(File statusFile) {
+        String status = readSmallUtf8(statusFile, 16 * 1024);
+        for (String line : status.split("\\n")) {
+            if (!line.startsWith("Uid:")) continue;
+            String[] fields = line.substring(4).trim().split("\\s+");
+            if (fields.length == 0) return -1;
+            try {
+                return Integer.parseInt(fields[0]);
+            } catch (Throwable ignored) {
+                return -1;
+            }
+        }
+        return -1;
+    }
+
+    private static String readProcessCommand(File cmdlineFile) {
+        String raw = readSmallUtf8(cmdlineFile, 4096);
+        return raw.replace('\0', ' ').trim();
+    }
+
+    private static boolean isNumeric(String value) {
+        if (value == null || value.length() == 0) return false;
+        for (int i = 0; i < value.length(); i++) {
+            if (!Character.isDigit(value.charAt(i))) return false;
+        }
+        return true;
+    }
+
+    private static final class SameUidProcessScan {
+        static final SameUidProcessScan UNAVAILABLE =
+                new SameUidProcessScan(false, false);
+        static final SameUidProcessScan NONE =
+                new SameUidProcessScan(true, false);
+        static final SameUidProcessScan RUNTIME_PRESENT =
+                new SameUidProcessScan(true, true);
+
+        final boolean available;
+        final boolean runtimePresent;
+
+        SameUidProcessScan(boolean available, boolean runtimePresent) {
+            this.available = available;
+            this.runtimePresent = runtimePresent;
         }
     }
 
@@ -492,16 +651,26 @@ public final class ShizukuGameContextUserService extends Binder {
     }
 
     private static String[] logcatDumpCommand(String packageName, int pid) {
+        if (GameNativeGameContext.supportsPackage(packageName)) {
+            return new String[] {"logcat", "-d", "-v", "epoch", "--pid=" + pid,
+                    "app.gamenative:I", "Exit:I", "XServerScreen:I", "*:S"};
+        }
         return new String[] {"logcat", "-d", "-v", "epoch", "--pid=" + pid,
                 detectorLogTag(packageName) + ":I", "*:S"};
     }
 
     private static String[] logcatStreamCommand(String packageName, int pid, String start) {
+        if (GameNativeGameContext.supportsPackage(packageName)) {
+            return new String[] {"logcat", "-v", "epoch", "-T", start,
+                    "--pid=" + pid, "app.gamenative:I", "Exit:I",
+                    "XServerScreen:I", "*:S"};
+        }
         return new String[] {"logcat", "-v", "epoch", "-T", start, "--pid=" + pid,
                 detectorLogTag(packageName) + ":I", "*:S"};
     }
 
     static String detectorLogTag(String packageName) {
+        if (GameNativeGameContext.supportsPackage(packageName)) return "app.gamenative";
         if (EdenGameContext.supportsPackage(packageName)) return "YuzuNative";
         if (PpssppGameContext.supportsPackage(packageName)) return "PPSSPP";
         if (RetroArchGameContext.supportsPackage(packageName)) return "RetroArch";
@@ -557,6 +726,7 @@ public final class ShizukuGameContextUserService extends Binder {
     static boolean shouldClearForPackage(String packageName, int activityState,
             long activityCheckedAt, long identityObservedAt) {
         return !isPositiveLaunchPackage(packageName)
+                && !GameNativeGameContext.supportsPackage(packageName)
                 && shouldClearForActivity(activityState,
                 activityCheckedAt, identityObservedAt);
     }
@@ -595,6 +765,9 @@ public final class ShizukuGameContextUserService extends Binder {
             return AetherSx2GameContext.ACTIVITY_UNKNOWN;
         }
         if (RetroArchGameContext.supportsPackage(packageName)) {
+            return AetherSx2GameContext.ACTIVITY_UNKNOWN;
+        }
+        if (GameNativeGameContext.supportsPackage(packageName)) {
             return AetherSx2GameContext.ACTIVITY_UNKNOWN;
         }
         return EdenGameContext.classifyResumedActivityLine(packageName, line);
