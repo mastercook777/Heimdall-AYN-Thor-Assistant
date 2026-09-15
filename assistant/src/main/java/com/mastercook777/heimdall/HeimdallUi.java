@@ -19,8 +19,8 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 
 final class HeimdallUi {
-    static final String THEME_DARK = "dark";
-    static final String THEME_PEARL = "pearl";
+    static final String THEME_HEIMDALL_BLUE = ThemeRegistry.ID_HEIMDALL_BLUE;
+    static final String THEME_FREYA_WHITE = ThemeRegistry.ID_FREYA_WHITE;
     private static final String THEME_PREFS = "heimdall_ui";
     private static final String KEY_THEME = "theme";
 
@@ -146,101 +146,129 @@ final class HeimdallUi {
     static final int MACRO_UTILITY = 2;
 
     static String theme(Context context) {
-        return context.getSharedPreferences(THEME_PREFS, Context.MODE_PRIVATE)
-                .getString(KEY_THEME, THEME_DARK);
+        return resolvedTheme(context).id();
     }
 
     static void setTheme(Context context, String theme) {
-        String value = THEME_PEARL.equals(theme) ? THEME_PEARL : THEME_DARK;
+        String value = ThemeRegistry.canonicalId(theme);
         context.getSharedPreferences(THEME_PREFS, Context.MODE_PRIVATE)
                 .edit().putString(KEY_THEME, value).apply();
     }
 
-    static boolean isPearl(Context context) {
-        return THEME_PEARL.equals(theme(context));
+    static ResolvedTheme resolvedTheme(Context context) {
+        String stored = context.getSharedPreferences(THEME_PREFS, Context.MODE_PRIVATE)
+                .getString(KEY_THEME, ThemeRegistry.LEGACY_DARK);
+        return ThemeRegistry.resolve(stored);
+    }
+
+    static ThemeDefinition themeDefinition(Context context) {
+        return resolvedTheme(context).definition;
+    }
+
+    static ThemeMaterialSpec materialSpec(Context context) {
+        return resolvedTheme(context).materials;
+    }
+
+    static ThemeComponentColors componentColors(Context context) {
+        return resolvedTheme(context).componentColors;
+    }
+
+    static int semanticColor(Context context, int semantic) {
+        return resolvedTheme(context).semanticStates.appearance(semantic).foreground;
+    }
+
+    static boolean isFreyaFamily(Context context) {
+        return resolvedTheme(context).family() == ThemeFamily.FREYA;
+    }
+
+    static int mediaFrameContentInsetDp(Context context) {
+        return materialSpec(context).mediaFrameContentInsetDp;
+    }
+
+    static float mediaFrameInnerRadiusDp(Context context, float outerRadiusDp) {
+        int insetDp = mediaFrameContentInsetDp(context);
+        return materialSpec(context).aspectInvariantPlayLighting
+                ? concentricInnerRadiusDp(outerRadiusDp, insetDp)
+                : Math.max(0f, outerRadiusDp - insetDp);
     }
 
     static int background(Context context) {
-        if (DebugPerformanceDiagnostics.isFlatUi()) {
-            return isPearl(context) ? 0xFFE5E7E8 : 0xFF0E141B;
-        }
-        return isPearl(context) ? 0xFFE3E6E7 : COLOR_BG;
+        ThemePalette palette = resolvedTheme(context).palette;
+        return DebugPerformanceDiagnostics.isFlatUi()
+                ? palette.flatPageBackground : palette.pageBackground;
     }
 
     static int surface(Context context) {
-        return isPearl(context) ? 0xFFEEF0EF : COLOR_SURFACE;
+        return resolvedTheme(context).palette.surfaceBase;
     }
 
     static int surfaceRaised(Context context) {
-        return isPearl(context) ? 0xFFF6F5F3 : COLOR_SURFACE_RAISED;
+        return resolvedTheme(context).palette.surfaceRaised;
     }
 
     static int surfaceInset(Context context) {
-        return isPearl(context) ? 0xFFD8DCDD : COLOR_SURFACE_INSET;
+        return resolvedTheme(context).palette.surfaceInset;
     }
 
     static int textColor(Context context) {
-        return isPearl(context) ? 0xFF263547 : COLOR_TEXT;
+        return resolvedTheme(context).palette.textPrimary;
     }
 
     static int mutedTextColor(Context context) {
-        return isPearl(context) ? 0xFF596A7D : COLOR_TEXT_MUTED;
+        return resolvedTheme(context).palette.textSecondary;
     }
 
     static int accent(Context context) {
-        return isPearl(context) ? 0xFFF08A2A : COLOR_ACCENT;
+        return resolvedTheme(context).palette.accent;
     }
 
     static int accentStrong(Context context) {
-        return isPearl(context) ? 0xFFFFA044 : COLOR_ACCENT_STRONG;
+        return resolvedTheme(context).palette.accentStrong;
+    }
+
+    static int activeInput(Context context) {
+        return resolvedTheme(context).palette.activeInput;
     }
 
     static int border(Context context) {
-        return isPearl(context) ? 0xFF9EABB8 : COLOR_BORDER;
+        return resolvedTheme(context).palette.edgeNeutral;
     }
 
     static int quickActionDivider(Context context) {
-        return isPearl(context) ? 0x66929EAA : COLOR_QUICK_ACTION_DIVIDER;
+        return resolvedTheme(context).palette.quickActionDivider;
     }
 
     static int volumeTrack(Context context) {
-        return isPearl(context) ? 0xFF8794A2 : COLOR_VOLUME_TRACK;
+        return resolvedTheme(context).palette.volumeTrack;
     }
 
     static int volumeActive(Context context) {
-        return isPearl(context) ? 0xFFF08A2A : COLOR_VOLUME_ACTIVE;
+        return resolvedTheme(context).palette.volumeActive;
     }
 
     static int inputEdge(Context context, boolean active) {
-        if (isPearl(context)) {
-            return active ? 0xFFF08A2A : 0xCC9AA7B4;
-        }
-        return active ? COLOR_INPUT_EDGE_ACTIVE : COLOR_INPUT_EDGE_IDLE;
+        ThemePalette palette = resolvedTheme(context).palette;
+        return active ? palette.inputEdgeActive : palette.inputEdgeIdle;
     }
 
     static int inputGlow(Context context, boolean active) {
-        if (isPearl(context)) {
-            return active ? 0x66F08A2A : 0x339AA7B4;
-        }
-        return active ? COLOR_INPUT_GLOW_ACTIVE : COLOR_INPUT_GLOW_IDLE;
+        ThemePalette palette = resolvedTheme(context).palette;
+        return active ? palette.inputGlowActive : palette.inputGlowIdle;
     }
 
     static int inputTexture(Context context) {
-        return isPearl(context) ? 0x24FFFFFF : COLOR_INPUT_TEXTURE;
+        return resolvedTheme(context).palette.inputTexture;
     }
 
     static int inputTextureAlt(Context context) {
-        return isPearl(context) ? 0x18818E9B : COLOR_INPUT_TEXTURE_ALT;
+        return resolvedTheme(context).palette.inputTextureAlt;
     }
 
     static int inputCenter(Context context) {
-        return isPearl(context) ? 0xFFF08A2A : COLOR_INPUT_CENTER;
+        return resolvedTheme(context).palette.inputCenter;
     }
 
     static int resolveColor(Context context, int darkColor) {
-        if (!isPearl(context)) {
-            return darkColor;
-        }
         if (darkColor == COLOR_BG) return background(context);
         if (darkColor == COLOR_SURFACE) return surface(context);
         if (darkColor == COLOR_SURFACE_RAISED || darkColor == COLOR_SURFACE_SOFT) return surfaceRaised(context);
@@ -345,7 +373,7 @@ final class HeimdallUi {
     }
 
     static void applyModulePanel(Context context, LinearLayout view) {
-        if (isPearl(context)) {
+        if (isFreyaFamily(context)) {
             view.setBackground(cncRaised(context, RADIUS_MODULE, false, false));
             view.setPadding(dp(context, SPACE_1), dp(context, SPACE_1), dp(context, SPACE_1), dp(context, SPACE_1));
             view.setElevation(0f);
@@ -360,17 +388,17 @@ final class HeimdallUi {
     static void applyHeaderPanel(Context context, LinearLayout view) {
         applySystemChromePanel(context, view);
         view.setPadding(dp(context, SPACE_3), 0, dp(context, SPACE_3), 0);
-        view.setElevation(isPearl(context) ? 0f : dp(context, 2));
+        view.setElevation(isFreyaFamily(context) ? 0f : dp(context, 2));
     }
 
     static void applyBottomDockPanel(Context context, LinearLayout view) {
         applySystemChromePanel(context, view);
         view.setPadding(dp(context, SPACE_1), dp(context, 2), dp(context, SPACE_1), dp(context, 2));
-        view.setElevation(isPearl(context) ? 0f : dp(context, 2));
+        view.setElevation(isFreyaFamily(context) ? 0f : dp(context, 2));
     }
 
     private static void applySystemChromePanel(Context context, LinearLayout view) {
-        if (isPearl(context)) {
+        if (isFreyaFamily(context)) {
             view.setBackground(cncFlush(context, RADIUS_PANEL));
             return;
         }
@@ -382,7 +410,7 @@ final class HeimdallUi {
         view.setTextColor(mutedTextColor(context));
         view.setIncludeFontPadding(false);
         view.setLineSpacing(dp(context, 2), 1f);
-        view.setBackground(isPearl(context)
+        view.setBackground(isFreyaFamily(context)
                 ? cncInset(context, RADIUS_MODULE)
                 : glass(context, 0x84101824, 0xA0080C12,
                         0x445F7C9A, 0x22344150, RADIUS_MODULE, 1));
@@ -390,7 +418,7 @@ final class HeimdallUi {
     }
 
     static void applyQuickActionPanel(Context context, LinearLayout view) {
-        view.setBackground(isPearl(context)
+        view.setBackground(isFreyaFamily(context)
                 ? cncKeyboardShell(context, RADIUS_MODULE)
                 : glass(context,
                         COLOR_QUICK_ACTION_FILL_TOP, COLOR_QUICK_ACTION_FILL_BOTTOM,
@@ -410,7 +438,7 @@ final class HeimdallUi {
         button.setTextColor(textColor(context));
         button.setIncludeFontPadding(false);
         applySecondaryButton(context, button);
-        button.setElevation(isPearl(context) ? 0f : dp(context, 1));
+        button.setElevation(isFreyaFamily(context) ? 0f : dp(context, 1));
         button.setOnClickListener(v -> action.run());
         button.setMinHeight(0);
         button.setMinWidth(0);
@@ -421,21 +449,21 @@ final class HeimdallUi {
     static void applySecondaryButton(Context context, Button button) {
         button.setTextColor(textColor(context));
         button.setIncludeFontPadding(false);
-        button.setBackground(isPearl(context)
-                ? pearlMenuControl(context, RADIUS_BUTTON, false, false)
+        button.setBackground(isFreyaFamily(context)
+                ? cncMenuControl(context, RADIUS_BUTTON, false, false)
                 : glass(context, 0xB20F1622, 0xC9090E16,
                         0x665F7C9A, 0x33344150, RADIUS_BUTTON, 1));
-        button.setElevation(isPearl(context) ? 0f : dp(context, 1));
+        button.setElevation(isFreyaFamily(context) ? 0f : dp(context, 1));
     }
 
     static void applySelectedButton(Context context, Button button) {
         button.setTextColor(textColor(context));
         button.setIncludeFontPadding(false);
-        button.setBackground(isPearl(context)
-                ? pearlMenuControl(context, RADIUS_BUTTON, true, false)
+        button.setBackground(isFreyaFamily(context)
+                ? cncMenuControl(context, RADIUS_BUTTON, true, false)
                 : glass(context, 0xC3111A28, 0xD7080D16,
                         COLOR_STATE_CHOICE_TOP, COLOR_STATE_CHOICE_BOTTOM, RADIUS_BUTTON, STROKE_SELECTED));
-        button.setElevation(isPearl(context) ? 0f : dp(context, 1));
+        button.setElevation(isFreyaFamily(context) ? 0f : dp(context, 1));
     }
 
     static void applySectionButton(Context context, Button button, boolean selected) {
@@ -447,8 +475,8 @@ final class HeimdallUi {
         }
         button.setTextColor(textColor(context));
         button.setIncludeFontPadding(false);
-        button.setBackground(isPearl(context)
-                ? pearlMenuControl(context, RADIUS_BUTTON, true, false)
+        button.setBackground(isFreyaFamily(context)
+                ? cncMenuControl(context, RADIUS_BUTTON, true, false)
                 : glass(context, 0xB20F1924, 0xC9080D14,
                         COLOR_STATE_SECTION_TOP, COLOR_STATE_SECTION_BOTTOM, RADIUS_BUTTON, STROKE_SELECTED));
         button.setElevation(0f);
@@ -457,11 +485,11 @@ final class HeimdallUi {
     static void applyPrimaryActionButton(Context context, Button button) {
         button.setTextColor(textColor(context));
         button.setIncludeFontPadding(false);
-        button.setBackground(isPearl(context)
-                ? pearlMenuControl(context, RADIUS_BUTTON, true, false)
+        button.setBackground(isFreyaFamily(context)
+                ? cncMenuControl(context, RADIUS_BUTTON, true, false)
                 : glass(context, 0xC4142740, 0xD709111D,
                         COLOR_STATE_PRIMARY_TOP, COLOR_STATE_PRIMARY_BOTTOM, RADIUS_BUTTON, STROKE_SELECTED));
-        button.setElevation(isPearl(context) ? 0f : dp(context, 1));
+        button.setElevation(isFreyaFamily(context) ? 0f : dp(context, 1));
     }
 
     static void applyChoiceButton(Context context, Button button, boolean selected) {
@@ -489,7 +517,7 @@ final class HeimdallUi {
         button.setTextSize(primary || focused ? TYPE_MODULE_TITLE + 1 : TYPE_MODULE_TITLE);
         button.setGravity(Gravity.CENTER);
         button.setIncludeFontPadding(false);
-        if (isPearl(context)) {
+        if (isFreyaFamily(context)) {
             button.setBackground(cncMacroControl(context, RADIUS_CARD,
                     focused || primary, utility));
         } else {
@@ -501,7 +529,7 @@ final class HeimdallUi {
                     RADIUS_CARD,
                     focused || primary ? STROKE_SELECTED : STROKE_HAIRLINE));
         }
-        button.setElevation(isPearl(context) ? 0f : dp(context, focused ? 2 : (primary ? 1 : 0)));
+        button.setElevation(isFreyaFamily(context) ? 0f : dp(context, focused ? 2 : (primary ? 1 : 0)));
         button.setPadding(dp(context, SPACE_2), dp(context, SPACE_1), dp(context, SPACE_2), dp(context, SPACE_1));
     }
 
@@ -513,14 +541,14 @@ final class HeimdallUi {
             return;
         }
         button.setTextColor(textColor(context));
-        if (isPearl(context)) {
-            button.setBackground(pearlMenuControl(context, RADIUS_BUTTON,
+        if (isFreyaFamily(context)) {
+            button.setBackground(cncMenuControl(context, RADIUS_BUTTON,
                     true, priority == MACRO_UTILITY));
         } else {
             button.setBackground(glass(context, 0xB20F1622, 0xC9090E16,
                     macroBorderTop(priority), macroBorderBottom(priority), RADIUS_BUTTON, STROKE_SELECTED));
         }
-        button.setElevation(isPearl(context) ? 0f : dp(context, 1));
+        button.setElevation(isFreyaFamily(context) ? 0f : dp(context, 1));
     }
 
     private static int macroBorderTop(int priority) {
@@ -544,54 +572,25 @@ final class HeimdallUi {
     }
 
     static void applySemanticPanel(Context context, LinearLayout view, int semantic) {
-        if (isPearl(context)) {
-            int fill = 0x20FFFFFF;
-            if (semantic == SEMANTIC_SUCCESS) {
-                fill = 0x2459A979;
-            } else if (semantic == SEMANTIC_WARNING) {
-                fill = 0x26E77F1F;
-            } else if (semantic == SEMANTIC_ERROR) {
-                fill = 0x24C65C62;
-            } else if (semantic == SEMANTIC_RECORDING) {
-                fill = 0x2CE0525C;
-            }
-            view.setBackground(rounded(context, fill, 0, RADIUS_CARD, 0));
+        ResolvedTheme theme = resolvedTheme(context);
+        SemanticStateColors.Appearance appearance =
+                theme.semanticStates.appearance(semantic);
+        if (theme.family() == ThemeFamily.FREYA) {
+            view.setBackground(rounded(context, appearance.containerTop,
+                    0, RADIUS_CARD, 0));
             return;
         }
-        int fillTop = 0xB20F1622;
-        int fillBottom = 0xC9090E16;
-        int edgeTop = 0x665F7C9A;
-        int edgeBottom = 0x33344150;
-        if (semantic == SEMANTIC_SUCCESS) {
-            fillTop = 0xA9121816;
-            fillBottom = 0xC9090E0C;
-            edgeTop = 0x885FD18A;
-            edgeBottom = 0x33406A50;
-        } else if (semantic == SEMANTIC_WARNING) {
-            fillTop = 0xA9161713;
-            fillBottom = 0xC90B0C0D;
-            edgeTop = 0x88D8A13A;
-            edgeBottom = 0x335F4822;
-        } else if (semantic == SEMANTIC_ERROR) {
-            fillTop = 0x9A241117;
-            fillBottom = 0xB00D080A;
-            edgeTop = 0x99FF6B6B;
-            edgeBottom = 0x335F2A32;
-        } else if (semantic == SEMANTIC_RECORDING) {
-            fillTop = 0xB5281017;
-            fillBottom = 0xCE10090C;
-            edgeTop = 0xBBFF6B7A;
-            edgeBottom = 0x555A242D;
-        }
-        view.setBackground(glass(context, fillTop, fillBottom,
-                edgeTop, edgeBottom, RADIUS_CARD, STROKE_HAIRLINE));
+        view.setBackground(glass(context,
+                appearance.containerTop, appearance.containerBottom,
+                appearance.edgeTop, appearance.edgeBottom,
+                RADIUS_CARD, STROKE_HAIRLINE));
     }
 
     static Drawable surfacePanel(Context context, int radiusDp) {
         if (DebugPerformanceDiagnostics.isFlatUi()) {
             return flatSurface(context, radiusDp, false);
         }
-        return isPearl(context)
+        return isFreyaFamily(context)
                 ? cncRaised(context, radiusDp, false, false)
                 : glass(context, 0xB20F1622, 0xC9090E16,
                         0x665F7C9A, 0x33344150, radiusDp, STROKE_HAIRLINE);
@@ -601,7 +600,7 @@ final class HeimdallUi {
         if (DebugPerformanceDiagnostics.isFlatUi()) {
             return flatSurface(context, radiusDp, false);
         }
-        return isPearl(context)
+        return isFreyaFamily(context)
                 ? cncInset(context, radiusDp)
                 : glass(context, 0x76101824, 0x96070A10,
                         0x445F7C9A, 0x22344150, radiusDp, STROKE_HAIRLINE);
@@ -611,10 +610,42 @@ final class HeimdallUi {
         if (DebugPerformanceDiagnostics.isFlatUi()) {
             return flatSurface(context, radiusDp, false);
         }
-        return isPearl(context)
+        return isFreyaFamily(context)
                 ? new CncSurfaceDrawable(context, radiusDp,
                         CncSurfaceDrawable.FIELD, false, false)
                 : insetPanel(context, radiusDp);
+    }
+
+    static Drawable fullscreenToolbarPanel(Context context, int radiusDp) {
+        return isFreyaFamily(context)
+                ? cncFlush(context, radiusDp)
+                : glass(context, 0xDD111824, 0xEE080C12,
+                        COLOR_SYSTEM_BORDER_TOP, COLOR_SYSTEM_BORDER_BOTTOM,
+                        radiusDp, STROKE_SELECTED);
+    }
+
+    static Drawable fullscreenInteractiveToolbarPanel(Context context, int radiusDp) {
+        return isFreyaFamily(context)
+                ? glass(context, 0xDDF6F5F3, 0xEEEEF0EF,
+                        0xAAFFFFFF, 0x669EABB8,
+                        radiusDp, STROKE_SELECTED)
+                : fullscreenToolbarPanel(context, radiusDp);
+    }
+
+    static Drawable fullscreenToolbarControl(Context context, int radiusDp) {
+        return isFreyaFamily(context)
+                ? cncMenuControl(context, radiusDp, false, false)
+                : glass(context, 0xB20F1622, 0xD0090E16,
+                        0x665F7C9A, 0x33344150,
+                        radiusDp, STROKE_HAIRLINE);
+    }
+
+    static Drawable fullscreenRevealControl(Context context, int radiusDp) {
+        return isFreyaFamily(context)
+                ? cncMenuControl(context, radiusDp, false, false)
+                : glass(context, 0xA6111824, 0xC9080C12,
+                        COLOR_SYSTEM_BORDER_TOP, COLOR_SYSTEM_BORDER_BOTTOM,
+                        radiusDp, STROKE_HAIRLINE);
     }
 
     static Drawable cncRaised(Context context, int radiusDp, boolean accent, boolean muted) {
@@ -631,16 +662,18 @@ final class HeimdallUi {
         return new CncSurfaceDrawable(context, radiusDp, CncSurfaceDrawable.CONTROL, accent, muted);
     }
 
-    static Drawable pearlMenuControl(Context context, int radiusDp, boolean selected, boolean muted) {
+    static Drawable cncMenuControl(Context context, int radiusDp, boolean selected, boolean muted) {
         if (DebugPerformanceDiagnostics.isFlatUi()) {
             return flatSurface(context, radiusDp, selected);
         }
+        ThemePalette palette = resolvedTheme(context).palette;
         int fill = muted ? 0x12AEB7C0 : (selected ? 0x36FFFFFF : 0x20FFFFFF);
-        int stroke = selected ? 0xB8E77F1F : (muted ? 0x307B8792 : 0x527B8792);
+        int stroke = selected ? withAlpha(palette.accentEdge, 0xB8)
+                : (muted ? 0x307B8792 : 0x527B8792);
         return rounded(context, fill, stroke, radiusDp, 1);
     }
 
-    static Drawable pearlMenuPanel(Context context, int radiusDp) {
+    static Drawable cncMenuPanel(Context context, int radiusDp) {
         if (DebugPerformanceDiagnostics.isFlatUi()) {
             return flatSurface(context, radiusDp, false);
         }
@@ -706,9 +739,9 @@ final class HeimdallUi {
 
     private static Drawable flatSurface(Context context, int radiusDp, boolean selected,
             boolean circular) {
-        int fill = isPearl(context) ? 0xFFE4E6E7 : 0xFF18212B;
-        int stroke = selected ? accent(context)
-                : (isPearl(context) ? 0xFF9CA5AD : 0xFF354353);
+        ThemeComponentColors colors = componentColors(context);
+        int fill = colors.flatSurfaceFill;
+        int stroke = selected ? accent(context) : colors.flatSurfaceEdge;
         if (circular) {
             GradientDrawable drawable = new GradientDrawable();
             drawable.setShape(GradientDrawable.OVAL);
@@ -741,6 +774,8 @@ final class HeimdallUi {
         private final boolean muted;
         private final boolean circular;
         private final boolean aspectInvariantLighting;
+        private final int accentColor;
+        private final int accentEdgeColor;
         private int alpha = 255;
 
         CncSurfaceDrawable(Context context, int radiusDp, int mode, boolean accent, boolean muted) {
@@ -761,6 +796,9 @@ final class HeimdallUi {
             this.muted = muted;
             this.circular = circular;
             this.aspectInvariantLighting = aspectInvariantLighting;
+            ThemePalette palette = resolvedTheme(context).palette;
+            accentColor = palette.accent;
+            accentEdgeColor = palette.accentEdge;
         }
 
         @Override
@@ -887,7 +925,7 @@ final class HeimdallUi {
                     : (mode == FIELD ? 0.35f : mode == CONTROL ? 0.5f : 0.65f)));
             paint.setShader(null);
             paint.setColor(withDrawableAlpha(accent
-                    ? (mode == CONTROL ? 0x80E77F1F : 0x92E77F1F)
+                    ? withAlpha(accentEdgeColor, mode == CONTROL ? 0x80 : 0x92)
                     : (mode == FIELD ? 0x24747F87
                             : mode == SHALLOW_INSET ? 0x30747F87
                             : mode == CONTROL ? 0x34747F87
@@ -898,7 +936,8 @@ final class HeimdallUi {
                 RectF glow = new RectF(rim);
                 glow.inset(px(0.35f), px(0.35f));
                 paint.setStrokeWidth(px(mode == CONTROL ? 2f : 3f));
-                paint.setColor(withDrawableAlpha(mode == CONTROL ? 0x10F08A2A : 0x18F08A2A));
+                paint.setColor(withDrawableAlpha(withAlpha(
+                        accentColor, mode == CONTROL ? 0x10 : 0x18)));
                 drawShape(canvas, glow, Math.max(0f, rimRadius - px(0.35f)), paint);
             }
         }
@@ -967,26 +1006,30 @@ final class HeimdallUi {
             button.setElevation(0f);
             return;
         }
-        button.setBackground(glass(context, isPearl(context) ? 0x00F8FAFC : 0x00111824,
-                isPearl(context) ? 0x00E1E7ED : 0x00080C12,
+        ThemeComponentColors colors = componentColors(context);
+        button.setBackground(glass(context, colors.navTransparentTop,
+                colors.navTransparentBottom,
                 0x00000000, 0x00000000, RADIUS_BUTTON, 0));
         button.setElevation(0f);
     }
 
     private static Drawable navSelectedDrawable(Context context) {
-        boolean pearl = isPearl(context);
+        ThemePalette palette = resolvedTheme(context).palette;
+        ThemeComponentColors colors = componentColors(context);
         GradientDrawable base = glassFill(context,
-                pearl ? 0x00F8FAFC : 0x00111824,
-                pearl ? 0x00E1E7ED : 0x00080C12, RADIUS_BUTTON);
+                colors.navTransparentTop, colors.navTransparentBottom, RADIUS_BUTTON);
         GradientDrawable indicator = new GradientDrawable(
                 GradientDrawable.Orientation.LEFT_RIGHT,
-                pearl
-                        ? new int[]{0x00F08A2A, 0xFFF08A2A, 0x00FFA044}
-                        : new int[]{0x004EA1FF, 0xFF4EA1FF, 0x008B5CFF});
+                new int[]{withAlpha(palette.accent, 0), palette.accent,
+                        withAlpha(palette.accentGradientEnd, 0)});
         indicator.setShape(GradientDrawable.RECTANGLE);
         indicator.setCornerRadius(dp(context, 2));
         LayerDrawable layered = new LayerDrawable(new Drawable[]{base, indicator});
         layered.setLayerInset(1, dp(context, 26), dp(context, 43), dp(context, 26), dp(context, 1));
         return layered;
+    }
+
+    private static int withAlpha(int color, int alpha) {
+        return (color & 0x00FFFFFF) | ((alpha & 0xFF) << 24);
     }
 }

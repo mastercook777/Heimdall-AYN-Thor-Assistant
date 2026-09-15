@@ -46,7 +46,7 @@ final class CanvasCompositionEditor extends LinearLayout {
         boolean circular = this.initialConfig.isCircular();
         setOrientation(VERTICAL);
         setPadding(dp(12), dp(10), dp(12), dp(10));
-        setBackground(HeimdallUi.isPearl(context)
+        setBackground(HeimdallUi.isFreyaFamily(context)
                 ? HeimdallUi.cncFlush(context, HeimdallUi.RADIUS_PANEL)
                 : HeimdallUi.glass(context, 0xFF0B111B, 0xFF070A10,
                         0x886A829C, 0x44344150, HeimdallUi.RADIUS_PANEL, 2));
@@ -69,7 +69,7 @@ final class CanvasCompositionEditor extends LinearLayout {
 
         ReferenceFrame referenceFrame = new ReferenceFrame(context,
                 targetFrameWidth, targetFrameHeight, circular);
-        referenceFrame.setBackground(HeimdallUi.isPearl(context)
+        referenceFrame.setBackground(HeimdallUi.isFreyaFamily(context)
                 ? HeimdallUi.cncInputFrame(context, HeimdallUi.RADIUS_MODULE, circular)
                 : circular
                         ? HeimdallUi.glassCircle(context, 0xB20C131D, 0xD2070B11,
@@ -91,15 +91,12 @@ final class CanvasCompositionEditor extends LinearLayout {
                     outline.setOval(0, 0, view.getWidth(), view.getHeight());
                     return;
                 }
-                int insetDp = HeimdallUi.isPearl(getContext()) ? 6 : 1;
-                float radius = HeimdallUi.isPearl(getContext())
-                        ? HeimdallUi.concentricInnerRadiusDp(
-                                HeimdallUi.RADIUS_MODULE, insetDp)
-                        : Math.max(0f, HeimdallUi.RADIUS_MODULE - insetDp);
+                float radius = HeimdallUi.mediaFrameInnerRadiusDp(
+                        getContext(), HeimdallUi.RADIUS_MODULE);
                 outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), dp(radius));
             }
         });
-        int viewportInset = dp(HeimdallUi.isPearl(context) ? 6 : 1);
+        int viewportInset = dp(HeimdallUi.mediaFrameContentInsetDp(context));
         FrameLayout.LayoutParams viewportParams = new FrameLayout.LayoutParams(-1, -1);
         viewportParams.setMargins(viewportInset, viewportInset, viewportInset, viewportInset);
         referenceFrame.addView(viewport, viewportParams);

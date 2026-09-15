@@ -70,7 +70,7 @@ final class CanvasWidgetView extends FrameLayout {
         setFocusable(true);
         longPressTouchSlop = ViewConfiguration.get(context).getScaledTouchSlop();
         displayFrame = new FrameLayout(context);
-        displayFrame.setBackground(HeimdallUi.isPearl(context)
+        displayFrame.setBackground(HeimdallUi.isFreyaFamily(context)
                 ? HeimdallUi.cncInputFrame(context, HeimdallUi.RADIUS_MODULE, circular)
                 : circular
                         ? HeimdallUi.glassCircle(context, 0xB20C131D, 0xD2070B11,
@@ -90,15 +90,12 @@ final class CanvasWidgetView extends FrameLayout {
                     outline.setOval(0, 0, view.getWidth(), view.getHeight());
                     return;
                 }
-                int insetDp = HeimdallUi.isPearl(getContext()) ? 6 : 1;
-                float radius = HeimdallUi.isPearl(getContext())
-                        ? HeimdallUi.concentricInnerRadiusDp(
-                                HeimdallUi.RADIUS_MODULE, insetDp)
-                        : Math.max(0f, HeimdallUi.RADIUS_MODULE - insetDp);
+                float radius = HeimdallUi.mediaFrameInnerRadiusDp(
+                        getContext(), HeimdallUi.RADIUS_MODULE);
                 outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), dp(radius));
             }
         });
-        int inset = dp(HeimdallUi.isPearl(context) ? 6 : 1);
+        int inset = dp(HeimdallUi.mediaFrameContentInsetDp(context));
         LayoutParams viewportParams = new LayoutParams(-1, -1);
         viewportParams.setMargins(inset, inset, inset, inset);
         displayFrame.addView(viewport, viewportParams);
@@ -418,7 +415,7 @@ final class CanvasWidgetView extends FrameLayout {
     }
 
     private void showPressedEdge() {
-        int color = HeimdallUi.isPearl(getContext()) ? 0xC8F08A2A : 0xAA70B7FF;
+        int color = HeimdallUi.componentColors(getContext()).canvasPressedEdge;
         if (circular) {
             GradientDrawable edge = new GradientDrawable();
             edge.setShape(GradientDrawable.OVAL);

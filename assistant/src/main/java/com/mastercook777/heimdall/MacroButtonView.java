@@ -210,16 +210,15 @@ final class MacroButtonView extends Button {
             macroPressPaint.setStyle(Paint.Style.STROKE);
             RectF outerGlow = new RectF(dp(1), dp(1), width - dp(1), height - dp(1));
             macroPressPaint.setStrokeWidth(dp(3) / 2f);
-            macroPressPaint.setColor(HeimdallUi.isPearl(getContext())
-                    ? 0xC8F08A2A : 0xEE70B7FF);
+            ThemeComponentColors colors = HeimdallUi.componentColors(getContext());
+            macroPressPaint.setColor(colors.macroPressedOuter);
             canvas.drawRoundRect(outerGlow, dp(10), dp(10), macroPressPaint);
 
             float innerInset = dp(5) / 2f;
             RectF innerGlow = new RectF(innerInset, innerInset,
                     width - innerInset, height - innerInset);
             macroPressPaint.setStrokeWidth(dp(9) / 2f);
-            macroPressPaint.setColor(HeimdallUi.isPearl(getContext())
-                    ? 0x38F08A2A : 0x554EA1FF);
+            macroPressPaint.setColor(colors.macroPressedInner);
             canvas.drawRoundRect(innerGlow, dp(17) / 2f, dp(17) / 2f,
                     macroPressPaint);
         }

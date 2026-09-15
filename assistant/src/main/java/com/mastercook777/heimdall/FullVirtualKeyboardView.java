@@ -60,7 +60,7 @@ final class FullVirtualKeyboardView extends LinearLayout {
         setPadding(dp(8), dp(6), dp(8), dp(8));
         setClickable(true);
         setFocusable(false);
-        setBackground(HeimdallUi.isPearl(context)
+        setBackground(HeimdallUi.isFreyaFamily(context)
                 ? HeimdallUi.cncInputFrame(context, 14)
                 : HeimdallUi.glass(context, 0xFC0B111B, 0xFF06090E,
                         0xA66A829C, 0x55344150, 14, 2));
@@ -113,7 +113,7 @@ final class FullVirtualKeyboardView extends LinearLayout {
     void setReady() {
         if (released) return;
         inputAvailable = true;
-        menuView.setTransportState(HeimdallUi.COLOR_SUCCESS,
+        menuView.setTransportState(HeimdallUi.componentColors(getContext()).statusLampSuccess,
                 R.string.full_keyboard_status_ready);
         updateEnabledState();
     }
@@ -121,7 +121,7 @@ final class FullVirtualKeyboardView extends LinearLayout {
     void setUnavailable() {
         inputAvailable = false;
         clearVisualState();
-        menuView.setTransportState(HeimdallUi.COLOR_DANGER,
+        menuView.setTransportState(HeimdallUi.componentColors(getContext()).statusLampError,
                 R.string.full_keyboard_status_unavailable);
         updateEnabledState();
     }
@@ -458,11 +458,11 @@ final class FullVirtualKeyboardView extends LinearLayout {
         button.setGravity(Gravity.CENTER);
         button.setTextColor(HeimdallUi.textColor(getContext()));
         button.setPadding(dp(6), 0, dp(6), 0);
-        button.setBackground(HeimdallUi.isPearl(getContext())
+        button.setBackground(HeimdallUi.isFreyaFamily(getContext())
                 ? HeimdallUi.cncInputFrame(getContext(), 8)
                 : HeimdallUi.glass(getContext(), 0xB5182330, 0xD00B1119,
                         0x776A829C, 0x33344150, 8, 1));
-        if (HeimdallUi.isPearl(getContext())) {
+        if (HeimdallUi.isFreyaFamily(getContext())) {
             button.setElevation(0f);
             button.setStateListAnimator(null);
         }
@@ -470,14 +470,15 @@ final class FullVirtualKeyboardView extends LinearLayout {
     }
 
     private Drawable keyboardBedBackground(Context context) {
-        if (!HeimdallUi.isPearl(context)) {
+        if (!HeimdallUi.isFreyaFamily(context)) {
             return HeimdallUi.insetPanel(context, 12);
         }
+        ThemeKeyboardColors colors = HeimdallUi.componentColors(context).keyboard;
         GradientDrawable bed = new GradientDrawable();
         bed.setShape(GradientDrawable.RECTANGLE);
-        bed.setColor(0xFF454A50);
+        bed.setColor(colors.bedFill);
         bed.setCornerRadius(dp(10));
-        bed.setStroke(dp(1), 0xFF737A81);
+        bed.setStroke(dp(1), colors.bedEdge);
         return bed;
     }
 
@@ -622,21 +623,24 @@ final class FullVirtualKeyboardView extends LinearLayout {
             boolean active = isPressed() || inputDown
                     || (modifier != null && modifier.mode != MOD_OFF);
             boolean locked = modifier != null && modifier.mode == MOD_LOCKED;
+            ThemeComponentColors colors = HeimdallUi.componentColors(getContext());
             Drawable background;
-            if (HeimdallUi.isPearl(getContext())) {
+            if (HeimdallUi.isFreyaFamily(getContext())) {
                 background = HeimdallUi.cncRaised(getContext(), 7, active, false);
             } else {
                 background = HeimdallUi.glass(getContext(),
                         active ? 0xFF24364A : 0xFF2B2D30,
                         active ? 0xFF101A26 : 0xFF17191C,
-                        locked ? 0xFFE7B45B : (active ? 0xFF70B7FF : 0x99717A82),
-                        locked ? 0x99D48A35 : (active ? 0x884EA1FF : 0x55323539),
+                        locked ? colors.keyboard.lockedEdgeTop
+                                : (active ? HeimdallUi.accentStrong(getContext()) : 0x99717A82),
+                        locked ? colors.keyboard.lockedEdgeBottom
+                                : (active ? colors.keyboard.activeEdgeBottom : 0x55323539),
                         7, active ? 2 : 1);
                 background = new InsetDrawable(background, dp(1));
             }
             setBackground(background);
-            setTextColor(locked && HeimdallUi.isPearl(getContext())
-                    ? 0xFFE77F1F : HeimdallUi.textColor(getContext()));
+            setTextColor(locked
+                    ? colors.keyboard.lockedText : HeimdallUi.textColor(getContext()));
         }
     }
 
@@ -673,12 +677,12 @@ final class FullVirtualKeyboardView extends LinearLayout {
         @Override
         protected void onDraw(Canvas canvas) {
             super.onDraw(canvas);
-            boolean pearl = HeimdallUi.isPearl(getContext());
+            ThemeComponentColors colors = HeimdallUi.componentColors(getContext());
             float centerX = getWidth() / 2f;
             float centerY = getHeight() / 2f;
             for (int index = 0; index < 3; index++) {
                 float x = centerX + dp((index - 1) * 12);
-                dotPaint.setColor(pearl ? 0x66717A82 : 0x88414A53);
+                dotPaint.setColor(colors.statusLampOuter);
                 canvas.drawCircle(x, centerY, dp(3), dotPaint);
                 dotPaint.setColor(transportColor);
                 canvas.drawCircle(x, centerY, dp(2), dotPaint);

@@ -31,11 +31,11 @@ public final class ProfileIconView extends View {
 
     public ProfileIconView(Context context) {
         super(context);
-        setBackground(HeimdallUi.isPearl(context)
+        setBackground(HeimdallUi.isFreyaFamily(context)
                 ? HeimdallUi.cncFlush(context, HeimdallUi.RADIUS_CARD)
                 : HeimdallUi.glass(context, 0xB2131B27, 0xD0080D14,
                         0xAA70B7FF, 0x55445A72, HeimdallUi.RADIUS_CARD, 1));
-        textPaint.setColor(HeimdallUi.isPearl(context) ? 0xFF344457 : 0xFFD7EEFF);
+        textPaint.setColor(HeimdallUi.componentColors(context).profileFallbackText);
         textPaint.setTypeface(HeimdallUi.typeface(true));
         textPaint.setTextAlign(Paint.Align.CENTER);
     }
@@ -72,10 +72,10 @@ public final class ProfileIconView extends View {
     protected void onDraw(Canvas canvas) {
         DebugPerformanceDiagnostics.countDraw("Profile icon");
         super.onDraw(canvas);
-        boolean pearl = HeimdallUi.isPearl(getContext());
-        float inset = dp(pearl ? 0 : 2);
+        boolean freya = HeimdallUi.isFreyaFamily(getContext());
+        float inset = dp(freya ? 0 : 2);
         destination.set(inset, inset, getWidth() - inset, getHeight() - inset);
-        float radius = dp(pearl ? HeimdallUi.RADIUS_CARD : 8);
+        float radius = dp(freya ? HeimdallUi.RADIUS_CARD : 8);
         if (bitmap != null && !bitmap.isRecycled()) {
             cropSource(bitmap, destination.width() / Math.max(1f, destination.height()));
             if (DebugPerformanceDiagnostics.isFlatUi()) {
@@ -94,7 +94,7 @@ public final class ProfileIconView extends View {
             float baseline = getHeight() / 2f - (metrics.ascent + metrics.descent) / 2f;
             canvas.drawText(fallback, getWidth() / 2f, baseline, textPaint);
         }
-        if (pearl) {
+        if (freya) {
             float stroke = dp(1f);
             RectF edge = new RectF(stroke / 2f, stroke / 2f,
                     getWidth() - stroke / 2f, getHeight() - stroke / 2f);

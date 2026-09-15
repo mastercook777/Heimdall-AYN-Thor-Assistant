@@ -56,6 +56,8 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
             testVirtualKeyboardTransportContract();
             testKeyboardPadModelContract();
             testQuickActionsModelContract();
+            testThemeRegistryContract();
+            testDebugThemeLabContract();
             testWidgetLayoutIdentityContract();
             testCanvasRuntimeDecodePolicy();
             testCanvasAnimationContract();
@@ -102,6 +104,112 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
                 ShizukuNativeUserService.TRANSACTION_RELEASE_VIRTUAL_KEYBOARD_KEYS);
         assertEquals(ShizukuNativeUserService.TRANSACTION_RELEASE_VIRTUAL_KEYBOARD_KEYS + 1,
                 ShizukuNativeUserService.TRANSACTION_RELEASE_VIRTUAL_KEYBOARD);
+    }
+
+    public void testThemeRegistryContract() {
+        List<ThemeDefinition> themes = ThemeRegistry.selectableThemes();
+        assertEquals(2, themes.size());
+        assertEquals(ThemeRegistry.ID_HEIMDALL_BLUE, themes.get(0).id);
+        assertEquals(ThemeFamily.HEIMDALL, themes.get(0).family);
+        assertEquals(ThemeRegistry.ID_FREYA_WHITE, themes.get(1).id);
+        assertEquals(ThemeFamily.FREYA, themes.get(1).family);
+        assertTrue(themes.get(0).displayNameRes != 0);
+        assertTrue(themes.get(1).displayNameRes != 0);
+
+        assertEquals(ThemeRegistry.ID_HEIMDALL_BLUE,
+                ThemeRegistry.resolve(" dark ").id());
+        assertEquals(ThemeRegistry.ID_FREYA_WHITE,
+                ThemeRegistry.resolve("PEARL").id());
+        assertEquals(ThemeRegistry.ID_HEIMDALL_BLUE,
+                ThemeRegistry.resolve("future.unknown").id());
+        assertTrue(ThemeRegistry.isKnown(ThemeRegistry.ID_HEIMDALL_BLUE));
+        assertTrue(ThemeRegistry.isKnown(ThemeRegistry.LEGACY_PEARL));
+        assertFalse(ThemeRegistry.isKnown("future.unknown"));
+
+        ResolvedTheme blue = ThemeRegistry.resolve(ThemeRegistry.ID_HEIMDALL_BLUE);
+        ResolvedTheme white = ThemeRegistry.resolve(ThemeRegistry.ID_FREYA_WHITE);
+        assertEquals(1, blue.materials.mediaFrameContentInsetDp);
+        assertEquals(6, white.materials.mediaFrameContentInsetDp);
+        assertEquals(0xFF4EA1FF, blue.palette.accent);
+        assertEquals(0xFFF08A2A, white.palette.accent);
+        assertEquals(0xE04EA1FF, blue.componentColors.dockIndicator);
+        assertEquals(0xE0F08A2A, white.componentColors.dockIndicator);
+        assertEquals(0xFF18212B, blue.componentColors.flatSurfaceFill);
+        assertEquals(0xFFE4E6E7, white.componentColors.flatSurfaceFill);
+        assertEquals(0x445F7C9A, blue.componentColors.structuralDivider);
+        assertEquals(0x287B8792, white.componentColors.structuralDivider);
+        assertEquals(0xFFD9E8F8, blue.componentColors.quickActionIconIdle);
+        assertEquals(0xFF536274, white.componentColors.quickActionIconIdle);
+        assertEquals(0xFF070A10, blue.componentColors.fullscreenBackground);
+        assertEquals(0xFFD4DCE3, white.componentColors.fullscreenBackground);
+        assertEquals(0xCC70B7FF, blue.componentColors.touchPointCore);
+        assertEquals(0xCCF08A2A, white.componentColors.touchPointCore);
+        assertEquals(0xAA70B7FF, blue.componentColors.canvasPressedEdge);
+        assertEquals(0xC8F08A2A, white.componentColors.canvasPressedEdge);
+        assertEquals(0xFF5FD18A, blue.componentColors.statusLampSuccess);
+        assertEquals(0xFF5FD18A, white.componentColors.statusLampSuccess);
+        assertEquals(0xFFFF6B6B, blue.componentColors.statusLampError);
+        assertEquals(0xFFFF6B6B, white.componentColors.statusLampError);
+        assertEquals(0xFFE6EDF3, blue.componentColors.keyboard.lockedText);
+        assertEquals(0xFFE77F1F, white.componentColors.keyboard.lockedText);
+        assertEquals(0xFF15243A, blue.componentColors.gridPreview(
+                ThemeComponentColors.GRID_TOUCHPAD));
+        assertEquals(0xFFD6DEE6, white.componentColors.gridPreview(
+                ThemeComponentColors.GRID_TOUCHPAD));
+        assertEquals(0xCC1D5A3B, blue.componentColors.gridSelected(
+                ThemeComponentColors.GRID_QUICK_ACTIONS));
+        assertEquals(0xFFE7E1D9, white.componentColors.gridSelected(
+                ThemeComponentColors.GRID_QUICK_ACTIONS));
+        assertFalse(blue.semanticStates.error.foreground
+                == blue.semanticStates.recording.foreground);
+        assertFalse(white.semanticStates.error.foreground
+                == white.semanticStates.recording.foreground);
+
+        android.content.SharedPreferences preferences =
+                target.getSharedPreferences("heimdall_ui", Context.MODE_PRIVATE);
+        boolean hadTheme = preferences.contains("theme");
+        String previousTheme = preferences.getString("theme", null);
+        try {
+            assertTrue(preferences.edit().putString("theme", ThemeRegistry.LEGACY_PEARL)
+                    .commit());
+            assertEquals(ThemeRegistry.ID_FREYA_WHITE, HeimdallUi.theme(target));
+            assertEquals(ThemeRegistry.LEGACY_PEARL,
+                    preferences.getString("theme", null));
+
+            assertTrue(preferences.edit().putString("theme", "future.unknown").commit());
+            assertEquals(ThemeRegistry.ID_HEIMDALL_BLUE, HeimdallUi.theme(target));
+            assertEquals("future.unknown", preferences.getString("theme", null));
+
+            HeimdallUi.setTheme(target, ThemeRegistry.LEGACY_PEARL);
+            assertEquals(ThemeRegistry.ID_FREYA_WHITE,
+                    preferences.getString("theme", null));
+        } finally {
+            android.content.SharedPreferences.Editor restore = preferences.edit();
+            if (hadTheme) {
+                restore.putString("theme", previousTheme);
+            } else {
+                restore.remove("theme");
+            }
+            assertTrue(restore.commit());
+        }
+    }
+
+    public void testDebugThemeLabContract() {
+        android.content.SharedPreferences preferences =
+                target.getSharedPreferences("heimdall_ui", Context.MODE_PRIVATE);
+        String before = preferences.getString("theme", null);
+        String alternate = ThemeRegistry.ID_HEIMDALL_BLUE.equals(
+                ThemeRegistry.canonicalId(before))
+                ? ThemeRegistry.ID_FREYA_WHITE : ThemeRegistry.ID_HEIMDALL_BLUE;
+        final DebugThemeLabView[] holder = new DebugThemeLabView[1];
+
+        runOnMainSync(() -> {
+            holder[0] = new DebugThemeLabView(target);
+            holder[0].selectThemeForTesting(alternate);
+        });
+
+        assertEquals(alternate, holder[0].selectedThemeIdForTesting());
+        assertEquals(before, preferences.getString("theme", null));
     }
 
     public void testInteractiveMapBrowserSettingsContract() throws Exception {

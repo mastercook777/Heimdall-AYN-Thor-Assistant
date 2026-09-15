@@ -23,8 +23,6 @@ import android.widget.TextView;
 
 final class UpperScreenMagnifierView extends FrameLayout
         implements UpperScreenProjectionService.Listener, TextureView.SurfaceTextureListener {
-    private static final int DARK_CONTENT_INSET_DP = 1;
-    private static final int PEARL_CONTENT_INSET_DP = 6;
     private static final long MULTI_TAP_TIMEOUT_MS = ViewConfiguration.getDoubleTapTimeout();
     private static final long TRIPLE_TAP_TOTAL_TIMEOUT_MS = MULTI_TAP_TIMEOUT_MS * 2L;
 
@@ -76,7 +74,7 @@ final class UpperScreenMagnifierView extends FrameLayout
         displayFrame = new ShapeFrameLayout(context, circular);
         displayFrame.setContentDescription(
                 context.getString(R.string.magnifier_live_content_description));
-        displayFrame.setBackground(HeimdallUi.isPearl(context)
+        displayFrame.setBackground(HeimdallUi.isFreyaFamily(context)
                 ? HeimdallUi.cncInputFrame(context, HeimdallUi.RADIUS_MODULE, circular)
                 : circular
                         ? HeimdallUi.glassCircle(context,
@@ -96,12 +94,8 @@ final class UpperScreenMagnifierView extends FrameLayout
                 if (circular) {
                     outline.setOval(0, 0, view.getWidth(), view.getHeight());
                 } else {
-                    int insetDp = HeimdallUi.isPearl(getContext())
-                            ? PEARL_CONTENT_INSET_DP : DARK_CONTENT_INSET_DP;
-                    float radius = dp(HeimdallUi.isPearl(getContext())
-                            ? HeimdallUi.concentricInnerRadiusDp(
-                                    HeimdallUi.RADIUS_MODULE, insetDp)
-                            : Math.max(0f, HeimdallUi.RADIUS_MODULE - insetDp));
+                    float radius = dp(HeimdallUi.mediaFrameInnerRadiusDp(
+                            getContext(), HeimdallUi.RADIUS_MODULE));
                     outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), radius);
                 }
             }
@@ -121,7 +115,7 @@ final class UpperScreenMagnifierView extends FrameLayout
 
         statusView = new TextView(context);
         statusView.setText(R.string.magnifier_enable_hint);
-        statusView.setTextColor(HeimdallUi.isPearl(context) ? 0xFF5E6D7E : 0xFF8EA4BA);
+        statusView.setTextColor(HeimdallUi.componentColors(context).mediaHintText);
         statusView.setTextSize(12);
         statusView.setGravity(Gravity.CENTER);
         statusView.setPadding(dp(8), dp(8), dp(8), dp(8));
@@ -559,8 +553,7 @@ final class UpperScreenMagnifierView extends FrameLayout
     }
 
     private int contentInset() {
-        return dp(HeimdallUi.isPearl(getContext())
-                ? PEARL_CONTENT_INSET_DP : DARK_CONTENT_INSET_DP);
+        return dp(HeimdallUi.mediaFrameContentInsetDp(getContext()));
     }
 
     private int dp(int value) {

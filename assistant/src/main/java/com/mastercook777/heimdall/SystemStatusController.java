@@ -210,7 +210,7 @@ final class SystemStatusController {
             if (width <= 0 || height <= 0) {
                 return;
             }
-            boolean pearl = HeimdallUi.isPearl(getContext());
+            ThemeComponentColors colors = HeimdallUi.componentColors(getContext());
             float shellLeft = dp(2);
             float shellTop = height * 0.27f;
             float shellRight = width - dp(4);
@@ -219,7 +219,7 @@ final class SystemStatusController {
             batteryPaint.setShader(null);
             batteryPaint.setStyle(Paint.Style.STROKE);
             batteryPaint.setStrokeWidth(dp(1));
-            batteryPaint.setColor(pearl ? 0xFF596774 : 0xFFD9E8F8);
+            batteryPaint.setColor(colors.batteryShell);
             canvas.drawRoundRect(shellLeft, shellTop, shellRight, shellBottom,
                     radius, radius, batteryPaint);
             batteryPaint.setStyle(Paint.Style.FILL);
@@ -230,11 +230,11 @@ final class SystemStatusController {
             float inset = dp(2);
             float fillRight = shellLeft + inset
                     + (shellRight - shellLeft - inset * 2f) * level;
-            batteryPaint.setColor(pearl ? 0xFFF08A2A : 0xFF70B7FF);
+            batteryPaint.setColor(colors.batteryFill);
             canvas.drawRoundRect(shellLeft + inset, shellTop + inset, fillRight,
                     shellBottom - inset, dp(1), dp(1), batteryPaint);
             if (charging) {
-                batteryPaint.setColor(pearl ? 0xFFFEF4E8 : 0xFFF4FAFF);
+                batteryPaint.setColor(colors.batteryChargingBolt);
                 batteryBolt.reset();
                 float cx = (shellLeft + shellRight) / 2f;
                 float cy = height / 2f;
