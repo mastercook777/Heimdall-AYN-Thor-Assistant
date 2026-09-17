@@ -203,9 +203,11 @@
     <string name="settings_theme">Theme</string>
     <string name="theme_heimdall_blue">Heimdall Blue</string>
     <string name="theme_heimdall_amber">Heimdall Amber</string>
+    <string name="theme_heimdall_nocturne">Heimdall Nocturne</string>
     <string name="theme_freya_white">Freya White</string>
     <string name="theme_freya_rosewood">Freya Rosewood</string>
-    <string name="settings_theme_help">Choose the look that best fits your environment. Save to apply it throughout Heimdall.</string>
+    <string name="theme_freya_celadon">Freya Celadon</string>
+    <string name="settings_theme_help">Saved with the current Profile and restored whenever that Profile becomes active. It also becomes the default for older Profiles without a saved theme.</string>
     <string name="settings_performance_compatibility">Thor game performance compatibility (global)</string>
     <string name="settings_performance_compatibility_help">Experimental. Try this if some games lose frame rate while Heimdall is open. It changes lower-screen composition and can add compositor load; turn it off if game loading becomes unstable. It is off by default and does not follow Profiles.</string>
     <string name="settings_layout_balanced">Balanced layout</string>

@@ -10,8 +10,10 @@ import java.util.Map;
 final class ThemeRegistry {
     static final String ID_HEIMDALL_BLUE = "heimdall.blue";
     static final String ID_HEIMDALL_AMBER = "heimdall.amber";
+    static final String ID_HEIMDALL_NOCTURNE = "heimdall.nocturne";
     static final String ID_FREYA_WHITE = "freya.white";
     static final String ID_FREYA_ROSEWOOD = "freya.rosewood";
+    static final String ID_FREYA_CELADON = "freya.celadon";
     static final String LEGACY_DARK = "dark";
     static final String LEGACY_PEARL = "pearl";
 
@@ -175,6 +177,80 @@ final class ThemeRegistry {
                 null,
                 R.string.theme_heimdall_amber);
 
+        ThemeDefinition heimdallNocturne = new ThemeDefinition(
+                ID_HEIMDALL_NOCTURNE,
+                new String[0],
+                ThemeFamily.HEIMDALL,
+                new ThemePalette(
+                        0xFF0E0C10, 0xFF0E0C10,
+                        0xFF16131B, 0xFF231C29, 0xFF09080C,
+                        0xFF1E1823, 0xFF131016,
+                        0xFFF1EDF4, 0xFFAAA3B0, 0x8CAAA3B0,
+                        0xFF33293C, 0xFF50385F,
+                        0xFF809D74, 0xFF9BC089, 0xFF809D74, 0xFF4F5F4C,
+                        0xFF9BC089,
+                        0xFF809D74, 0xFFADD297,
+                        0x3333293C, 0xFF33293C, 0xFF809D74,
+                        0xAA557A4F, 0xF0ADD297,
+                        0x3D4F5F4C, 0x77809D74,
+                        0x244F5F4C, 0x18F1EDF4, 0xCCADD297),
+                new ThemeComponentColors(
+                        0xE0809D74, 0xFFF1EDF4, 0xD0AAA3B0,
+                        0x4033293C,
+                        0xFF1E1823, 0xFF33293C,
+                        0x001E1823, 0x0009080C,
+                        0x4433293C, 0x2833293C,
+                        0x24000000, 0xFFD8A13A, 0xFFCFC9D1, 0xFF809D74,
+                        0xFFADD297, 0xCCF1EDF4, 0xAAF8F4FA,
+                        0xFF809D74, 0xFF809D74,
+                        0xFFF1EDF4, 0xCCAAA3B0, 0xFFF1EDF4,
+                        0x66D27E82, 0xFFEA7175, 0xFFD27E82,
+                        0xFF0E0C10, 0xFF9BC089, 0.45f,
+                        0xFF050607, 0xB8000000,
+                        0x994F5F4C, 0xEEADD297,
+                        0x664F5F4C, 0xCC9BC089, 0xE6ADD297,
+                        0x144F5F4C, 0x24809D74,
+                        0x2E000000,
+                        0xFF1E1823, 0xFF131016, 0xFF1E1823, 0xFF131016,
+                        0x884F5F4C, 0xEEADD297,
+                        0x22809D74, 0xCCADD297,
+                        0x12809D74, 0x77809D74, 0x999BC089,
+                        0xAAADD297, 0xEE9BC089, 0x55809D74,
+                        0xFF817987, 0xFF33293C, 0xFFAAA3B0,
+                        0xFFF1EDF4,
+                        0xFF9BC089, 0xE6809D74, 0xFFADD297, 0xE51E1823, 0xFF50385F,
+                        0xFF817A86, 0xFF809D74,
+                        0xFFEAF4E5, 0x88414A53, 0xFF5FD18A, 0xFFFF6B6B,
+                        new ThemeKeyboardColors(
+                                0xF21E1823, 0x6633293C, 0xFFADD297,
+                                0xFFADD297, 0x99809D74, 0x889BC089,
+                                0x55ADD297, 0x55ADD297,
+                                0xFF231C29, 0xFF16131B, 0xFF2A2230, 0xFF19151E,
+                                0x9950385F, 0x5533293C, 0x5550385F, 0x8809080C,
+                                0xFF9BC089, 0xFF261E2B),
+                        0x33809D74, 0x664F5F4C, 0x8850385F,
+                        0xDD9BC089, 0xFFF1EDF4,
+                        new int[]{0xFF211A28, 0xFF2A1F31, 0xFF201A26,
+                                0xFF1C241F, 0xFF1A2320, 0xFF151117, 0xFF1B221C},
+                        new int[]{0xCC3D4A39, 0xCC4F5F4C, 0xCC455640,
+                                0xCC4F5F4C, 0xCC465A41, 0xCC394535, 0xCC465A41}),
+                new SemanticStateColors(
+                        appearance(0xFFF1EDF4, 0xB21E1823, 0xC909080C,
+                                0x6650385F, 0x3333293C),
+                        appearance(0xFF5FD18A, 0xA9121816, 0xC9090E0C,
+                                0x885FD18A, 0x33406A50),
+                        appearance(0xFFD8A13A, 0xA9161713, 0xC90B0C0D,
+                                0x88D8A13A, 0x335F4822),
+                        appearance(0xFFFF6B6B, 0x9A241117, 0xB00D080A,
+                                0x99FF6B6B, 0x335F2A32),
+                        appearance(0xFFFF6B7A, 0xB5281017, 0xCE10090C,
+                                0xBBFF6B7A, 0x555A242D),
+                        0x8CAAA3B0, 0xFFFF6B6B, 0xFFD8A13A),
+                HEIMDALL_MATERIALS,
+                heimdallNocturneGlassColors(),
+                null,
+                R.string.theme_heimdall_nocturne);
+
         ThemeDefinition freyaWhite = new ThemeDefinition(
                 ID_FREYA_WHITE,
                 new String[]{LEGACY_PEARL},
@@ -313,11 +389,82 @@ final class ThemeRegistry {
                 freyaRosewoodCncColors(),
                 R.string.theme_freya_rosewood);
 
+        ThemeDefinition freyaCeladon = new ThemeDefinition(
+                ID_FREYA_CELADON,
+                new String[0],
+                ThemeFamily.FREYA,
+                new ThemePalette(
+                        0xFFEEEAE3, 0xFFEEEAE3,
+                        0xFFECE8E1, 0xFFF7F4EE, 0xFFD1D1C7,
+                        0xFFE6E2DA, 0xFFE1DED7,
+                        0xFF2E3431, 0xFF68716C, 0x8C68716C,
+                        0xFFB7BEB9, 0xFF8F9A95,
+                        0xFF6F947F, 0xFF557B67, 0xFF9EB4A8, 0xFF9EB4A8,
+                        0xFF557B67,
+                        0xFF6F947F, 0xFF416B57,
+                        0x33949C97, 0xFF8F9A95, 0xFF6F947F,
+                        0xAA829B8E, 0xFF416B57,
+                        0x33829B8E, 0x666F947F,
+                        0x24F7F4EE, 0x1868716C, 0xFF6F947F),
+                new ThemeComponentColors(
+                        0xE06F947F, 0xFF2E3431, 0xCC68716C,
+                        0x40B7BEB9,
+                        0xFFE6E2DA, 0xFFB7BEB9,
+                        0x00F7F4EE, 0x00E6E2DA,
+                        0x40B7BEB9, 0x28B7BEB9,
+                        0x12000000, 0xFFB4772E, 0xFF68716C, 0xFF6F947F,
+                        0xFF557B67, 0xCCF7F4EE, 0xAAF9F7F2,
+                        0xFF4F5C56, 0xFF557B67,
+                        0xFF557B67, 0xCC68716C, 0xFF2E3431,
+                        0x6668716C, 0xFFC8493E, 0xFF68716C,
+                        0xFFD1D1C7, 0xFF557B67, 0.55f,
+                        0xFFD1D1C7, 0x8A2E3431,
+                        0xCC829B8E, 0xFF557B67,
+                        0xAA829B8E, 0xFF9EB4A8, 0xFF6F947F,
+                        0x0FF7F4EE, 0x206F947F,
+                        0x22545F5A,
+                        0xFF71847A, 0xFF586A61, 0xFF71847A, 0xFF586A61,
+                        0x66829B8E, 0xFF416B57,
+                        0x226F947F, 0xCC557B67,
+                        0x186F947F, 0x88F7F4EE, 0xAA6F947F,
+                        0xC8557B67, 0xC8557B67, 0x386F947F,
+                        0xFF8F9A95, 0xFFB7BEB9, 0xFF68716C,
+                        0xFF2E3431,
+                        0xFF557B67, 0xE66F947F, 0xFF557B67, 0xE5E6E2DA, 0xFF8F9A95,
+                        0xFF68716C, 0xFF6F947F,
+                        0xFFF7F4EE, 0x66717A75, 0xFF3F8A66, 0xFFC8493E,
+                        new ThemeKeyboardColors(
+                                0xFF68716C, 0xFF8F9A95, 0xFF2E3431,
+                                0xFF9EB4A8, 0x996F947F, 0x88557B67,
+                                0x559EB4A8, 0xB86F947F,
+                                0xFFF7F4EE, 0xFFECE8E1, 0xFFF7F4EE, 0xFFECE8E1,
+                                0x8A8F9A95, 0x55B7BEB9, 0x558F9A95, 0x88586A61,
+                                0xFF557B67, 0xFF4F5C56),
+                        0x33829B8E, 0x888F9A95, 0x888F9A95,
+                        0xDD6F947F, 0xFFFFFFFF,
+                        new int[]{0xFFDDE2DE, 0xFFE6E2DA, 0xFFD9DFDB,
+                                0xFFE4E8E4, 0xFFD7E1DC, 0xFFD1D1C7, 0xFFDEE5E0},
+                        new int[]{0xFFDCE8E1, 0xFFDCE8E1, 0xFFDCE8E1,
+                                0xFFDCE8E1, 0xFFDCE8E1, 0xFFDCE8E1, 0xFFDCE8E1}),
+                new SemanticStateColors(
+                        appearance(0xFF2E3431, 0x20F7F4EE, 0x20F7F4EE, 0, 0),
+                        appearance(0xFF3F8A66, 0x243F8A66, 0x243F8A66, 0, 0),
+                        appearance(0xFFB4772E, 0x26B4772E, 0x26B4772E, 0, 0),
+                        appearance(0xFFC8493E, 0x24C8493E, 0x24C8493E, 0, 0),
+                        appearance(0xFFD43D4B, 0x2CD43D4B, 0x2CD43D4B, 0, 0),
+                        0x8C68716C, 0xFF68716C, 0xFFB4772E),
+                FREYA_MATERIALS,
+                null,
+                freyaCeladonCncColors(),
+                R.string.theme_freya_celadon);
+
         List<ThemeDefinition> definitions = new ArrayList<>();
         definitions.add(heimdallBlue);
         definitions.add(heimdallAmber);
+        definitions.add(heimdallNocturne);
         definitions.add(freyaWhite);
         definitions.add(freyaRosewood);
+        definitions.add(freyaCeladon);
         SELECTABLE = Collections.unmodifiableList(definitions);
 
         Map<String, ThemeDefinition> lookup = new LinkedHashMap<>();
@@ -449,6 +596,55 @@ final class ThemeRegistry {
                 new int[]{0x30F0B84C, 0x1ED99A2B, 0x0C725528});
     }
 
+    private static ThemeGlassColors heimdallNocturneGlassColors() {
+        return new ThemeGlassColors(
+                new ThemeGlassColors.Surface[]{
+                        glassSurface(0xBB231C29, 0xCC0E0C10, 0x9950385F, 0xAA33293C),
+                        glassSurface(0xCC231C29, 0xE60E0C10, 0x8850385F, 0x4433293C),
+                        glassSurface(0x84131016, 0xA009080C, 0x4450385F, 0x2233293C),
+                        glassSurface(0xA81E1823, 0xC70E0C10, 0x6633293C, 0x3033293C),
+                        glassSurface(0xB21E1823, 0xC909080C, 0x6633293C, 0x3333293C),
+                        glassSurface(0xC31E1823, 0xD709080C, 0xCCADD297, 0x88809D74),
+                        glassSurface(0xB21E1823, 0xC909080C, 0x99809D74, 0x554F5F4C),
+                        glassSurface(0xC41E1823, 0xD709080C, 0xDDADD297, 0x774F5F4C),
+                        glassSurface(0x85131016, 0xAA09080C, 0x6650385F, 0x3033293C),
+                        glassSurface(0xA61E1823, 0xC209080C, 0x6633293C, 0x3033293C),
+                        glassSurface(0xC0231C29, 0xD0131016, 0x88809D74, 0x4433293C),
+                        glassSurface(0xCC231C29, 0xE60E0C10, 0xFF9BC089, 0xCC4F5F4C),
+                        glassSurface(0x7609080C, 0x9609080C, 0x4433293C, 0x2233293C),
+                        glassSurface(0x76131016, 0x9609080C, 0x4450385F, 0x2233293C),
+                        glassSurface(0xDD231C29, 0xEE0E0C10, 0x8850385F, 0x4433293C),
+                        glassSurface(0xB21E1823, 0xD0131016, 0x6633293C, 0x3333293C),
+                        glassSurface(0xA6231C29, 0xC90E0C10, 0x8850385F, 0x4433293C),
+                        glassSurface(0xD2231C29, 0xE80E0C10, 0x6633293C, 0x3333293C),
+                        glassSurface(0xFC131016, 0xFF09080C, 0xA650385F, 0x5533293C),
+                        glassSurface(0xB51E1823, 0xD0131016, 0x7750385F, 0x3333293C),
+                        glassSurface(0xFA231C29, 0xFF0E0C10, 0x8850385F, 0x4433293C),
+                        glassSurface(0xF0231C29, 0xFA0E0C10, 0x8850385F, 0x4433293C),
+                        glassSurface(0xB2131016, 0xD209080C, 0x5533293C, 0x3333293C),
+                        glassSurface(0xB2131016, 0xD209080C, 0x774F5F4C, 0x3333293C),
+                        glassSurface(0xFF231C29, 0xFF0E0C10, 0x8850385F, 0x4433293C),
+                        glassSurface(0xB2231C29, 0xD00E0C10, 0xAA4F5F4C, 0x5533293C),
+                        glassSurface(0xA61E1823, 0xC90E0C10, 0x6633293C, 0x3333293C),
+                        glassSurface(0xB2231C29, 0xD00E0C10, 0xAA9BC089, 0x554F5F4C),
+                        glassSurface(0xB2231C29, 0xD00E0C10, 0xBB9BC089, 0x554F5F4C),
+                        glassSurface(0xD01E1823, 0xE0131016, 0xAA9BC089, 0x554F5F4C),
+                        glassSurface(0xC01E1823, 0xD009080C, 0x6633293C, 0x2233293C),
+                        glassSurface(0xE0231C29, 0xED0E0C10, 0xCCADD297, 0x664F5F4C),
+                        glassSurface(0xC31E1823, 0xD709080C, 0xCCADD297, 0x884F5F4C),
+                        glassSurface(0xD01E1823, 0xE60E0C10, 0xCCADD297, 0x664F5F4C),
+                        glassSurface(0xA9231C29, 0xB90E0C10, 0x559BC089, 0x2233293C),
+                        glassSurface(0xFF131016, 0xFF131016, 0xFF33293C, 0xFF33293C)
+                },
+                new int[]{0xFF231C29, 0xFF131016, 0xFF09080C},
+                0x6633293C, 0x3350385F, 0x664F5F4C,
+                new int[]{0xFF302536, 0xFF1F1924, 0xFF131016},
+                0xAA50385F, 0xAAADD297,
+                new int[]{0xFF231C29, 0xFF1E1823, 0xFF09080C},
+                0x7050385F, 0x3433293C,
+                new int[]{0x30ADD297, 0x1E809D74, 0x0C4F5F4C});
+    }
+
     private static ThemeGlassColors.Surface glassSurface(
             int top, int bottom, int edgeTop, int edgeBottom) {
         return new ThemeGlassColors.Surface(top, bottom, edgeTop, edgeBottom);
@@ -518,6 +714,39 @@ final class ThemeRegistry {
                 0x20FBF5F1, 0x36F4DCE3, 0x12A18479,
                 0x52B8A49B, 0x30A18479, 0x20FBF5F1,
                 0xDDFBF5F1, 0xEEF6EEEA, 0xAAFFFDFC, 0x66B8A49B);
+    }
+
+    private static ThemeCncColors freyaCeladonCncColors() {
+        int[] raisedShell = {0xFFFBF9F5, 0xFFC9CEC9, 0xFF8F9A95};
+        int[] raisedRim = {0xFFFFFFFF, 0xFFF3F0EA, 0xFFB7BEB9};
+        return new ThemeCncColors(
+                cncSurface(0xFFECE8E1, 0xFFF0ECE5, 0xFFE6E2DA,
+                        0xFFF0ECE5, 0xFFE6E2DA, raisedShell, raisedRim, 0x508F9A95),
+                cncSurface(0xFFF7F4EE, 0xFFFBF9F5, 0xFFECE8E1,
+                        0xFFF3F0E9, 0xFFE6E2DA, raisedShell, raisedRim, 0x688F9A95),
+                cncSurface(0xFFD1D1C7, 0xFFCACCC5, 0xFFE0DED7,
+                        0xFFCACCC5, 0xFFE0DED7,
+                        new int[]{0xFF7F8C86, 0xFFB7BEB9, 0xFFF7F4EE},
+                        new int[]{0xFF8F9A95, 0xFFE2E1DB, 0xFFFFFFFF}, 0x688F9A95),
+                cncSurface(0xFFE2DFD7, 0xFFF0ECE5, 0xFFDDDAD2,
+                        0xFFEAE7E0, 0xFFD8D7CF,
+                        new int[]{0xFFF9F7F2, 0xFFD4D7D2, 0xFFA1AAA5},
+                        new int[]{0xFFFFFFFF, 0xFFF5F2EC, 0xFFCBCFCB}, 0x348F9A95),
+                cncSurface(0xFFE6E2DA, 0xFFE2DED6, 0xFFEAE7E0,
+                        0xFFE2DED6, 0xFFEAE7E0,
+                        new int[]{0xFFA5AEA9, 0xFFD8DAD6, 0xFFF7F4EE},
+                        new int[]{0xFFBBC1BD, 0xFFE8E7E2, 0xFFFFFFFF}, 0x308F9A95),
+                cncSurface(0xFFE1DED7, 0xFFE8E5DE, 0xFFDDDAD3,
+                        0xFFE8E5DE, 0xFFDDDAD3,
+                        new int[]{0xFFD1D4D0, 0xFFE7E5E0, 0xFFF9F7F2},
+                        new int[]{0xFFFFFFFF, 0xFFF4F1EB, 0xFFD9DCD8}, 0x248F9A95),
+                cncSurface(0xFFCDCEC6, 0xFFC8CAC3, 0xFFD8D8D0,
+                        0xFFC8CAC3, 0xFFD8D8D0,
+                        new int[]{0xFF71847A, 0xFFB7BEB9, 0xFFF7F4EE},
+                        new int[]{0xFFFFFFFF, 0xFFF9F6F0, 0xFFD0D4D0}, 0x688F9A95),
+                0x20F7F4EE, 0x36E4EBE7, 0x12829B8E,
+                0x52B7BEB9, 0x308F9A95, 0x20F7F4EE,
+                0xDDF7F4EE, 0xEEECE8E1, 0xAAFFFFFF, 0x66B7BEB9);
     }
 
     private static ThemeCncColors.Surface cncSurface(int roleColor,

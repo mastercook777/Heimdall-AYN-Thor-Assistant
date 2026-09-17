@@ -23,6 +23,7 @@ final class HeimdallUi {
     static final String THEME_FREYA_WHITE = ThemeRegistry.ID_FREYA_WHITE;
     private static final String THEME_PREFS = "heimdall_ui";
     private static final String KEY_THEME = "theme";
+    private static volatile String activeProfileThemeId = "";
 
     private HeimdallUi() {
     }
@@ -108,13 +109,32 @@ final class HeimdallUi {
         return resolvedTheme(context).id();
     }
 
+    static String globalTheme(Context context) {
+        String stored = context.getSharedPreferences(THEME_PREFS, Context.MODE_PRIVATE)
+                .getString(KEY_THEME, ThemeRegistry.LEGACY_DARK);
+        return ThemeRegistry.resolve(stored).id();
+    }
+
     static void setTheme(Context context, String theme) {
         String value = ThemeRegistry.canonicalId(theme);
         context.getSharedPreferences(THEME_PREFS, Context.MODE_PRIVATE)
                 .edit().putString(KEY_THEME, value).apply();
     }
 
+    static void setActiveProfileTheme(String theme) {
+        activeProfileThemeId = ThemeRegistry.isKnown(theme)
+                ? ThemeRegistry.canonicalId(theme) : "";
+    }
+
+    static void clearActiveProfileTheme() {
+        activeProfileThemeId = "";
+    }
+
     static ResolvedTheme resolvedTheme(Context context) {
+        String profileTheme = activeProfileThemeId;
+        if (profileTheme.length() > 0) {
+            return ThemeRegistry.resolve(profileTheme);
+        }
         String stored = context.getSharedPreferences(THEME_PREFS, Context.MODE_PRIVATE)
                 .getString(KEY_THEME, ThemeRegistry.LEGACY_DARK);
         return ThemeRegistry.resolve(stored);

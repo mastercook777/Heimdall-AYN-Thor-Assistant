@@ -516,6 +516,7 @@ public class AssistantActivity extends Activity {
         FirstSetupState.initialize(this, hadStoredProfiles);
         selectedProfileIndex = ProfileStore.loadSelectedIndex(this, profiles.size());
         selectedProfile = profiles.get(selectedProfileIndex);
+        applySelectedProfileTheme();
         touchpadSettings = selectedProfile.safeTouchpadSettings();
         restoreUiInstanceState(savedInstanceState);
         registerCaptureReceiver();
@@ -3591,6 +3592,7 @@ public class AssistantActivity extends Activity {
         settingsTouchpadDraft = null;
         settingsMagnifierDraft = null;
         settingsGameContextBindingDraft = null;
+        settingsThemeDraft = null;
         settingsMacroMappingProtectionInput = null;
         settingsMacroMappingProtectionDraft = null;
         viewingGuideInline = null;
@@ -3606,10 +3608,19 @@ public class AssistantActivity extends Activity {
         activeLocalMapIndex = 0;
         selectedProfileIndex = index;
         selectedProfile = profiles.get(index);
+        applySelectedProfileTheme();
         touchpadSettings = selectedProfile.safeTouchpadSettings();
         closeVirtualMouseDispatcherIfUnused();
         ProfileStore.saveSelectedIndex(this, selectedProfileIndex);
         rebuildContent();
+    }
+
+    private void applySelectedProfileTheme() {
+        if (selectedProfile == null) {
+            HeimdallUi.clearActiveProfileTheme();
+            return;
+        }
+        HeimdallUi.setActiveProfileTheme(selectedProfile.normalizedThemeId());
     }
 
     private void maybeAutoSwitchProfile(ForegroundAppTracker.Snapshot snapshot) {
@@ -5275,65 +5286,6 @@ public class AssistantActivity extends Activity {
         LinearLayout row = settingsActionRow(content);
         row.addView(editorButton(getString(R.string.diagnostics_export_action),
                 this::requestDiagnosticExport));
-        if (BuildConfig.DEBUG) {
-            addSettingsLabel(content, "Theme Lab \u00b7 Debug");
-            addSettingsHelp(content,
-                    "\u4ec5\u672c\u5730\u9884\u89c8\u5df2\u6ce8\u518c\u4e3b\u9898\u7684\u8272\u677f\u3001\u8bed\u4e49\u72b6\u6001\u4e0e\u6750\u8d28\uff1b\u4e0d\u4fdd\u5b58\u3001\u4e0d\u5e94\u7528\u5230 Profile\u3002");
-            LinearLayout labRow = settingsActionRow(content);
-            labRow.addView(editorButton("\u6253\u5f00 Theme Lab", this::showDebugThemeLab));
-        }
-    }
-
-    private void showDebugThemeLab() {
-        if (!BuildConfig.DEBUG) {
-            return;
-        }
-        final PanelOverlay[] holder = new PanelOverlay[1];
-        try {
-            Class<?> labType = Class.forName(
-                    "com.mastercook777.heimdall.DebugThemeLabView");
-            java.lang.reflect.Constructor<?> constructor =
-                    labType.getDeclaredConstructor(Context.class);
-            constructor.setAccessible(true);
-            View lab = (View) constructor.newInstance(this);
-
-            LinearLayout shell = new LinearLayout(this);
-            shell.setOrientation(LinearLayout.VERTICAL);
-            shell.setPadding(dp(12), dp(8), dp(12), dp(10));
-            shell.setBackground(HeimdallUi.isFreyaFamily(this)
-                    ? HeimdallUi.cncRaised(this, 14, false, false)
-                    : HeimdallUi.glassSurface(this, ThemeGlassColors.OVERLAY, 14, 2));
-
-            LinearLayout header = new LinearLayout(this);
-            header.setOrientation(LinearLayout.HORIZONTAL);
-            header.setGravity(Gravity.CENTER_VERTICAL);
-            shell.addView(header, new LinearLayout.LayoutParams(-1, dp(44)));
-            header.addView(text("Theme Lab \u00b7 Debug",
-                    HeimdallUi.TYPE_EDITOR_TITLE, TEXT, true),
-                    new LinearLayout.LayoutParams(0, -1, 1));
-            Button close = gridCloseButton(() -> {
-                if (holder[0] != null) {
-                    dismissPanelAnimated(holder[0]);
-                }
-            });
-            close.setContentDescription(getString(R.string.common_close));
-            header.addView(close, new LinearLayout.LayoutParams(dp(42), dp(38)));
-
-            TextView help = text(
-                    "Lab \u5185\u9009\u62e9\u4ec5\u66f4\u65b0\u672c\u9875\u9884\u89c8\uff0c\u4e0d\u4f1a\u4fee\u6539\u5f53\u524d\u4e3b\u9898\u6216 Profile\u3002",
-                    HeimdallUi.TYPE_META, MUTED, false);
-            help.setGravity(Gravity.CENTER_VERTICAL);
-            shell.addView(help, new LinearLayout.LayoutParams(-1, dp(30)));
-            shell.addView(lab, new LinearLayout.LayoutParams(-1, 0, 1));
-
-            FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
-                    settingsOverlayWidth(980), settingsOverlayHeight(820), Gravity.CENTER);
-            params.setMargins(dp(12), dp(12), dp(12), dp(12));
-            holder[0] = showPanelOverlay(shell, params, null);
-        } catch (ReflectiveOperationException | ClassCastException error) {
-            showErrorAction("Theme Lab unavailable: "
-                    + error.getClass().getSimpleName());
-        }
     }
 
     private void requestDiagnosticExport() {
@@ -5913,6 +5865,9 @@ public class AssistantActivity extends Activity {
                 : settingsGameContextBindingDraft.copy();
         selectedProfile.defaultForPackage = settingsProfileDefaultInput.isChecked()
                 && selectedProfile.packageHint.length() > 0;
+        if (selectedProfile.normalizedThemeId().length() == 0) {
+            selectedProfile.setThemeId(HeimdallUi.theme(this));
+        }
         if (selectedProfile.defaultForPackage) {
             for (GameProfile profile : profiles) {
                 if (profile != selectedProfile
@@ -6413,7 +6368,11 @@ public class AssistantActivity extends Activity {
         }
         boolean themeChanged = activeSettingsSection == SETTINGS_APPEARANCE;
         if (themeChanged) {
+            selectedProfile.setThemeId(settingsThemeDraft);
+            settingsThemeDraft = selectedProfile.effectiveThemeId(
+                    HeimdallUi.globalTheme(this));
             HeimdallUi.setTheme(this, settingsThemeDraft);
+            HeimdallUi.setActiveProfileTheme(settingsThemeDraft);
             boolean compatibilityEnabled =
                     Boolean.TRUE.equals(settingsPerformanceCompatibilityDraft);
             ThorPerformanceCompatibility.setEnabled(this, compatibilityEnabled);
@@ -9386,8 +9345,10 @@ public class AssistantActivity extends Activity {
         draftWidgetLayout = null;
         settingsTouchpadDraft = null;
         settingsGameContextBindingDraft = null;
+        settingsThemeDraft = null;
         settingsMacroMappingProtectionInput = null;
         settingsMacroMappingProtectionDraft = null;
+        applySelectedProfileTheme();
         touchpadSettings = selectedProfile.safeTouchpadSettings();
         closeVirtualMouseDispatcherIfUnused();
         ProfileStore.saveSelectedIndex(this, selectedProfileIndex);
@@ -10470,6 +10431,7 @@ public class AssistantActivity extends Activity {
         profile.romContextHint = "";
         profile.gameContextBinding = new GameContextBinding();
         profile.defaultForPackage = false;
+        profile.setThemeId(source.effectiveThemeId(HeimdallUi.globalTheme(this)));
         profile.iconUri = source.iconUri;
         for (GuideEntry guide : source.guides) {
             profile.guides.add(guide.copy());
@@ -10499,15 +10461,16 @@ public class AssistantActivity extends Activity {
         draftWidgetLayout = null;
         settingsTouchpadDraft = null;
         settingsGameContextBindingDraft = null;
+        settingsThemeDraft = null;
         settingsMacroMappingProtectionInput = null;
         settingsMacroMappingProtectionDraft = null;
+        applySelectedProfileTheme();
         touchpadSettings = selectedProfile.safeTouchpadSettings();
         closeVirtualMouseDispatcherIfUnused();
         ProfileStore.saveSelectedIndex(this, selectedProfileIndex);
         ProfileStore.saveProfiles(this, profiles);
         FirstSetupState.markProfileCreated(this);
-        renderProfiles();
-        renderSelectedProfile();
+        rebuildContent();
         showAction(getString(R.string.profile_copied, profile.name));
     }
 
@@ -10523,6 +10486,7 @@ public class AssistantActivity extends Activity {
         profile.macroColumns = 4;
         profile.macroRows = 0;
         profile.rightHandPriority = true;
+        profile.setThemeId(HeimdallUi.theme(this));
         profile.normalizeLayout();
         profiles.add(profile);
         selectedProfileIndex = profiles.size() - 1;
@@ -10530,15 +10494,16 @@ public class AssistantActivity extends Activity {
         draftWidgetLayout = null;
         settingsTouchpadDraft = null;
         settingsGameContextBindingDraft = null;
+        settingsThemeDraft = null;
         settingsMacroMappingProtectionInput = null;
         settingsMacroMappingProtectionDraft = null;
+        applySelectedProfileTheme();
         touchpadSettings = selectedProfile.safeTouchpadSettings();
         closeVirtualMouseDispatcherIfUnused();
         ProfileStore.saveSelectedIndex(this, selectedProfileIndex);
         ProfileStore.saveProfiles(this, profiles);
         FirstSetupState.markProfileCreated(this);
-        renderProfiles();
-        renderSelectedProfile();
+        rebuildContent();
         showAction(getString(R.string.profile_created));
     }
 
@@ -10565,14 +10530,15 @@ public class AssistantActivity extends Activity {
         draftWidgetLayout = null;
         settingsTouchpadDraft = null;
         settingsGameContextBindingDraft = null;
+        settingsThemeDraft = null;
         settingsMacroMappingProtectionInput = null;
         settingsMacroMappingProtectionDraft = null;
+        applySelectedProfileTheme();
         touchpadSettings = selectedProfile.safeTouchpadSettings();
         closeVirtualMouseDispatcherIfUnused();
         ProfileStore.saveSelectedIndex(this, selectedProfileIndex);
         ProfileStore.saveProfiles(this, profiles);
-        renderProfiles();
-        renderSelectedProfile();
+        rebuildContent();
         showAction(getString(R.string.profile_deleted_recoverable, removedName));
     }
 

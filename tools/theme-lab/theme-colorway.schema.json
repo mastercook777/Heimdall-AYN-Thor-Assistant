@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://heimdall.local/schemas/theme-colorway-v1.json",
+  "title": "Heimdall Theme Lab Colorway",
+  "description": "Portable colorway-owned tokens. Family material, geometry, behavior, and semantic state colors are intentionally excluded.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "schemaVersion", "id", "family", "displayName", "colors"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "format": { "const": "heimdall.theme-colorway" },
+    "schemaVersion": { "const": 1 },
+    "id": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 64,
+      "pattern": "^(heimdall|freya)\\.[a-z0-9][a-z0-9.-]*$"
+    },
+    "family": { "enum": ["heimdall", "freya"] },
+    "displayName": { "type": "string", "minLength": 1, "maxLength": 48 },
+    "colors": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pageBackground",
+        "flatPageBackground",
+        "surfaceBase",
+        "surfaceRaised",
+        "surfaceControl",
+        "surfaceInset",
+        "surfaceField",
+        "edgeStrong",
+        "edgeNeutral",
+        "inputEdgeIdle",
+        "quickActionDivider",
+        "textPrimary",
+        "textSecondary",
+        "textDisabled",
+        "accent",
+        "accentGradientEnd",
+        "accentStrong",
+        "focus",
+        "selection",
+        "activeInput"
+      ],
+      "properties": {
+        "pageBackground": { "$ref": "#/$defs/color" },
+        "flatPageBackground": { "$ref": "#/$defs/color" },
+        "surfaceBase": { "$ref": "#/$defs/color" },
+        "surfaceRaised": { "$ref": "#/$defs/color" },
+        "surfaceControl": { "$ref": "#/$defs/color" },
+        "surfaceInset": { "$ref": "#/$defs/color" },
+        "surfaceField": { "$ref": "#/$defs/color" },
+        "edgeStrong": { "$ref": "#/$defs/color" },
+        "edgeNeutral": { "$ref": "#/$defs/color" },
+        "inputEdgeIdle": { "$ref": "#/$defs/color" },
+        "quickActionDivider": { "$ref": "#/$defs/color" },
+        "textPrimary": { "$ref": "#/$defs/color" },
+        "textSecondary": { "$ref": "#/$defs/color" },
+        "textDisabled": { "$ref": "#/$defs/color" },
+        "accent": { "$ref": "#/$defs/color" },
+        "accentGradientEnd": { "$ref": "#/$defs/color" },
+        "accentStrong": { "$ref": "#/$defs/color" },
+        "focus": { "$ref": "#/$defs/color" },
+        "selection": { "$ref": "#/$defs/color" },
+        "activeInput": { "$ref": "#/$defs/color" }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "family": { "const": "heimdall" } } },
+      "then": { "properties": { "id": { "pattern": "^heimdall\\." } } }
+    },
+    {
+      "if": { "properties": { "family": { "const": "freya" } } },
+      "then": { "properties": { "id": { "pattern": "^freya\\." } } }
+    }
+  ],
+  "$defs": {
+    "color": {
+      "type": "string",
+      "description": "RGB or Android-style ARGB hexadecimal color.",
+      "pattern": "^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$"
+    }
+  }
+}

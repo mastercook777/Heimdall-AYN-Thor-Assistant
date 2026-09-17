@@ -57,7 +57,7 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
             testKeyboardPadModelContract();
             testQuickActionsModelContract();
             testThemeRegistryContract();
-            testDebugThemeLabContract();
+            testProfileThemeBindingContract();
             testWidgetLayoutIdentityContract();
             testCanvasRuntimeDecodePolicy();
             testCanvasExtremeAspectFillPolicy();
@@ -108,20 +108,27 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
     }
 
     public void testThemeRegistryContract() {
+        HeimdallUi.clearActiveProfileTheme();
         List<ThemeDefinition> themes = ThemeRegistry.selectableThemes();
-        assertEquals(4, themes.size());
+        assertEquals(6, themes.size());
         assertEquals(ThemeRegistry.ID_HEIMDALL_BLUE, themes.get(0).id);
         assertEquals(ThemeFamily.HEIMDALL, themes.get(0).family);
         assertEquals(ThemeRegistry.ID_HEIMDALL_AMBER, themes.get(1).id);
         assertEquals(ThemeFamily.HEIMDALL, themes.get(1).family);
-        assertEquals(ThemeRegistry.ID_FREYA_WHITE, themes.get(2).id);
-        assertEquals(ThemeFamily.FREYA, themes.get(2).family);
-        assertEquals(ThemeRegistry.ID_FREYA_ROSEWOOD, themes.get(3).id);
+        assertEquals(ThemeRegistry.ID_HEIMDALL_NOCTURNE, themes.get(2).id);
+        assertEquals(ThemeFamily.HEIMDALL, themes.get(2).family);
+        assertEquals(ThemeRegistry.ID_FREYA_WHITE, themes.get(3).id);
         assertEquals(ThemeFamily.FREYA, themes.get(3).family);
+        assertEquals(ThemeRegistry.ID_FREYA_ROSEWOOD, themes.get(4).id);
+        assertEquals(ThemeFamily.FREYA, themes.get(4).family);
+        assertEquals(ThemeRegistry.ID_FREYA_CELADON, themes.get(5).id);
+        assertEquals(ThemeFamily.FREYA, themes.get(5).family);
         assertTrue(themes.get(0).displayNameRes != 0);
         assertTrue(themes.get(1).displayNameRes != 0);
         assertTrue(themes.get(2).displayNameRes != 0);
         assertTrue(themes.get(3).displayNameRes != 0);
+        assertTrue(themes.get(4).displayNameRes != 0);
+        assertTrue(themes.get(5).displayNameRes != 0);
 
         assertEquals(ThemeRegistry.ID_HEIMDALL_BLUE,
                 ThemeRegistry.resolve(" dark ").id());
@@ -131,15 +138,19 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
                 ThemeRegistry.resolve("future.unknown").id());
         assertTrue(ThemeRegistry.isKnown(ThemeRegistry.ID_HEIMDALL_BLUE));
         assertTrue(ThemeRegistry.isKnown(ThemeRegistry.ID_HEIMDALL_AMBER));
+        assertTrue(ThemeRegistry.isKnown(ThemeRegistry.ID_HEIMDALL_NOCTURNE));
         assertTrue(ThemeRegistry.isKnown(ThemeRegistry.LEGACY_PEARL));
         assertTrue(ThemeRegistry.isKnown(ThemeRegistry.ID_FREYA_ROSEWOOD));
+        assertTrue(ThemeRegistry.isKnown(ThemeRegistry.ID_FREYA_CELADON));
         assertFalse(ThemeRegistry.isKnown("freya.rose"));
         assertFalse(ThemeRegistry.isKnown("future.unknown"));
 
         ResolvedTheme blue = ThemeRegistry.resolve(ThemeRegistry.ID_HEIMDALL_BLUE);
         ResolvedTheme amber = ThemeRegistry.resolve(ThemeRegistry.ID_HEIMDALL_AMBER);
+        ResolvedTheme nocturne = ThemeRegistry.resolve(ThemeRegistry.ID_HEIMDALL_NOCTURNE);
         ResolvedTheme white = ThemeRegistry.resolve(ThemeRegistry.ID_FREYA_WHITE);
         ResolvedTheme rosewood = ThemeRegistry.resolve(ThemeRegistry.ID_FREYA_ROSEWOOD);
+        ResolvedTheme celadon = ThemeRegistry.resolve(ThemeRegistry.ID_FREYA_CELADON);
         assertEquals(1, blue.materials.mediaFrameContentInsetDp);
         assertEquals(6, white.materials.mediaFrameContentInsetDp);
         assertEquals(0xFF4EA1FF, blue.palette.accent);
@@ -158,8 +169,32 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
         assertEquals(0xFFD99A2B, amber.palette.selection);
         assertEquals(0xFFF0B84C, amber.palette.activeInput);
         assertTrue(blue.materials == amber.materials);
+        assertEquals(0xFF0E0C10, nocturne.palette.pageBackground);
+        assertEquals(0xFF0E0C10, nocturne.palette.flatPageBackground);
+        assertEquals(0xFF16131B, nocturne.palette.surfaceBase);
+        assertEquals(0xFF231C29, nocturne.palette.surfaceRaised);
+        assertEquals(0xFF09080C, nocturne.palette.surfaceInset);
+        assertEquals(0xFF1E1823, nocturne.palette.surfaceControl);
+        assertEquals(0xFF131016, nocturne.palette.surfaceField);
+        assertEquals(0xFFF1EDF4, nocturne.palette.textPrimary);
+        assertEquals(0xFFAAA3B0, nocturne.palette.textSecondary);
+        assertEquals(0x8CAAA3B0, nocturne.palette.textDisabled);
+        assertEquals(0xFF33293C, nocturne.palette.edgeNeutral);
+        assertEquals(0xFF50385F, nocturne.palette.edgeStrong);
+        assertEquals(0xFF809D74, nocturne.palette.accent);
+        assertEquals(0xFF4F5F4C, nocturne.palette.accentGradientEnd);
+        assertEquals(0xFF9BC089, nocturne.palette.accentStrong);
+        assertEquals(0xFF9BC089, nocturne.palette.focus);
+        assertEquals(0xFF809D74, nocturne.palette.selection);
+        assertEquals(0xFFADD297, nocturne.palette.activeInput);
+        assertEquals(0xAA557A4F, nocturne.palette.inputEdgeIdle);
+        assertEquals(0x3333293C, nocturne.palette.quickActionDivider);
+        assertTrue(blue.materials == nocturne.materials);
+        assertTrue(amber.materials == nocturne.materials);
         assertTrue(blue.glassColors != null);
         assertTrue(amber.glassColors != null);
+        assertTrue(nocturne.glassColors != null);
+        assertTrue(nocturne.cncColors == null);
         assertTrue(amber.cncColors == null);
         assertEquals(0xCC111824, blue.glassColors.surface(
                 ThemeGlassColors.SYSTEM_CHROME).top);
@@ -192,6 +227,34 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
                 ThemeGlassColors.SETTINGS_CONTENT).top);
         assertEquals(0xFF303538, amber.glassColors.surface(
                 ThemeGlassColors.SETTINGS_CONTENT).edgeTop);
+        assertEquals(0xCC231C29, nocturne.glassColors.surface(
+                ThemeGlassColors.SYSTEM_CHROME).top);
+        assertEquals(0xA81E1823, nocturne.glassColors.surface(
+                ThemeGlassColors.QUICK_ACTIONS).top);
+        assertEquals(0xC0231C29, nocturne.glassColors.surface(
+                ThemeGlassColors.MACRO_PRIMARY).top);
+        assertEquals(0xD0131016, nocturne.glassColors.surface(
+                ThemeGlassColors.MACRO_PRIMARY).bottom);
+        assertEquals(0x88809D74, nocturne.glassColors.surface(
+                ThemeGlassColors.MACRO_PRIMARY).edgeTop);
+        assertEquals(0xFF9BC089, nocturne.glassColors.surface(
+                ThemeGlassColors.MACRO_FOCUSED).edgeTop);
+        assertEquals(0xFF131016, nocturne.glassColors.surface(
+                ThemeGlassColors.SETTINGS_CONTENT).top);
+        assertEquals(0xFF33293C, nocturne.glassColors.surface(
+                ThemeGlassColors.SETTINGS_CONTENT).edgeTop);
+        assertEquals(0xFF809D74, nocturne.componentColors.quickActionIconIdle);
+        assertEquals(0xFF809D74, nocturne.componentColors.quickVolumeThumbIdle);
+        assertEquals(0xFF1E1823, nocturne.componentColors.inputFaceIdleTop);
+        assertEquals(0xFF131016, nocturne.componentColors.inputFaceIdleBottom);
+        assertEquals(nocturne.componentColors.inputFaceIdleTop,
+                nocturne.componentColors.inputFaceActiveTop);
+        assertEquals(nocturne.componentColors.inputFaceIdleBottom,
+                nocturne.componentColors.inputFaceActiveBottom);
+        assertEquals(0x6633293C, nocturne.glassColors.rightStickWellEdge);
+        assertEquals(0xAAADD297, nocturne.glassColors.rightStickCapActiveEdge);
+        assertEquals(0xFF809D74, nocturne.componentColors.batteryFill);
+        assertEquals(0xFFADD297, nocturne.componentColors.keyboard.lockedText);
         assertEquals(0xFFF08A2A, white.palette.accent);
         assertEquals(0xFFF1E7E2, rosewood.palette.pageBackground);
         assertEquals(0xFFF6EEEA, rosewood.palette.surfaceBase);
@@ -201,8 +264,31 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
         assertEquals(0xFFC65D7B, rosewood.palette.accent);
         assertEquals(0xFFD16A87, rosewood.palette.focus);
         assertEquals(0xFFD97993, rosewood.palette.activeInput);
+        assertEquals(0xFFEEEAE3, celadon.palette.pageBackground);
+        assertEquals(0xFFEEEAE3, celadon.palette.flatPageBackground);
+        assertEquals(0xFFECE8E1, celadon.palette.surfaceBase);
+        assertEquals(0xFFF7F4EE, celadon.palette.surfaceRaised);
+        assertEquals(0xFFD1D1C7, celadon.palette.surfaceInset);
+        assertEquals(0xFFE6E2DA, celadon.palette.surfaceControl);
+        assertEquals(0xFFE1DED7, celadon.palette.surfaceField);
+        assertEquals(0xFF2E3431, celadon.palette.textPrimary);
+        assertEquals(0xFF68716C, celadon.palette.textSecondary);
+        assertEquals(0x8C68716C, celadon.palette.textDisabled);
+        assertEquals(0xFFB7BEB9, celadon.palette.edgeNeutral);
+        assertEquals(0xFF8F9A95, celadon.palette.edgeStrong);
+        assertEquals(0xFF6F947F, celadon.palette.accent);
+        assertEquals(0xFF9EB4A8, celadon.palette.accentGradientEnd);
+        assertEquals(0xFF557B67, celadon.palette.accentStrong);
+        assertEquals(0xFF557B67, celadon.palette.focus);
+        assertEquals(0xFF6F947F, celadon.palette.selection);
+        assertEquals(0xFF416B57, celadon.palette.activeInput);
+        assertEquals(0xAA829B8E, celadon.palette.inputEdgeIdle);
+        assertEquals(0x33949C97, celadon.palette.quickActionDivider);
         assertTrue(white.materials == rosewood.materials);
+        assertTrue(white.materials == celadon.materials);
+        assertTrue(rosewood.materials == celadon.materials);
         assertTrue(white.glassColors == null);
+        assertTrue(celadon.glassColors == null);
         ThemeCncColors.Surface whiteRaised = white.cncColors.surface(ThemeCncColors.RAISED);
         assertEquals(0xFFF7F6F4, whiteRaised.faceTop);
         assertEquals(0xFFF0F1EF, whiteRaised.faceBottom);
@@ -236,6 +322,27 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
         assertEquals(rosewood.componentColors.inputFaceIdleBottom,
                 rosewood.componentColors.inputFaceActiveBottom);
         assertEquals(0x2256443F, rosewood.componentColors.inputDepthOuter);
+        assertEquals(0xFFECE8E1, celadon.cncColors.surface(
+                ThemeCncColors.FLUSH).roleColor);
+        assertEquals(0xFFF7F4EE, celadon.cncColors.surface(
+                ThemeCncColors.RAISED).roleColor);
+        assertEquals(0xFFD1D1C7, celadon.cncColors.surface(
+                ThemeCncColors.INSET).roleColor);
+        assertEquals(0xFFE6E2DA, celadon.cncColors.surface(
+                ThemeCncColors.CONTROL).roleColor);
+        assertEquals(0xFFE1DED7, celadon.cncColors.surface(
+                ThemeCncColors.FIELD).roleColor);
+        assertEquals(0xFF68716C, celadon.componentColors.batteryShell);
+        assertEquals(0xFF6F947F, celadon.componentColors.batteryFill);
+        assertEquals(0xFFF7F4EE, celadon.componentColors.batteryChargingBolt);
+        assertEquals(0xFF71847A, celadon.componentColors.inputFaceIdleTop);
+        assertEquals(0xFF586A61, celadon.componentColors.inputFaceIdleBottom);
+        assertEquals(celadon.componentColors.inputFaceIdleTop,
+                celadon.componentColors.inputFaceActiveTop);
+        assertEquals(celadon.componentColors.inputFaceIdleBottom,
+                celadon.componentColors.inputFaceActiveBottom);
+        assertEquals(0x22545F5A, celadon.componentColors.inputDepthOuter);
+        assertEquals(0xFF557B67, celadon.componentColors.keyboard.lockedText);
         assertEquals(0xE04EA1FF, blue.componentColors.dockIndicator);
         assertEquals(0xE0F08A2A, white.componentColors.dockIndicator);
         assertEquals(0xFF18212B, blue.componentColors.flatSurfaceFill);
@@ -278,8 +385,18 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
                 amber.semanticStates.error.foreground);
         assertEquals(blue.semanticStates.recording.foreground,
                 amber.semanticStates.recording.foreground);
+        assertEquals(blue.semanticStates.success.foreground,
+                nocturne.semanticStates.success.foreground);
+        assertEquals(blue.semanticStates.warning.foreground,
+                nocturne.semanticStates.warning.foreground);
+        assertEquals(blue.semanticStates.error.foreground,
+                nocturne.semanticStates.error.foreground);
+        assertEquals(blue.semanticStates.recording.foreground,
+                nocturne.semanticStates.recording.foreground);
         assertFalse(amber.palette.accent == amber.semanticStates.error.foreground);
         assertFalse(amber.palette.accent == amber.semanticStates.recording.foreground);
+        assertFalse(nocturne.palette.accent == nocturne.semanticStates.error.foreground);
+        assertFalse(nocturne.palette.accent == nocturne.semanticStates.recording.foreground);
         assertEquals(0xFF3F8A66, rosewood.semanticStates.success.foreground);
         assertEquals(0xFFB4772E, rosewood.semanticStates.warning.foreground);
         assertEquals(0xFFC8493E, rosewood.semanticStates.error.foreground);
@@ -288,6 +405,18 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
         assertFalse(rosewood.palette.accent == rosewood.semanticStates.recording.foreground);
         assertFalse(rosewood.semanticStates.error.foreground
                 == rosewood.semanticStates.recording.foreground);
+        assertEquals(rosewood.semanticStates.success.foreground,
+                celadon.semanticStates.success.foreground);
+        assertEquals(rosewood.semanticStates.warning.foreground,
+                celadon.semanticStates.warning.foreground);
+        assertEquals(rosewood.semanticStates.error.foreground,
+                celadon.semanticStates.error.foreground);
+        assertEquals(rosewood.semanticStates.recording.foreground,
+                celadon.semanticStates.recording.foreground);
+        assertFalse(celadon.palette.accent == celadon.semanticStates.error.foreground);
+        assertFalse(celadon.palette.accent == celadon.semanticStates.recording.foreground);
+        assertFalse(celadon.semanticStates.error.foreground
+                == celadon.semanticStates.recording.foreground);
 
         android.content.SharedPreferences preferences =
                 target.getSharedPreferences("heimdall_ui", Context.MODE_PRIVATE);
@@ -315,7 +444,16 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
             HeimdallUi.setTheme(target, ThemeRegistry.ID_HEIMDALL_AMBER);
             assertEquals(ThemeRegistry.ID_HEIMDALL_AMBER,
                     preferences.getString("theme", null));
+
+            HeimdallUi.setTheme(target, ThemeRegistry.ID_HEIMDALL_NOCTURNE);
+            assertEquals(ThemeRegistry.ID_HEIMDALL_NOCTURNE,
+                    preferences.getString("theme", null));
+
+            HeimdallUi.setTheme(target, ThemeRegistry.ID_FREYA_CELADON);
+            assertEquals(ThemeRegistry.ID_FREYA_CELADON,
+                    preferences.getString("theme", null));
         } finally {
+            HeimdallUi.clearActiveProfileTheme();
             android.content.SharedPreferences.Editor restore = preferences.edit();
             if (hadTheme) {
                 restore.putString("theme", previousTheme);
@@ -326,20 +464,56 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
         }
     }
 
-    public void testDebugThemeLabContract() {
+    public void testProfileThemeBindingContract() throws Exception {
+        JSONObject legacyJson = new JSONObject();
+        legacyJson.put("name", "Legacy theme");
+        legacyJson.put("mode", "generic");
+        GameProfile legacy = GameProfile.fromJson(legacyJson);
+        assertEquals("", legacy.normalizedThemeId());
+        assertFalse(legacy.toJson().has("themeId"));
+        assertEquals(ThemeRegistry.ID_FREYA_WHITE,
+                legacy.effectiveThemeId(ThemeRegistry.LEGACY_PEARL));
+
+        legacy.setThemeId(ThemeRegistry.ID_FREYA_CELADON);
+        JSONObject saved = legacy.toJson();
+        assertEquals(ThemeRegistry.ID_FREYA_CELADON, saved.getString("themeId"));
+        assertEquals(ThemeRegistry.ID_FREYA_CELADON,
+                GameProfile.fromJson(saved).normalizedThemeId());
+
+        legacy.setThemeId(ThemeRegistry.LEGACY_PEARL);
+        assertEquals(ThemeRegistry.ID_FREYA_WHITE, legacy.normalizedThemeId());
+        legacy.setThemeId("future.unknown");
+        assertEquals("", legacy.normalizedThemeId());
+
         android.content.SharedPreferences preferences =
                 target.getSharedPreferences("heimdall_ui", Context.MODE_PRIVATE);
-        String before = preferences.getString("theme", null);
-        String alternate = ThemeRegistry.ID_HEIMDALL_AMBER;
-        final DebugThemeLabView[] holder = new DebugThemeLabView[1];
+        boolean hadTheme = preferences.contains("theme");
+        String previousTheme = preferences.getString("theme", null);
+        try {
+            HeimdallUi.clearActiveProfileTheme();
+            assertTrue(preferences.edit().putString("theme",
+                    ThemeRegistry.ID_HEIMDALL_BLUE).commit());
+            assertEquals(ThemeRegistry.ID_HEIMDALL_BLUE, HeimdallUi.globalTheme(target));
+            assertEquals(ThemeRegistry.ID_HEIMDALL_BLUE, HeimdallUi.theme(target));
 
-        runOnMainSync(() -> {
-            holder[0] = new DebugThemeLabView(target);
-            holder[0].selectThemeForTesting(alternate);
-        });
+            HeimdallUi.setActiveProfileTheme(ThemeRegistry.ID_FREYA_CELADON);
+            assertEquals(ThemeRegistry.ID_FREYA_CELADON, HeimdallUi.theme(target));
+            assertEquals(ThemeRegistry.ID_HEIMDALL_BLUE, HeimdallUi.globalTheme(target));
+            assertEquals(ThemeRegistry.ID_HEIMDALL_BLUE,
+                    preferences.getString("theme", null));
 
-        assertEquals(alternate, holder[0].selectedThemeIdForTesting());
-        assertEquals(before, preferences.getString("theme", null));
+            HeimdallUi.clearActiveProfileTheme();
+            assertEquals(ThemeRegistry.ID_HEIMDALL_BLUE, HeimdallUi.theme(target));
+        } finally {
+            HeimdallUi.clearActiveProfileTheme();
+            android.content.SharedPreferences.Editor restore = preferences.edit();
+            if (hadTheme) {
+                restore.putString("theme", previousTheme);
+            } else {
+                restore.remove("theme");
+            }
+            assertTrue(restore.commit());
+        }
     }
 
     public void testInteractiveMapBrowserSettingsContract() throws Exception {
@@ -1818,6 +1992,7 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
         macro.iconKey = "user:" + macroSource.getName();
         GameProfile profile = new GameProfile("中文 Profile", "通用", "",
                 Collections.singletonList(macro));
+        profile.setThemeId(ThemeRegistry.ID_FREYA_CELADON);
         profile.protectThorMappingDuringEnhancedTouch = false;
         profile.touchpadSettings.mode = TouchpadSettings.MODE_VIRTUAL_MOUSE;
         profile.touchpadSettings.virtualMouseSensitivity = 1.35f;
@@ -1870,6 +2045,7 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
 
         GameProfile restored = installed.profiles.get(0);
         assertEquals("中文 Profile", restored.name);
+        assertEquals(ThemeRegistry.ID_FREYA_CELADON, restored.normalizedThemeId());
         assertFalse(restored.protectThorMappingDuringEnhancedTouch);
         assertEquals(TouchpadSettings.MODE_VIRTUAL_MOUSE,
                 restored.touchpadSettings.mode);
@@ -1947,6 +2123,7 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
         assertNotNull(result.prepared);
         assertTrue(result.prepared.legacyJson);
         assertEquals("旧版 Profile", result.prepared.profiles.get(0).name);
+        assertEquals("", result.prepared.profiles.get(0).normalizedThemeId());
         assertTrue(result.prepared.profiles.get(0)
                 .protectThorMappingDuringEnhancedTouch);
         TouchpadSettings restoredTouchpad = result.prepared.profiles.get(0).touchpadSettings;
