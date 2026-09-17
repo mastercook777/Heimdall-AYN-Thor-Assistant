@@ -60,6 +60,7 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
             testDebugThemeLabContract();
             testWidgetLayoutIdentityContract();
             testCanvasRuntimeDecodePolicy();
+            testCanvasExtremeAspectFillPolicy();
             testCanvasAnimationContract();
             testProfileIconDecodePolicy();
             testUserMacroIconDeletionContract();
@@ -108,13 +109,19 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
 
     public void testThemeRegistryContract() {
         List<ThemeDefinition> themes = ThemeRegistry.selectableThemes();
-        assertEquals(2, themes.size());
+        assertEquals(4, themes.size());
         assertEquals(ThemeRegistry.ID_HEIMDALL_BLUE, themes.get(0).id);
         assertEquals(ThemeFamily.HEIMDALL, themes.get(0).family);
-        assertEquals(ThemeRegistry.ID_FREYA_WHITE, themes.get(1).id);
-        assertEquals(ThemeFamily.FREYA, themes.get(1).family);
+        assertEquals(ThemeRegistry.ID_HEIMDALL_AMBER, themes.get(1).id);
+        assertEquals(ThemeFamily.HEIMDALL, themes.get(1).family);
+        assertEquals(ThemeRegistry.ID_FREYA_WHITE, themes.get(2).id);
+        assertEquals(ThemeFamily.FREYA, themes.get(2).family);
+        assertEquals(ThemeRegistry.ID_FREYA_ROSEWOOD, themes.get(3).id);
+        assertEquals(ThemeFamily.FREYA, themes.get(3).family);
         assertTrue(themes.get(0).displayNameRes != 0);
         assertTrue(themes.get(1).displayNameRes != 0);
+        assertTrue(themes.get(2).displayNameRes != 0);
+        assertTrue(themes.get(3).displayNameRes != 0);
 
         assertEquals(ThemeRegistry.ID_HEIMDALL_BLUE,
                 ThemeRegistry.resolve(" dark ").id());
@@ -123,15 +130,112 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
         assertEquals(ThemeRegistry.ID_HEIMDALL_BLUE,
                 ThemeRegistry.resolve("future.unknown").id());
         assertTrue(ThemeRegistry.isKnown(ThemeRegistry.ID_HEIMDALL_BLUE));
+        assertTrue(ThemeRegistry.isKnown(ThemeRegistry.ID_HEIMDALL_AMBER));
         assertTrue(ThemeRegistry.isKnown(ThemeRegistry.LEGACY_PEARL));
+        assertTrue(ThemeRegistry.isKnown(ThemeRegistry.ID_FREYA_ROSEWOOD));
+        assertFalse(ThemeRegistry.isKnown("freya.rose"));
         assertFalse(ThemeRegistry.isKnown("future.unknown"));
 
         ResolvedTheme blue = ThemeRegistry.resolve(ThemeRegistry.ID_HEIMDALL_BLUE);
+        ResolvedTheme amber = ThemeRegistry.resolve(ThemeRegistry.ID_HEIMDALL_AMBER);
         ResolvedTheme white = ThemeRegistry.resolve(ThemeRegistry.ID_FREYA_WHITE);
+        ResolvedTheme rosewood = ThemeRegistry.resolve(ThemeRegistry.ID_FREYA_ROSEWOOD);
         assertEquals(1, blue.materials.mediaFrameContentInsetDp);
         assertEquals(6, white.materials.mediaFrameContentInsetDp);
         assertEquals(0xFF4EA1FF, blue.palette.accent);
+        assertEquals(0xFF090B0D, amber.palette.pageBackground);
+        assertEquals(0xFF090B0D, amber.palette.surfaceBase);
+        assertEquals(0xFF121619, amber.palette.surfaceRaised);
+        assertEquals(0xFF07090A, amber.palette.surfaceInset);
+        assertEquals(0xFF101417, amber.palette.surfaceControl);
+        assertEquals(0xFF0C1013, amber.palette.surfaceField);
+        assertEquals(0xFFEEECE6, amber.palette.textPrimary);
+        assertEquals(0xFFA5A59F, amber.palette.textSecondary);
+        assertEquals(0xFF303538, amber.palette.edgeNeutral);
+        assertEquals(0xFF4B4B45, amber.palette.edgeStrong);
+        assertEquals(0xFFD99A2B, amber.palette.accent);
+        assertEquals(0xFFE7A436, amber.palette.focus);
+        assertEquals(0xFFD99A2B, amber.palette.selection);
+        assertEquals(0xFFF0B84C, amber.palette.activeInput);
+        assertTrue(blue.materials == amber.materials);
+        assertTrue(blue.glassColors != null);
+        assertTrue(amber.glassColors != null);
+        assertTrue(amber.cncColors == null);
+        assertEquals(0xCC111824, blue.glassColors.surface(
+                ThemeGlassColors.SYSTEM_CHROME).top);
+        assertEquals(0xCC121619, amber.glassColors.surface(
+                ThemeGlassColors.SYSTEM_CHROME).top);
+        assertEquals(0xA8101417, amber.glassColors.surface(
+                ThemeGlassColors.QUICK_ACTIONS).top);
+        assertEquals(0xC0121619, amber.glassColors.surface(
+                ThemeGlassColors.MACRO_PRIMARY).top);
+        assertEquals(0xD00C1013, amber.glassColors.surface(
+                ThemeGlassColors.MACRO_PRIMARY).bottom);
+        assertEquals(0x88D99A2B, amber.glassColors.surface(
+                ThemeGlassColors.MACRO_PRIMARY).edgeTop);
+        assertEquals(0x44303538, amber.glassColors.surface(
+                ThemeGlassColors.MACRO_PRIMARY).edgeBottom);
+        assertEquals(0xFFE7A436, amber.glassColors.surface(
+                ThemeGlassColors.MACRO_FOCUSED).edgeTop);
+        assertEquals(0x760C1013, amber.glassColors.surface(
+                ThemeGlassColors.FIELD).top);
+        assertEquals(0xFFD99A2B, amber.componentColors.quickVolumeThumbIdle);
+        assertEquals(0xFF101417, amber.componentColors.inputFaceIdleTop);
+        assertEquals(0xFF0C1013, amber.componentColors.inputFaceIdleBottom);
+        assertEquals(0x66303538, amber.glassColors.rightStickWellEdge);
+        assertEquals(0xAAF0B84C, amber.glassColors.rightStickCapActiveEdge);
+        assertEquals(0xFF0B1018, blue.glassColors.surface(
+                ThemeGlassColors.SETTINGS_CONTENT).top);
+        assertEquals(0xFF2B3748, blue.glassColors.surface(
+                ThemeGlassColors.SETTINGS_CONTENT).edgeTop);
+        assertEquals(0xFF0C1013, amber.glassColors.surface(
+                ThemeGlassColors.SETTINGS_CONTENT).top);
+        assertEquals(0xFF303538, amber.glassColors.surface(
+                ThemeGlassColors.SETTINGS_CONTENT).edgeTop);
         assertEquals(0xFFF08A2A, white.palette.accent);
+        assertEquals(0xFFF1E7E2, rosewood.palette.pageBackground);
+        assertEquals(0xFFF6EEEA, rosewood.palette.surfaceBase);
+        assertEquals(0xFFFBF5F1, rosewood.palette.surfaceRaised);
+        assertEquals(0xFFD9CCC6, rosewood.palette.surfaceInset);
+        assertEquals(0xFF49332D, rosewood.palette.textPrimary);
+        assertEquals(0xFFC65D7B, rosewood.palette.accent);
+        assertEquals(0xFFD16A87, rosewood.palette.focus);
+        assertEquals(0xFFD97993, rosewood.palette.activeInput);
+        assertTrue(white.materials == rosewood.materials);
+        assertTrue(white.glassColors == null);
+        ThemeCncColors.Surface whiteRaised = white.cncColors.surface(ThemeCncColors.RAISED);
+        assertEquals(0xFFF7F6F4, whiteRaised.faceTop);
+        assertEquals(0xFFF0F1EF, whiteRaised.faceBottom);
+        assertEquals(0xFFF9FAF9, whiteRaised.shellColors()[0]);
+        assertEquals(0xFFFFFFFF, whiteRaised.rimColors()[0]);
+        assertEquals(0xFFFFC17A, white.componentColors.quickVolumeThumbPressed);
+        assertEquals(0xFFF08A2A, white.componentColors.batteryFill);
+        assertEquals(0xFFFEF4E8, white.componentColors.batteryChargingBolt);
+        assertEquals(0xFF717B81, white.componentColors.inputFaceIdleTop);
+        assertEquals(0xFF566168, white.componentColors.inputFaceIdleBottom);
+        assertEquals(0xFF7C868C, white.componentColors.inputFaceActiveTop);
+        assertEquals(0xFF626C72, white.componentColors.inputFaceActiveBottom);
+        assertEquals(0x22404A52, white.componentColors.inputDepthOuter);
+        assertEquals(0xFFFBFAF8, white.componentColors.keyboard.keycapFaceTop);
+        assertEquals(0xFFF5F4F1, white.componentColors.keyboard.keycapFaceBottom);
+        assertEquals(0xFFE8DDD8, rosewood.cncColors.surface(
+                ThemeCncColors.SHALLOW_INSET).roleColor);
+        assertEquals(0xFFF4ECE8, rosewood.cncColors.surface(
+                ThemeCncColors.CONTROL).roleColor);
+        assertEquals(0xFFE9DDD7, rosewood.cncColors.surface(
+                ThemeCncColors.FIELD).roleColor);
+        assertEquals(0xFFD5C7C0, rosewood.cncColors.surface(
+                ThemeCncColors.INPUT_FRAME).roleColor);
+        assertEquals(0xFF76574D, rosewood.componentColors.batteryShell);
+        assertEquals(0xFFC65D7B, rosewood.componentColors.batteryFill);
+        assertEquals(0xFFFBF5F1, rosewood.componentColors.batteryChargingBolt);
+        assertEquals(0xFF806F69, rosewood.componentColors.inputFaceIdleTop);
+        assertEquals(0xFF66544E, rosewood.componentColors.inputFaceIdleBottom);
+        assertEquals(rosewood.componentColors.inputFaceIdleTop,
+                rosewood.componentColors.inputFaceActiveTop);
+        assertEquals(rosewood.componentColors.inputFaceIdleBottom,
+                rosewood.componentColors.inputFaceActiveBottom);
+        assertEquals(0x2256443F, rosewood.componentColors.inputDepthOuter);
         assertEquals(0xE04EA1FF, blue.componentColors.dockIndicator);
         assertEquals(0xE0F08A2A, white.componentColors.dockIndicator);
         assertEquals(0xFF18212B, blue.componentColors.flatSurfaceFill);
@@ -147,8 +251,10 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
         assertEquals(0xAA70B7FF, blue.componentColors.canvasPressedEdge);
         assertEquals(0xC8F08A2A, white.componentColors.canvasPressedEdge);
         assertEquals(0xFF5FD18A, blue.componentColors.statusLampSuccess);
+        assertEquals(0xFF5FD18A, amber.componentColors.statusLampSuccess);
         assertEquals(0xFF5FD18A, white.componentColors.statusLampSuccess);
         assertEquals(0xFFFF6B6B, blue.componentColors.statusLampError);
+        assertEquals(0xFFFF6B6B, amber.componentColors.statusLampError);
         assertEquals(0xFFFF6B6B, white.componentColors.statusLampError);
         assertEquals(0xFFE6EDF3, blue.componentColors.keyboard.lockedText);
         assertEquals(0xFFE77F1F, white.componentColors.keyboard.lockedText);
@@ -164,6 +270,24 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
                 == blue.semanticStates.recording.foreground);
         assertFalse(white.semanticStates.error.foreground
                 == white.semanticStates.recording.foreground);
+        assertEquals(blue.semanticStates.success.foreground,
+                amber.semanticStates.success.foreground);
+        assertEquals(blue.semanticStates.warning.foreground,
+                amber.semanticStates.warning.foreground);
+        assertEquals(blue.semanticStates.error.foreground,
+                amber.semanticStates.error.foreground);
+        assertEquals(blue.semanticStates.recording.foreground,
+                amber.semanticStates.recording.foreground);
+        assertFalse(amber.palette.accent == amber.semanticStates.error.foreground);
+        assertFalse(amber.palette.accent == amber.semanticStates.recording.foreground);
+        assertEquals(0xFF3F8A66, rosewood.semanticStates.success.foreground);
+        assertEquals(0xFFB4772E, rosewood.semanticStates.warning.foreground);
+        assertEquals(0xFFC8493E, rosewood.semanticStates.error.foreground);
+        assertEquals(0xFFD43D4B, rosewood.semanticStates.recording.foreground);
+        assertFalse(rosewood.palette.accent == rosewood.semanticStates.error.foreground);
+        assertFalse(rosewood.palette.accent == rosewood.semanticStates.recording.foreground);
+        assertFalse(rosewood.semanticStates.error.foreground
+                == rosewood.semanticStates.recording.foreground);
 
         android.content.SharedPreferences preferences =
                 target.getSharedPreferences("heimdall_ui", Context.MODE_PRIVATE);
@@ -183,6 +307,14 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
             HeimdallUi.setTheme(target, ThemeRegistry.LEGACY_PEARL);
             assertEquals(ThemeRegistry.ID_FREYA_WHITE,
                     preferences.getString("theme", null));
+
+            HeimdallUi.setTheme(target, ThemeRegistry.ID_FREYA_ROSEWOOD);
+            assertEquals(ThemeRegistry.ID_FREYA_ROSEWOOD,
+                    preferences.getString("theme", null));
+
+            HeimdallUi.setTheme(target, ThemeRegistry.ID_HEIMDALL_AMBER);
+            assertEquals(ThemeRegistry.ID_HEIMDALL_AMBER,
+                    preferences.getString("theme", null));
         } finally {
             android.content.SharedPreferences.Editor restore = preferences.edit();
             if (hadTheme) {
@@ -198,9 +330,7 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
         android.content.SharedPreferences preferences =
                 target.getSharedPreferences("heimdall_ui", Context.MODE_PRIVATE);
         String before = preferences.getString("theme", null);
-        String alternate = ThemeRegistry.ID_HEIMDALL_BLUE.equals(
-                ThemeRegistry.canonicalId(before))
-                ? ThemeRegistry.ID_FREYA_WHITE : ThemeRegistry.ID_HEIMDALL_BLUE;
+        String alternate = ThemeRegistry.ID_HEIMDALL_AMBER;
         final DebugThemeLabView[] holder = new DebugThemeLabView[1];
 
         runOnMainSync(() -> {
@@ -562,8 +692,34 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
         assertEquals(2000, CanvasImageLoader.runtimeDecodeMaxSide(250, 200, 4f));
         assertEquals(2048, CanvasImageLoader.runtimeDecodeMaxSide(600, 400, 2f));
         assertEquals(2048, CanvasImageLoader.runtimeDecodeMaxSide(250, 200, 8f));
+        assertEquals(2048, CanvasImageLoader.runtimeDecodeMaxSide(250, 200, 24f));
         assertEquals(1200, CanvasImageLoader.runtimeDecodeMaxSide(
                 600, 400, Float.NaN));
+    }
+
+    public void testCanvasExtremeAspectFillPolicy() throws Exception {
+        assertEquals(Float.valueOf(1f), Float.valueOf(
+                CanvasCompositionMath.coverZoom(1200, 100, 1200, 100)));
+        assertEquals(Float.valueOf(12f), Float.valueOf(
+                CanvasCompositionMath.coverZoom(1200, 100, 1000, 1000)));
+        assertEquals(Float.valueOf(24f), Float.valueOf(
+                CanvasCompositionMath.coverZoom(1200, 100, 100, 200)));
+        assertEquals(Float.valueOf(CanvasConfig.MAX_GESTURE_ZOOM), Float.valueOf(
+                CanvasCompositionMath.gestureMaximumZoom(1200, 100, 1200, 100)));
+        assertEquals(Float.valueOf(24f), Float.valueOf(
+                CanvasCompositionMath.gestureMaximumZoom(1200, 100, 1000, 1000)));
+        assertEquals(Float.valueOf(48f), Float.valueOf(
+                CanvasCompositionMath.gestureMaximumZoom(1200, 100, 100, 200)));
+
+        CanvasConfig extremeFill = new CanvasConfig();
+        extremeFill.zoom = 24f;
+        CanvasConfig restored = CanvasConfig.fromJson(extremeFill.toJson());
+        assertEquals(Float.valueOf(24f), Float.valueOf(restored.zoom));
+
+        extremeFill.zoom = Float.MAX_VALUE;
+        extremeFill.normalize();
+        assertEquals(Float.valueOf(CanvasConfig.MAX_COMPOSITION_ZOOM),
+                Float.valueOf(extremeFill.zoom));
     }
 
     public void testAdvancedControlsStateContract() {

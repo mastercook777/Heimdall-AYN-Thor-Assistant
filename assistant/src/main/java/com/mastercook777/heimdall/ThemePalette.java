@@ -7,6 +7,8 @@ final class ThemePalette {
     final int surfaceBase;
     final int surfaceRaised;
     final int surfaceInset;
+    final int surfaceControl;
+    final int surfaceField;
     final int textPrimary;
     final int textSecondary;
     final int textDisabled;
@@ -32,6 +34,7 @@ final class ThemePalette {
 
     ThemePalette(int pageBackground, int flatPageBackground,
             int surfaceBase, int surfaceRaised, int surfaceInset,
+            int surfaceControl, int surfaceField,
             int textPrimary, int textSecondary, int textDisabled,
             int edgeNeutral, int edgeStrong,
             int accent, int accentStrong, int accentEdge, int accentGradientEnd,
@@ -45,6 +48,8 @@ final class ThemePalette {
         this.surfaceBase = surfaceBase;
         this.surfaceRaised = surfaceRaised;
         this.surfaceInset = surfaceInset;
+        this.surfaceControl = surfaceControl;
+        this.surfaceField = surfaceField;
         this.textPrimary = textPrimary;
         this.textSecondary = textSecondary;
         this.textDisabled = textDisabled;

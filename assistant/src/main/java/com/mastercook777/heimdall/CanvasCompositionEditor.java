@@ -48,8 +48,8 @@ final class CanvasCompositionEditor extends LinearLayout {
         setPadding(dp(12), dp(10), dp(12), dp(10));
         setBackground(HeimdallUi.isFreyaFamily(context)
                 ? HeimdallUi.cncFlush(context, HeimdallUi.RADIUS_PANEL)
-                : HeimdallUi.glass(context, 0xFF0B111B, 0xFF070A10,
-                        0x886A829C, 0x44344150, HeimdallUi.RADIUS_PANEL, 2));
+                : HeimdallUi.glassSurface(context, ThemeGlassColors.OVERLAY,
+                        HeimdallUi.RADIUS_PANEL, 2));
 
         TextView title = new TextView(context);
         title.setText(R.string.canvas_edit_composition);
@@ -72,11 +72,10 @@ final class CanvasCompositionEditor extends LinearLayout {
         referenceFrame.setBackground(HeimdallUi.isFreyaFamily(context)
                 ? HeimdallUi.cncInputFrame(context, HeimdallUi.RADIUS_MODULE, circular)
                 : circular
-                        ? HeimdallUi.glassCircle(context, 0xB20C131D, 0xD2070B11,
-                                0x555F7C9A, 0x33344150, HeimdallUi.STROKE_HAIRLINE)
-                        : HeimdallUi.glass(context, 0xB20C131D, 0xD2070B11,
-                                0x555F7C9A, 0x33344150, HeimdallUi.RADIUS_MODULE,
-                                HeimdallUi.STROKE_HAIRLINE));
+                        ? HeimdallUi.glassCircleSurface(context,
+                                ThemeGlassColors.MEDIA_FRAME, HeimdallUi.STROKE_HAIRLINE)
+                        : HeimdallUi.glassSurface(context, ThemeGlassColors.MEDIA_FRAME,
+                                HeimdallUi.RADIUS_MODULE, HeimdallUi.STROKE_HAIRLINE));
         FrameLayout.LayoutParams referenceParams = new FrameLayout.LayoutParams(
                 -2, -2, Gravity.CENTER);
         previewStage.addView(referenceFrame, referenceParams);

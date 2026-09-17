@@ -65,8 +65,9 @@ final class CanvasVideoView extends FrameLayout implements CanvasCompositionSurf
                         }
                         float minimum = Math.max(0.0001f,
                                 fitScale * CanvasConfig.MIN_ZOOM);
-                        float maximum = Math.max(minimum,
-                                fitScale * CanvasConfig.MAX_ZOOM);
+                        float maximumZoom = CanvasCompositionMath.gestureMaximumZoom(
+                                getWidth(), getHeight(), videoWidth, videoHeight);
+                        float maximum = Math.max(minimum, fitScale * maximumZoom);
                         float target = clamp(currentScale * detector.getScaleFactor(),
                                 minimum, maximum);
                         float factor = target / Math.max(0.0001f, currentScale);
@@ -151,10 +152,8 @@ final class CanvasVideoView extends FrameLayout implements CanvasCompositionSurf
         if (!isMediaReady()) {
             return;
         }
-        float fillScale = Math.max(getWidth() / (float) videoWidth,
-                getHeight() / (float) videoHeight);
-        setCenteredZoom(clamp(fillScale / Math.max(0.0001f, fitScale),
-                CanvasConfig.MIN_ZOOM, CanvasConfig.MAX_ZOOM));
+        setCenteredZoom(CanvasCompositionMath.coverZoom(
+                getWidth(), getHeight(), videoWidth, videoHeight));
     }
 
     @Override
@@ -339,8 +338,7 @@ final class CanvasVideoView extends FrameLayout implements CanvasCompositionSurf
             fillImage();
             return;
         }
-        currentScale = fitScale * clamp(composition.zoom,
-                CanvasConfig.MIN_ZOOM, CanvasConfig.MAX_ZOOM);
+        currentScale = fitScale * CanvasConfig.normalizeZoom(composition.zoom);
         contentX = getWidth() * 0.5f
                 - composition.focusX * videoWidth * currentScale;
         contentY = getHeight() * 0.5f
@@ -356,7 +354,7 @@ final class CanvasVideoView extends FrameLayout implements CanvasCompositionSurf
         }
         composition.focusX = 0.5f;
         composition.focusY = 0.5f;
-        composition.zoom = clamp(zoom, CanvasConfig.MIN_ZOOM, CanvasConfig.MAX_ZOOM);
+        composition.zoom = CanvasConfig.normalizeZoom(zoom);
         applyStoredComposition();
     }
 
@@ -386,8 +384,7 @@ final class CanvasVideoView extends FrameLayout implements CanvasCompositionSurf
                 / (videoWidth * currentScale), 0f, 1f);
         composition.focusY = clamp((getHeight() * 0.5f - contentY)
                 / (videoHeight * currentScale), 0f, 1f);
-        composition.zoom = clamp(currentScale / fitScale,
-                CanvasConfig.MIN_ZOOM, CanvasConfig.MAX_ZOOM);
+        composition.zoom = CanvasConfig.normalizeZoom(currentScale / fitScale);
     }
 
     private void applyTransform() {

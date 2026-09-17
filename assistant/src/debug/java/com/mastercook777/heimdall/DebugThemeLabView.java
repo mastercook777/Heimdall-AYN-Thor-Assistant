@@ -103,12 +103,13 @@ final class DebugThemeLabView extends LinearLayout {
 
         addSection("Core palette");
         addSwatchGrid(new String[]{
-                "Page", "Surface", "Raised", "Inset", "Text", "Muted",
+                "Page", "Surface", "Raised", "Inset", "Control", "Field", "Text", "Muted",
                 "Disabled", "Edge", "Strong edge", "Accent", "Accent strong",
                 "Focus", "Selection", "Active input"
         }, new int[]{
                 palette.pageBackground, palette.surfaceBase, palette.surfaceRaised,
-                palette.surfaceInset, palette.textPrimary, palette.textSecondary,
+                palette.surfaceInset, palette.surfaceControl, palette.surfaceField,
+                palette.textPrimary, palette.textSecondary,
                 palette.textDisabled, palette.edgeNeutral, palette.edgeStrong,
                 palette.accent, palette.accentStrong, palette.focus,
                 palette.selection, palette.activeInput
@@ -128,7 +129,7 @@ final class DebugThemeLabView extends LinearLayout {
         preview.addView(typeCard, block(-2, 2, 8));
 
         addSection("Family materials");
-        addMaterialRow();
+        addMaterialRows();
 
         addSection("Semantic states");
         addSemanticRow(new String[]{"Neutral", "Success", "Warning", "Error", "Recording"},
@@ -145,9 +146,9 @@ final class DebugThemeLabView extends LinearLayout {
         preview.addView(semanticFlags, block(dp(52), 2, 8));
 
         addSection("Component state coverage");
-        addComponentRow(new String[]{"Macro idle", "Macro selected", "Macro pressed", "Macro running"},
-                new int[]{palette.surfaceRaised, palette.selection,
-                        palette.accentEdge, selected.semanticStates.success.foreground});
+        addComponentRow(new String[]{"Selection", "Focus", "Press", "Running"},
+                new int[]{palette.selection, palette.focus,
+                        palette.accentEdge, palette.activeInput});
         addComponentRow(new String[]{"Quick idle", "Quick pressed", "Recording", "Error"},
                 new int[]{palette.edgeNeutral, palette.accent,
                         selected.semanticStates.recording.foreground,
@@ -155,6 +156,13 @@ final class DebugThemeLabView extends LinearLayout {
         addComponentRow(new String[]{"Dock idle", "Dock selected", "Touch idle", "Touch active"},
                 new int[]{palette.textSecondary, palette.selection,
                         palette.inputEdgeIdle, palette.inputEdgeActive});
+        addGovernedSurfaceCoverage();
+
+        addSection("Keyboard states");
+        ThemeKeyboardColors keyboard = selected.componentColors.keyboard;
+        addComponentRow(new String[]{"Key idle", "Pressed", "Modifier latched", "Modifier locked"},
+                new int[]{keyboard.keycapIdleEdge, keyboard.keycapPressedEdge,
+                        palette.selection, keyboard.lockedEdgeTop});
 
         ThemeMaterialSpec material = selected.materials;
         String materialMeta = String.format(Locale.ROOT,
@@ -218,16 +226,50 @@ final class DebugThemeLabView extends LinearLayout {
         return item;
     }
 
-    private void addMaterialRow() {
+    private void addMaterialRows() {
         ThemePalette palette = selected.palette;
-        LinearLayout row = new LinearLayout(getContext());
-        row.setOrientation(HORIZONTAL);
-        row.addView(material("Raised", palette.surfaceRaised, palette.edgeStrong, false), weighted(1));
-        row.addView(material("Inset", palette.surfaceInset, palette.edgeNeutral, true), weighted(1));
-        row.addView(material("Control", palette.surfaceBase, palette.accentEdge, false), weighted(1));
-        row.addView(material("Field", palette.surfaceInset, palette.activeInput, true), weighted(1));
-        row.addView(material("Media", palette.surfaceBase, palette.focus, false), weighted(1));
-        preview.addView(row, block(dp(76), 2, 8));
+        LinearLayout primary = new LinearLayout(getContext());
+        primary.setOrientation(HORIZONTAL);
+        primary.addView(material("Flush", materialRoleColor(ThemeCncColors.FLUSH),
+                palette.edgeNeutral, false), weighted(1));
+        primary.addView(material("Raised", materialRoleColor(ThemeCncColors.RAISED),
+                palette.edgeStrong, false), weighted(1));
+        primary.addView(material("Inset", materialRoleColor(ThemeCncColors.INSET),
+                palette.edgeNeutral, true), weighted(1));
+        primary.addView(material("Shallow", materialRoleColor(ThemeCncColors.SHALLOW_INSET),
+                palette.edgeNeutral, true), weighted(1));
+        preview.addView(primary, block(dp(76), 2, 2));
+
+        LinearLayout secondary = new LinearLayout(getContext());
+        secondary.setOrientation(HORIZONTAL);
+        secondary.addView(material("Control", materialRoleColor(ThemeCncColors.CONTROL),
+                palette.edgeNeutral, false), weighted(1));
+        secondary.addView(material("Field", materialRoleColor(ThemeCncColors.FIELD),
+                palette.activeInput, true), weighted(1));
+        secondary.addView(material("Media/Input",
+                materialRoleColor(ThemeCncColors.INPUT_FRAME), palette.focus, true), weighted(1));
+        secondary.addView(new View(getContext()), weighted(1));
+        preview.addView(secondary, block(dp(76), 2, 8));
+    }
+
+    private int materialRoleColor(int role) {
+        if (selected.cncColors != null) {
+            return selected.cncColors.surface(role).roleColor;
+        }
+        if (role == ThemeCncColors.INSET) {
+            return selected.glassColors.surface(ThemeGlassColors.INSET).top;
+        }
+        if (role == ThemeCncColors.SHALLOW_INSET) {
+            return selected.glassColors.surface(ThemeGlassColors.INFO).top;
+        }
+        if (role == ThemeCncColors.FIELD) {
+            return selected.glassColors.surface(ThemeGlassColors.FIELD).top;
+        }
+        if (role == ThemeCncColors.INPUT_FRAME) {
+            return selected.glassColors.surface(ThemeGlassColors.KEYBOARD_FRAME).top;
+        }
+        return selected.glassColors.surface(role == ThemeCncColors.RAISED
+                ? ThemeGlassColors.MODULE : ThemeGlassColors.CONTROL).top;
     }
 
     private View material(String name, int fill, int edge, boolean inset) {
@@ -286,6 +328,26 @@ final class DebugThemeLabView extends LinearLayout {
             row.addView(component(names[index], stateColors[index]), weighted(1));
         }
         preview.addView(row, block(dp(58), 2, 2));
+    }
+
+    private void addGovernedSurfaceCoverage() {
+        if (selected.glassColors != null) {
+            ThemeGlassColors.Surface macro = selected.glassColors.surface(
+                    ThemeGlassColors.MACRO_PRIMARY);
+            ThemeGlassColors.Surface focused = selected.glassColors.surface(
+                    ThemeGlassColors.MACRO_FOCUSED);
+            ThemeGlassColors.Surface settings = selected.glassColors.surface(
+                    ThemeGlassColors.SETTINGS_CONTENT);
+            addComponentRow(new String[]{"Macro high body", "Macro high edge",
+                            "Macro focused", "Settings content"},
+                    new int[]{macro.top, macro.edgeTop, focused.edgeTop, settings.top});
+            return;
+        }
+        addComponentRow(new String[]{"Macro high body", "Macro high edge",
+                        "Macro focused", "Settings content"},
+                new int[]{selected.cncColors.surface(ThemeCncColors.RAISED).roleColor,
+                        selected.palette.edgeStrong, selected.palette.focus,
+                        selected.cncColors.surface(ThemeCncColors.FLUSH).roleColor});
     }
 
     private View component(String name, int stateColor) {

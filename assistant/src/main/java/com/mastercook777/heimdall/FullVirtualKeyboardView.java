@@ -62,8 +62,8 @@ final class FullVirtualKeyboardView extends LinearLayout {
         setFocusable(false);
         setBackground(HeimdallUi.isFreyaFamily(context)
                 ? HeimdallUi.cncInputFrame(context, 14)
-                : HeimdallUi.glass(context, 0xFC0B111B, 0xFF06090E,
-                        0xA66A829C, 0x55344150, 14, 2));
+                : HeimdallUi.glassSurface(context, ThemeGlassColors.FULL_KEYBOARD_FRAME,
+                        14, 2));
 
         LinearLayout toolbar = new LinearLayout(context);
         toolbar.setOrientation(HORIZONTAL);
@@ -460,8 +460,8 @@ final class FullVirtualKeyboardView extends LinearLayout {
         button.setPadding(dp(6), 0, dp(6), 0);
         button.setBackground(HeimdallUi.isFreyaFamily(getContext())
                 ? HeimdallUi.cncInputFrame(getContext(), 8)
-                : HeimdallUi.glass(getContext(), 0xB5182330, 0xD00B1119,
-                        0x776A829C, 0x33344150, 8, 1));
+                : HeimdallUi.glassSurface(getContext(), ThemeGlassColors.KEYBOARD_TOOLBAR,
+                        8, 1));
         if (HeimdallUi.isFreyaFamily(getContext())) {
             button.setElevation(0f);
             button.setStateListAnimator(null);
@@ -628,13 +628,16 @@ final class FullVirtualKeyboardView extends LinearLayout {
             if (HeimdallUi.isFreyaFamily(getContext())) {
                 background = HeimdallUi.cncRaised(getContext(), 7, active, false);
             } else {
+                ThemeKeyboardColors keyboard = colors.keyboard;
                 background = HeimdallUi.glass(getContext(),
-                        active ? 0xFF24364A : 0xFF2B2D30,
-                        active ? 0xFF101A26 : 0xFF17191C,
+                        active ? keyboard.keycapPressedFaceTop : keyboard.keycapFaceTop,
+                        active ? keyboard.keycapPressedFaceBottom : keyboard.keycapFaceBottom,
                         locked ? colors.keyboard.lockedEdgeTop
-                                : (active ? HeimdallUi.accentStrong(getContext()) : 0x99717A82),
+                                : (active ? keyboard.keycapPressedEdge
+                                        : keyboard.keycapIdleEdge),
                         locked ? colors.keyboard.lockedEdgeBottom
-                                : (active ? colors.keyboard.activeEdgeBottom : 0x55323539),
+                                : (active ? keyboard.activeEdgeBottom
+                                        : keyboard.keycapIdleEdgeBottom),
                         7, active ? 2 : 1);
                 background = new InsetDrawable(background, dp(1));
             }

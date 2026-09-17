@@ -77,11 +77,9 @@ final class UpperScreenMagnifierView extends FrameLayout
         displayFrame.setBackground(HeimdallUi.isFreyaFamily(context)
                 ? HeimdallUi.cncInputFrame(context, HeimdallUi.RADIUS_MODULE, circular)
                 : circular
-                        ? HeimdallUi.glassCircle(context,
-                                0xB20C131D, 0xD2070B11, 0x7770B7FF, 0x33445A72,
-                                HeimdallUi.STROKE_HAIRLINE)
-                        : HeimdallUi.glass(context,
-                                0xB20C131D, 0xD2070B11, 0x7770B7FF, 0x33445A72,
+                        ? HeimdallUi.glassCircleSurface(context,
+                                ThemeGlassColors.MAGNIFIER_FRAME, HeimdallUi.STROKE_HAIRLINE)
+                        : HeimdallUi.glassSurface(context, ThemeGlassColors.MAGNIFIER_FRAME,
                                 HeimdallUi.RADIUS_MODULE, HeimdallUi.STROKE_HAIRLINE));
         addView(displayFrame, new LayoutParams(-1, -1));
 

@@ -7,6 +7,8 @@ final class ResolvedTheme {
     final ThemeComponentColors componentColors;
     final SemanticStateColors semanticStates;
     final ThemeMaterialSpec materials;
+    final ThemeGlassColors glassColors;
+    final ThemeCncColors cncColors;
 
     ResolvedTheme(ThemeDefinition definition) {
         this.definition = definition;
@@ -14,6 +16,8 @@ final class ResolvedTheme {
         this.componentColors = definition.componentColors;
         this.semanticStates = definition.semanticStates;
         this.materials = definition.materials;
+        this.glassColors = definition.glassColors;
+        this.cncColors = definition.cncColors;
     }
 
     String id() {

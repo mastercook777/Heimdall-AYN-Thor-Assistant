@@ -73,11 +73,10 @@ final class CanvasWidgetView extends FrameLayout {
         displayFrame.setBackground(HeimdallUi.isFreyaFamily(context)
                 ? HeimdallUi.cncInputFrame(context, HeimdallUi.RADIUS_MODULE, circular)
                 : circular
-                        ? HeimdallUi.glassCircle(context, 0xB20C131D, 0xD2070B11,
-                                0x555F7C9A, 0x33344150, HeimdallUi.STROKE_HAIRLINE)
-                        : HeimdallUi.glass(context, 0xB20C131D, 0xD2070B11,
-                                0x555F7C9A, 0x33344150, HeimdallUi.RADIUS_MODULE,
-                                HeimdallUi.STROKE_HAIRLINE));
+                        ? HeimdallUi.glassCircleSurface(context,
+                                ThemeGlassColors.MEDIA_FRAME, HeimdallUi.STROKE_HAIRLINE)
+                        : HeimdallUi.glassSurface(context, ThemeGlassColors.MEDIA_FRAME,
+                                HeimdallUi.RADIUS_MODULE, HeimdallUi.STROKE_HAIRLINE));
         addView(displayFrame, new LayoutParams(-1, -1));
 
         viewport = new FrameLayout(context);

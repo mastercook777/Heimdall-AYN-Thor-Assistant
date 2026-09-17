@@ -39,9 +39,6 @@ public final class CoordinateCaptureActivity extends Activity {
     public static final String MODE_REGION = "region";
 
     private static final int BG = 0x2205070A;
-    private static final int TEXT = 0xFFE6EDF3;
-    private static final int PRIMARY = 0xFF58A6FF;
-    private static final int MUTED = 0xFF8B949E;
 
     private boolean regionResultSent;
 
@@ -130,6 +127,13 @@ public final class CoordinateCaptureActivity extends Activity {
 
     private final class CaptureView extends View {
         private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final int textColor;
+        private final int primaryColor;
+        private final int mutedColor;
+        private final int primaryControlFill;
+        private final int primaryControlEdge;
+        private final int secondaryControlFill;
+        private final int secondaryControlEdge;
         private final String mode;
         private final int displayId;
         private float downX = -1;
@@ -152,6 +156,15 @@ public final class CoordinateCaptureActivity extends Activity {
 
         CaptureView(Context context, String mode) {
             super(context);
+            ThemePalette palette = HeimdallUi.resolvedTheme(context).palette;
+            ThemeComponentColors components = HeimdallUi.componentColors(context);
+            textColor = palette.textPrimary;
+            primaryColor = components.capturePrimary;
+            mutedColor = palette.textSecondary;
+            primaryControlFill = components.captureControlFill;
+            primaryControlEdge = components.captureControlEdge;
+            secondaryControlFill = components.captureSecondaryFill;
+            secondaryControlEdge = components.captureSecondaryEdge;
             if (MODE_REGION.equals(mode)) {
                 this.mode = MODE_REGION;
             } else if (MODE_SWIPE.equals(mode)) {
@@ -181,14 +194,14 @@ public final class CoordinateCaptureActivity extends Activity {
             }
             canvas.drawColor(BG);
             paint.setStyle(Paint.Style.FILL);
-            paint.setColor(TEXT);
+            paint.setColor(textColor);
             paint.setTextSize(34);
             canvas.drawText(getString(MODE_REGION.equals(mode) ? R.string.capture_title_region
                     : MODE_SWIPE.equals(mode) ? R.string.capture_title_swipe
                     : (MODE_HOLD.equals(mode) ? R.string.capture_title_hold
                             : R.string.capture_title_tap)), 36, 60, paint);
 
-            paint.setColor(MUTED);
+            paint.setColor(mutedColor);
             paint.setTextSize(22);
             canvas.drawText(MODE_REGION.equals(mode)
                     ? getString(R.string.capture_instruction_region)
@@ -211,7 +224,7 @@ public final class CoordinateCaptureActivity extends Activity {
                 float right = region.right;
                 float bottom = region.bottom;
                 paint.setStyle(Paint.Style.FILL);
-                paint.setColor(0x3358A6FF);
+                paint.setColor(HeimdallUi.withAlpha(primaryColor, 0x33));
                 if (circularRegion) {
                     canvas.drawOval(region, paint);
                 } else {
@@ -219,7 +232,7 @@ public final class CoordinateCaptureActivity extends Activity {
                 }
                 paint.setStyle(Paint.Style.STROKE);
                 paint.setStrokeWidth(5);
-                paint.setColor(selectionTooSmall ? 0xFFFF6B7A : PRIMARY);
+                paint.setColor(selectionTooSmall ? 0xFFFF6B7A : primaryColor);
                 if (circularRegion) {
                     canvas.drawOval(region, paint);
                 } else {
@@ -233,7 +246,7 @@ public final class CoordinateCaptureActivity extends Activity {
             }
 
             if (downX >= 0 && downY >= 0) {
-                paint.setColor(PRIMARY);
+                paint.setColor(primaryColor);
                 canvas.drawCircle(downX, downY, 20, paint);
                 paint.setTextSize(20);
                 canvas.drawText(getString(R.string.capture_point_start,
@@ -275,14 +288,14 @@ public final class CoordinateCaptureActivity extends Activity {
 
             paint.setStyle(Paint.Style.STROKE);
             paint.setStrokeWidth(5);
-            paint.setColor(PRIMARY);
+            paint.setColor(primaryColor);
             if (circularRegion) {
                 canvas.drawOval(selectedRegion, paint);
             } else {
                 canvas.drawRoundRect(selectedRegion, 12, 12, paint);
             }
             paint.setStyle(Paint.Style.FILL);
-            paint.setColor(PRIMARY);
+            paint.setColor(primaryColor);
             float handleRadius = 13;
             canvas.drawCircle(selectedRegion.left, selectedRegion.top, handleRadius, paint);
             canvas.drawCircle(selectedRegion.right, selectedRegion.top, handleRadius, paint);
@@ -290,10 +303,10 @@ public final class CoordinateCaptureActivity extends Activity {
             canvas.drawCircle(selectedRegion.left, selectedRegion.bottom, handleRadius, paint);
 
             paint.setStyle(Paint.Style.FILL);
-            paint.setColor(TEXT);
+            paint.setColor(textColor);
             paint.setTextSize(30);
             canvas.drawText(getString(R.string.capture_adjust_title), 36, 58, paint);
-            paint.setColor(MUTED);
+            paint.setColor(mutedColor);
             paint.setTextSize(21);
             canvas.drawText(getString(R.string.capture_adjust_help), 36, 94, paint);
 
@@ -308,7 +321,7 @@ public final class CoordinateCaptureActivity extends Activity {
             drawControl(canvas, cancelButton, getString(R.string.common_cancel), false);
             drawControl(canvas, confirmButton, getString(R.string.capture_confirm_apply), true);
 
-            paint.setColor(TEXT);
+            paint.setColor(textColor);
             paint.setTextSize(19);
             canvas.drawText(Math.round(selectedRegion.width()) + " x "
                             + Math.round(selectedRegion.height()),
@@ -317,14 +330,14 @@ public final class CoordinateCaptureActivity extends Activity {
 
         private void drawControl(Canvas canvas, RectF bounds, String label, boolean primary) {
             paint.setStyle(Paint.Style.FILL);
-            paint.setColor(primary ? 0xE6296FD6 : 0xE5162230);
+            paint.setColor(primary ? primaryControlFill : secondaryControlFill);
             canvas.drawRoundRect(bounds, 12, 12, paint);
             paint.setStyle(Paint.Style.STROKE);
             paint.setStrokeWidth(2);
-            paint.setColor(primary ? 0xFF70B7FF : 0xFF445A72);
+            paint.setColor(primary ? primaryControlEdge : secondaryControlEdge);
             canvas.drawRoundRect(bounds, 12, 12, paint);
             paint.setStyle(Paint.Style.FILL);
-            paint.setColor(TEXT);
+            paint.setColor(textColor);
             paint.setTextSize(22);
             paint.setTextAlign(Paint.Align.CENTER);
             float baseline = bounds.centerY() - (paint.ascent() + paint.descent()) / 2f;

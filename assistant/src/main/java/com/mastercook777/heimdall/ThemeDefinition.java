@@ -8,12 +8,16 @@ final class ThemeDefinition {
     final ThemeComponentColors componentColors;
     final SemanticStateColors semanticStates;
     final ThemeMaterialSpec materials;
+    final ThemeGlassColors glassColors;
+    final ThemeCncColors cncColors;
     final int displayNameRes;
 
     ThemeDefinition(String id, String[] legacyAliases, ThemeFamily family,
             ThemePalette palette, ThemeComponentColors componentColors,
             SemanticStateColors semanticStates,
-            ThemeMaterialSpec materials, int displayNameRes) {
+            ThemeMaterialSpec materials, ThemeGlassColors glassColors,
+            ThemeCncColors cncColors,
+            int displayNameRes) {
         if (id == null || id.trim().length() == 0) {
             throw new IllegalArgumentException("Theme id must not be empty");
         }
@@ -24,6 +28,12 @@ final class ThemeDefinition {
         if (materials.family != family) {
             throw new IllegalArgumentException("Theme family and material family must match");
         }
+        if ((family == ThemeFamily.FREYA) != (cncColors != null)) {
+            throw new IllegalArgumentException("Only Freya definitions provide CNC colors");
+        }
+        if ((family == ThemeFamily.HEIMDALL) != (glassColors != null)) {
+            throw new IllegalArgumentException("Only Heimdall definitions provide glass colors");
+        }
         this.id = id;
         this.legacyAliases = legacyAliases.clone();
         this.family = family;
@@ -31,6 +41,8 @@ final class ThemeDefinition {
         this.componentColors = componentColors;
         this.semanticStates = semanticStates;
         this.materials = materials;
+        this.glassColors = glassColors;
+        this.cncColors = cncColors;
         this.displayNameRes = displayNameRes;
     }
 }

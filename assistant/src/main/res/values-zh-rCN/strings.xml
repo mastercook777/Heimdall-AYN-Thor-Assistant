@@ -200,7 +200,9 @@
     <string name="settings_selection_applies_immediately">选择后即生效</string>
     <string name="settings_theme">主题</string>
     <string name="theme_heimdall_blue">Heimdall Blue</string>
+    <string name="theme_heimdall_amber">Heimdall Amber</string>
     <string name="theme_freya_white">Freya White</string>
+    <string name="theme_freya_rosewood">Freya Rosewood</string>
     <string name="settings_theme_help">选择更适合当前环境的外观，保存后全局应用。</string>
     <string name="settings_performance_compatibility">Thor 游戏性能兼容模式（全局）</string>
     <string name="settings_performance_compatibility_help">实验性功能。部分游戏在 Heimdall 打开时掉帧可尝试开启；它会改变下屏合成路径并可能增加合成负载，如游戏 loading 变得不稳定请关闭。默认关闭，不随 Profile 切换。</string>

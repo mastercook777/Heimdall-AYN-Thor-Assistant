@@ -24,6 +24,10 @@ final class ThemeComponentColors {
     final int gridDraftShield;
     final int gridDraftWarning;
     final int quickVolumeIcon;
+    final int quickVolumeThumbIdle;
+    final int quickVolumeThumbPressed;
+    final int quickVolumeThumbEdge;
+    final int quickVolumeThumbHighlight;
     final int quickActionIconIdle;
     final int quickActionMagnifierStop;
     final int macroIconFocused;
@@ -44,6 +48,11 @@ final class ThemeComponentColors {
     final int precisionReticleCenter;
     final int inputDepthIdleCenter;
     final int inputDepthActiveCenter;
+    final int inputDepthOuter;
+    final int inputFaceIdleTop;
+    final int inputFaceIdleBottom;
+    final int inputFaceActiveTop;
+    final int inputFaceActiveBottom;
     final int inputFocusCornerIdle;
     final int inputFocusCornerActive;
     final int touchPointHalo;
@@ -58,6 +67,11 @@ final class ThemeComponentColors {
     final int sliderTrack;
     final int mediaHintText;
     final int profileFallbackText;
+    final int capturePrimary;
+    final int captureControlFill;
+    final int captureControlEdge;
+    final int captureSecondaryFill;
+    final int captureSecondaryEdge;
     final int batteryShell;
     final int batteryFill;
     final int batteryChargingBolt;
@@ -79,6 +93,9 @@ final class ThemeComponentColors {
             int navTransparentTop, int navTransparentBottom,
             int structuralDivider, int structuralDividerSubtle,
             int gridDraftShield, int gridDraftWarning, int quickVolumeIcon,
+            int quickVolumeThumbIdle,
+            int quickVolumeThumbPressed, int quickVolumeThumbEdge,
+            int quickVolumeThumbHighlight,
             int quickActionIconIdle, int quickActionMagnifierStop,
             int macroIconFocused, int macroIconUtility, int macroIconDefault,
             int settingsExitIconDisabled, int settingsExitIconPressed,
@@ -89,12 +106,18 @@ final class ThemeComponentColors {
             int precisionReticleInnerIdle, int precisionReticleInnerActive,
             int precisionReticleCenter,
             int inputDepthIdleCenter, int inputDepthActiveCenter,
+            int inputDepthOuter,
+            int inputFaceIdleTop, int inputFaceIdleBottom,
+            int inputFaceActiveTop, int inputFaceActiveBottom,
             int inputFocusCornerIdle, int inputFocusCornerActive,
             int touchPointHalo, int touchPointCore,
             int inputCenterHalo, int inputCenterRing, int inputCenterAccentRing,
             int canvasPressedEdge, int macroPressedOuter, int macroPressedInner,
             int controlUnchecked, int sliderTrack, int mediaHintText,
-            int profileFallbackText, int batteryShell, int batteryFill,
+            int profileFallbackText,
+            int capturePrimary, int captureControlFill, int captureControlEdge,
+            int captureSecondaryFill, int captureSecondaryEdge,
+            int batteryShell, int batteryFill,
             int batteryChargingBolt, int statusLampOuter,
             int statusLampSuccess, int statusLampError,
             ThemeKeyboardColors keyboard,
@@ -118,6 +141,10 @@ final class ThemeComponentColors {
         this.gridDraftShield = gridDraftShield;
         this.gridDraftWarning = gridDraftWarning;
         this.quickVolumeIcon = quickVolumeIcon;
+        this.quickVolumeThumbIdle = quickVolumeThumbIdle;
+        this.quickVolumeThumbPressed = quickVolumeThumbPressed;
+        this.quickVolumeThumbEdge = quickVolumeThumbEdge;
+        this.quickVolumeThumbHighlight = quickVolumeThumbHighlight;
         this.quickActionIconIdle = quickActionIconIdle;
         this.quickActionMagnifierStop = quickActionMagnifierStop;
         this.macroIconFocused = macroIconFocused;
@@ -138,6 +165,11 @@ final class ThemeComponentColors {
         this.precisionReticleCenter = precisionReticleCenter;
         this.inputDepthIdleCenter = inputDepthIdleCenter;
         this.inputDepthActiveCenter = inputDepthActiveCenter;
+        this.inputDepthOuter = inputDepthOuter;
+        this.inputFaceIdleTop = inputFaceIdleTop;
+        this.inputFaceIdleBottom = inputFaceIdleBottom;
+        this.inputFaceActiveTop = inputFaceActiveTop;
+        this.inputFaceActiveBottom = inputFaceActiveBottom;
         this.inputFocusCornerIdle = inputFocusCornerIdle;
         this.inputFocusCornerActive = inputFocusCornerActive;
         this.touchPointHalo = touchPointHalo;
@@ -152,6 +184,11 @@ final class ThemeComponentColors {
         this.sliderTrack = sliderTrack;
         this.mediaHintText = mediaHintText;
         this.profileFallbackText = profileFallbackText;
+        this.capturePrimary = capturePrimary;
+        this.captureControlFill = captureControlFill;
+        this.captureControlEdge = captureControlEdge;
+        this.captureSecondaryFill = captureSecondaryFill;
+        this.captureSecondaryEdge = captureSecondaryEdge;
         this.batteryShell = batteryShell;
         this.batteryFill = batteryFill;
         this.batteryChargingBolt = batteryChargingBolt;
