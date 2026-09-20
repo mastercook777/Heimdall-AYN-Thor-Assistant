@@ -11,7 +11,7 @@ import java.util.Set;
 import java.util.UUID;
 
 public final class WidgetLayout {
-    public static final int CURRENT_SCHEMA_VERSION = 2;
+    public static final int CURRENT_SCHEMA_VERSION = 3;
     public static final String PRESET_DEFAULT = "default";
     public static final String PRESET_FPS = "fps";
     public static final String PRESET_MACRO_FOCUS = "macro_focus";
@@ -23,6 +23,7 @@ public final class WidgetLayout {
     public static final String TYPE_CANVAS = "canvas";
     public static final String TYPE_QUICK_ACTIONS = "quick_actions";
     public static final String TYPE_MAGNIFIER = "upper_screen_magnifier";
+    public static final String TYPE_TRANSLATION = "translation";
     public static final String MAGNIFIER_SCALE_FILL = "fill";
     public static final String MAGNIFIER_SCALE_FIT = "fit";
     public static final String MAGNIFIER_SHAPE_RECTANGLE = "rectangle";
@@ -193,6 +194,17 @@ public final class WidgetLayout {
     public void sanitize() {
         schemaVersion = CURRENT_SCHEMA_VERSION;
         migrateToCurrentGrid();
+        boolean foundTranslation = false;
+        for (int i = 0; i < items.size();) {
+            if (TYPE_TRANSLATION.equals(items.get(i).type)) {
+                if (foundTranslation) {
+                    items.remove(i);
+                    continue;
+                }
+                foundTranslation = true;
+            }
+            i++;
+        }
         for (int i = items.size() - 1; i >= 0; i--) {
             Item item = items.get(i);
             if (!isKnownType(item.type)) {
@@ -234,6 +246,7 @@ public final class WidgetLayout {
                 }
                 item.canvasConfig.normalize();
             }
+            if (TYPE_TRANSLATION.equals(item.type)) item.safeTranslation().sanitize();
         }
         Set<String> usedItemIds = new HashSet<>();
         for (int i = 0; i < items.size(); i++) {
@@ -291,7 +304,8 @@ public final class WidgetLayout {
                 || TYPE_STATUS.equals(type)
                 || TYPE_CANVAS.equals(type)
                 || TYPE_QUICK_ACTIONS.equals(type)
-                || TYPE_MAGNIFIER.equals(type);
+                || TYPE_MAGNIFIER.equals(type)
+                || TYPE_TRANSLATION.equals(type);
     }
 
     private static int clamp(int value, int min, int max) {
@@ -372,6 +386,7 @@ public final class WidgetLayout {
         public String magnifierShape = MAGNIFIER_SHAPE_RECTANGLE;
         public float magnifierZoom = 1f;
         public CanvasConfig canvasConfig = new CanvasConfig();
+        public TranslationConfig translationConfig = new TranslationConfig();
 
         public Item(String type, int x, int y, int w, int h) {
             this.itemId = UUID.randomUUID().toString();
@@ -405,6 +420,7 @@ public final class WidgetLayout {
             item.magnifierZoom = magnifierZoom;
             item.canvasConfig = canvasConfig == null
                     ? new CanvasConfig() : canvasConfig.copy();
+            item.translationConfig = safeTranslation().copy();
             return item;
         }
 
@@ -451,6 +467,9 @@ public final class WidgetLayout {
                 object.put("canvas", (canvasConfig == null
                         ? new CanvasConfig() : canvasConfig).toJson());
             }
+            if (TYPE_TRANSLATION.equals(type)) {
+                object.put("translation", safeTranslation().toJson());
+            }
             return object;
         }
 
@@ -488,6 +507,8 @@ public final class WidgetLayout {
                     "magnifierShape", MAGNIFIER_SHAPE_RECTANGLE);
             item.magnifierZoom = (float) object.optDouble("magnifierZoom", 1d);
             item.canvasConfig = CanvasConfig.fromJson(object.optJSONObject("canvas"));
+            item.translationConfig = TranslationConfig.fromJson(
+                    object.optJSONObject("translation"));
             return item;
         }
 
@@ -505,6 +526,12 @@ public final class WidgetLayout {
             }
             quickActions.sanitize();
             return quickActions;
+        }
+
+        public TranslationConfig safeTranslation() {
+            if (translationConfig == null) translationConfig = new TranslationConfig();
+            translationConfig.sanitize();
+            return translationConfig;
         }
     }
 }

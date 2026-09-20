@@ -321,6 +321,14 @@ final class HeimdallUi {
         return rounded(context, colors.top, colors.edgeTop, radiusDp);
     }
 
+    static Drawable translationContentPanel(Context context, int radiusDp) {
+        return settingsContentPanel(context, radiusDp);
+    }
+
+    static int translationTextColor(Context context) {
+        return isFreyaFamily(context) ? textColor(context) : accent(context);
+    }
+
     static Drawable glassCircle(Context context, int topColor, int bottomColor,
             int borderTopColor, int borderBottomColor, int borderDp) {
         return glass(context, topColor, bottomColor, borderTopColor, borderBottomColor,

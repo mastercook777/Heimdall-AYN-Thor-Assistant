@@ -53,6 +53,11 @@ final class WidgetGridEditor extends View {
             host.showError(getContext().getString(R.string.grid_editor_magnifier_limit));
             return;
         }
+        if (WidgetLayout.TYPE_TRANSLATION.equals(type)
+                && layout.findItem(WidgetLayout.TYPE_TRANSLATION) != null) {
+            host.showError(getContext().getString(R.string.grid_editor_translation_limit));
+            return;
+        }
         int[] size = defaultWidgetSize(type);
         WidgetLayout.Item item = firstAvailableWidgetItem(layout, type, size[0], size[1]);
         if (item == null) {
@@ -444,6 +449,7 @@ final class WidgetGridEditor extends View {
         if (WidgetLayout.TYPE_QUICK_ACTIONS.equals(type)) return new int[]{4, 2};
         if (WidgetLayout.TYPE_MAGNIFIER.equals(type)) return new int[]{6, 3};
         if (WidgetLayout.TYPE_CANVAS.equals(type)) return new int[]{6, 3};
+        if (WidgetLayout.TYPE_TRANSLATION.equals(type)) return new int[]{6, 3};
         return new int[]{4, 1};
     }
 
@@ -507,6 +513,7 @@ final class WidgetGridEditor extends View {
         if (WidgetLayout.TYPE_CANVAS.equals(type)) return getContext().getString(R.string.canvas_name);
         if (WidgetLayout.TYPE_QUICK_ACTIONS.equals(type)) return getContext().getString(R.string.grid_widget_quick_actions);
         if (WidgetLayout.TYPE_MAGNIFIER.equals(type)) return getContext().getString(R.string.grid_widget_magnifier);
+        if (WidgetLayout.TYPE_TRANSLATION.equals(type)) return getContext().getString(R.string.grid_widget_translation);
         return getContext().getString(R.string.grid_widget_module);
     }
 

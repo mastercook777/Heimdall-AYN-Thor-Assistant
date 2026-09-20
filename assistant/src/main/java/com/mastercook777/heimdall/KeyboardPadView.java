@@ -412,10 +412,11 @@ final class KeyboardPadView extends ViewGroup {
                 if (!editMode && interactionEnabled && event.getPointerCount() == 1) {
                     pending = true;
                     postDelayed(showFirstProgressDot,
-                            MacroButtonView.EDIT_LONG_PRESS_TIMEOUT_MS / 3L);
+                            HeimdallInteraction.EDIT_LONG_PRESS_TIMEOUT_MS / 3L);
                     postDelayed(showSecondProgressDot,
-                            MacroButtonView.EDIT_LONG_PRESS_TIMEOUT_MS * 2L / 3L);
-                    postDelayed(triggerEdit, MacroButtonView.EDIT_LONG_PRESS_TIMEOUT_MS);
+                            HeimdallInteraction.EDIT_LONG_PRESS_TIMEOUT_MS * 2L / 3L);
+                    postDelayed(triggerEdit,
+                            HeimdallInteraction.EDIT_LONG_PRESS_TIMEOUT_MS);
                 }
                 setPressed(true);
                 invalidate();

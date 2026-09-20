@@ -59,6 +59,7 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
             testThemeRegistryContract();
             testProfileThemeBindingContract();
             testWidgetLayoutIdentityContract();
+            testTranslationWidgetModelContract();
             testCanvasRuntimeDecodePolicy();
             testCanvasExtremeAspectFillPolicy();
             testCanvasAnimationContract();
@@ -817,6 +818,119 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
                 duplicateItems.getJSONObject(0).getString("itemId"));
         WidgetLayout repaired = WidgetLayout.fromJson(duplicateIdJson);
         assertFalse(repaired.items.get(0).itemId.equals(repaired.items.get(1).itemId));
+    }
+
+    public void testTranslationWidgetModelContract() throws Exception {
+        WidgetLayout layout = new WidgetLayout();
+        layout.items.clear();
+        WidgetLayout.Item first = new WidgetLayout.Item(
+                WidgetLayout.TYPE_TRANSLATION, 0, 0, 6, 3);
+        first.translationConfig.regionLeft = -1f;
+        first.translationConfig.regionRight = 2f;
+        first.translationConfig.ocrScript = TranslationConfig.SCRIPT_KOREAN;
+        first.translationConfig.targetLanguage = TranslationConfig.LANGUAGE_ENGLISH;
+        layout.items.add(first);
+        layout.items.add(new WidgetLayout.Item(
+                WidgetLayout.TYPE_TRANSLATION, 6, 0, 6, 3));
+        layout.sanitize();
+        assertEquals(1, layout.items.size());
+        assertEquals(WidgetLayout.TYPE_TRANSLATION, layout.items.get(0).type);
+        assertEquals(0f, layout.items.get(0).safeTranslation().regionLeft);
+        assertEquals(1f, layout.items.get(0).safeTranslation().regionRight);
+
+        WidgetLayout restored = WidgetLayout.fromJson(layout.toJson());
+        assertEquals(TranslationConfig.SCRIPT_KOREAN,
+                restored.items.get(0).safeTranslation().ocrScript);
+        assertEquals(TranslationConfig.LANGUAGE_ENGLISH,
+                restored.items.get(0).safeTranslation().targetLanguage);
+
+        TranslationTextStabilizer stabilizer = new TranslationTextStabilizer();
+        assertEquals(null, stabilizer.accept("  Hello\n world "));
+        assertTrue(stabilizer.isAwaitingConfirmation());
+        assertEquals("Hello world", stabilizer.accept("Hello   world"));
+        assertFalse(stabilizer.isAwaitingConfirmation());
+        stabilizer.markTranslated("Hello world");
+        assertEquals(null, stabilizer.accept("Hello world"));
+        assertFalse(stabilizer.isAwaitingConfirmation());
+        assertTrue(TranslationTextStabilizer.isSimilar("Subtitle!", "Subtitle!", 0.90f));
+        assertEquals(null, stabilizer.accept("Hello there"));
+        assertTrue(stabilizer.isAwaitingConfirmation());
+        assertEquals("Hello there", stabilizer.accept("Hello there"));
+
+        TranslationTextStabilizer punctuationJitter = new TranslationTextStabilizer();
+        assertEquals(null, punctuationJitter.accept("\u300c\u884c\u3053\u3046\u3002\u300d"));
+        assertEquals("\u884c\u3053\u3046", punctuationJitter.accept("\u884c\u3053\u3046"));
+
+        TranslationTextStabilizer characterJitter = new TranslationTextStabilizer();
+        assertEquals(null, characterJitter.accept("\u5f7c\u306f\u3053\u3053\u306b\u3044\u308b"));
+        assertEquals("\u5f7c\u306f\u3053\u3053\u306b\u3044\u308d",
+                characterJitter.accept("\u5f7c\u306f\u3053\u3053\u306b\u3044\u308d"));
+
+        TranslationTextStabilizer growingSubtitle = new TranslationTextStabilizer();
+        assertEquals(null, growingSubtitle.accept("The"));
+        assertEquals(null, growingSubtitle.accept("The hero"));
+        assertTrue(growingSubtitle.isAwaitingConfirmation());
+        assertEquals("The hero", growingSubtitle.accept("The hero"));
+
+        assertEquals("Speaker\nDialogue line",
+                TranslationTextStabilizer.normalize(
+                        "  Speaker  \r\n\r\n Dialogue   line "));
+        assertEquals("Speaker Dialogue line",
+                TranslationApiClient.prepareSourceText("Speaker\nDialogue line"));
+
+        assertTrue(TranslationTextStabilizer.isTranslationDuplicate(
+                "\u30c7\u30a3\u30b1\n\u304a\u30fc\u3044 \u30d5\u30ea\u30c3\u30c8!",
+                "\u30c7\u30a3\u30b1\n\u304a\u30fc\u3044\u3001\u30d5\u30ea\u30c3\u30c8！"));
+        assertTrue(TranslationTextStabilizer.isTranslationDuplicate(
+                "Name\nDialogue line", "Dialogue line\nName"));
+        assertFalse(TranslationTextStabilizer.isTranslationDuplicate(
+                "Open the door", "Return to the village"));
+        TranslationRuntimeController.Snapshot runtimeSnapshot =
+                new TranslationRuntimeController.Snapshot(
+                        "  Same subtitle  ", "  Same translation  ");
+        assertEquals("Same subtitle", runtimeSnapshot.sourceText);
+        assertEquals("Same translation", runtimeSnapshot.translatedText);
+        TranslationTextStabilizer resumedStabilizer = new TranslationTextStabilizer();
+        resumedStabilizer.markTranslated(runtimeSnapshot.sourceText);
+        assertEquals(null, resumedStabilizer.accept("Same subtitle"));
+        assertEquals(null, resumedStabilizer.accept("Same subtitle"));
+        assertFalse(TranslationRuntimeController.shouldSurfaceOcrError(1));
+        assertFalse(TranslationRuntimeController.shouldSurfaceOcrError(2));
+        assertTrue(TranslationRuntimeController.shouldSurfaceOcrError(3));
+        assertFalse(TranslationRuntimeController.shouldReplaceActiveRequest(
+                "Noisy OCR", "Current subtitle", false));
+        assertFalse(TranslationRuntimeController.shouldReplaceActiveRequest(
+                "Current subtitle!", "Current subtitle", true));
+        assertTrue(TranslationRuntimeController.shouldReplaceActiveRequest(
+                "Next subtitle", "Current subtitle", true));
+        assertEquals(1800L, HeimdallInteraction.EDIT_LONG_PRESS_TIMEOUT_MS);
+
+        TranslationProviderConfig provider = new TranslationProviderConfig();
+        provider.region = TranslationProviderConfig.REGION_CHINA;
+        assertEquals(TranslationProviderConfig.SILICONFLOW_CHINA_BASE_URL,
+                provider.resolvedBaseUrl());
+        assertEquals(TranslationProviderConfig.SILICONFLOW_CHINA_MODEL,
+                provider.resolvedModel());
+        provider.region = TranslationProviderConfig.REGION_GLOBAL;
+        assertEquals(TranslationProviderConfig.SILICONFLOW_GLOBAL_BASE_URL,
+                provider.resolvedBaseUrl());
+        assertEquals(TranslationProviderConfig.SILICONFLOW_GLOBAL_MODEL,
+                provider.resolvedModel());
+
+        GameProfile profile = new GameProfile("Translation", "General", "", 1,
+                Collections.singletonList(new Macro("M1", ProfileStore.steps("wait:80ms"))));
+        profile.widgetLayout = layout;
+        String profileJson = profile.toJson().toString();
+        assertTrue(profileJson.contains("profileId"));
+        assertFalse(profileJson.contains("apiKey"));
+        assertFalse(profileJson.contains("Hunyuan-MT-7B"));
+
+        JSONObject duplicate = profile.toJson();
+        JSONArray profiles = new JSONArray();
+        profiles.put(duplicate);
+        profiles.put(new JSONObject(duplicate.toString()));
+        List<GameProfile> imported = ProfileStore.profilesFromJson(profiles.toString());
+        assertFalse(imported.get(0).safeProfileId().equals(imported.get(1).safeProfileId()));
     }
 
     public void testProfileIconDecodePolicy() {

@@ -43,6 +43,7 @@ final class UpperScreenMagnifierView extends FrameLayout
     private final ImageView frozenStopControl;
     private final int touchSlopSquared;
     private final int multiTapSlopSquared;
+    private final Runnable triggerEditLongPress = this::triggerEditLongPress;
     private final Runnable resetTapSequenceRunnable = this::resetTapSequence;
     private final Runnable clearSingleTapSuppressionRunnable =
             () -> suppressNextConfirmedTap = false;
@@ -52,6 +53,7 @@ final class UpperScreenMagnifierView extends FrameLayout
     private boolean resumed;
     private boolean tapCandidate;
     private boolean longPressTriggered;
+    private boolean editLongPressPending;
     private boolean suppressNextConfirmedTap;
     private float tapDownX;
     private float tapDownY;
@@ -178,18 +180,13 @@ final class UpperScreenMagnifierView extends FrameLayout
                         return false;
                     }
 
-                    @Override
-                    public void onLongPress(MotionEvent event) {
-                        longPressTriggered = true;
-                        tapCandidate = false;
-                        resetTapSequence();
-                        displayFrame.performLongClick();
-                    }
                 });
+        gestures.setIsLongpressEnabled(false);
         displayFrame.setOnTouchListener((view, event) -> {
-            boolean gestureHandled = gestures.onTouchEvent(event);
             boolean tripleTapHandled = trackTripleTap(event);
-            return gestureHandled || tripleTapHandled;
+            boolean editLongPressHandled = trackEditLongPress(gestures, event);
+            boolean gestureHandled = !editLongPressHandled && gestures.onTouchEvent(event);
+            return gestureHandled || tripleTapHandled || editLongPressHandled;
         });
     }
 
@@ -260,6 +257,8 @@ final class UpperScreenMagnifierView extends FrameLayout
 
     void release() {
         pause();
+        cancelEditLongPress();
+        longPressTriggered = false;
         resetTapSequence();
         removeCallbacks(clearSingleTapSuppressionRunnable);
         suppressNextConfirmedTap = false;
@@ -505,6 +504,56 @@ final class UpperScreenMagnifierView extends FrameLayout
         boolean eligible = tapCandidate && !longPressTriggered;
         tapCandidate = false;
         return eligible && registerTap(event);
+    }
+
+    private boolean trackEditLongPress(GestureDetector gestures, MotionEvent event) {
+        int action = event.getActionMasked();
+        if (action == MotionEvent.ACTION_DOWN) {
+            cancelEditLongPress();
+            if (event.getPointerCount() == 1) {
+                editLongPressPending = true;
+                postDelayed(triggerEditLongPress,
+                        HeimdallInteraction.EDIT_LONG_PRESS_TIMEOUT_MS);
+            }
+        } else if (action == MotionEvent.ACTION_POINTER_DOWN) {
+            cancelEditLongPress();
+        } else if (action == MotionEvent.ACTION_MOVE) {
+            float dx = event.getX() - tapDownX;
+            float dy = event.getY() - tapDownY;
+            if (event.getPointerCount() != 1 || dx * dx + dy * dy > touchSlopSquared) {
+                cancelEditLongPress();
+            }
+        } else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+            boolean consume = longPressTriggered;
+            cancelEditLongPress();
+            if (consume) {
+                MotionEvent cancel = MotionEvent.obtain(event);
+                cancel.setAction(MotionEvent.ACTION_CANCEL);
+                gestures.onTouchEvent(cancel);
+                cancel.recycle();
+                longPressTriggered = false;
+                return true;
+            }
+        }
+        return longPressTriggered;
+    }
+
+    private void triggerEditLongPress() {
+        if (!editLongPressPending || !isAttachedToWindow()
+                || !displayFrame.isShown() || !displayFrame.isEnabled()) {
+            cancelEditLongPress();
+            return;
+        }
+        editLongPressPending = false;
+        longPressTriggered = true;
+        tapCandidate = false;
+        resetTapSequence();
+        displayFrame.performLongClick();
+    }
+
+    private void cancelEditLongPress() {
+        if (editLongPressPending) removeCallbacks(triggerEditLongPress);
+        editLongPressPending = false;
     }
 
     private boolean registerTap(MotionEvent event) {

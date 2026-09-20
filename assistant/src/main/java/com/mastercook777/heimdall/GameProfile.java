@@ -6,8 +6,10 @@ import org.json.JSONObject;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 
 public final class GameProfile {
+    public String profileId = UUID.randomUUID().toString();
     public String name;
     public String mode;
     public String packageHint;
@@ -57,6 +59,7 @@ public final class GameProfile {
         ensureMapEntries();
         syncLegacyMapFields();
         JSONObject object = new JSONObject();
+        object.put("profileId", safeProfileId());
         object.put("name", name);
         object.put("mode", mode);
         object.put("packageHint", packageHint);
@@ -134,6 +137,8 @@ public final class GameProfile {
                 object.optString("packageHint", ""),
                 macroCount,
                 parsedMacros);
+        profile.profileId = object.optString("profileId", "").trim();
+        if (profile.profileId.length() == 0) profile.profileId = UUID.randomUUID().toString();
         profile.macroColumns = object.optInt("macroColumns", 4);
         profile.themeId = normalizeThemeId(object.optString("themeId", ""));
         profile.macroRows = object.optInt("macroRows", 0);
@@ -193,6 +198,12 @@ public final class GameProfile {
 
     public String normalizedThemeId() {
         return normalizeThemeId(themeId);
+    }
+
+    public String safeProfileId() {
+        profileId = profileId == null ? "" : profileId.trim();
+        if (profileId.length() == 0) profileId = UUID.randomUUID().toString();
+        return profileId;
     }
 
     public void setThemeId(String value) {

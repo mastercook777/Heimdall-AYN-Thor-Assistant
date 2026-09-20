@@ -33,6 +33,11 @@ public final class CoordinateCaptureActivity extends Activity {
     public static final String EXTRA_DISPLAY_ID = "display_id";
     public static final String EXTRA_TARGET_ASPECT = "target_aspect";
     public static final String EXTRA_REGION_SHAPE = "region_shape";
+    public static final String EXTRA_REGION_PURPOSE = "region_purpose";
+    public static final String EXTRA_REGION_COMMIT_DIRECT = "region_commit_direct";
+    public static final String EXTRA_LOCK_ASPECT = "lock_aspect";
+    public static final String REGION_PURPOSE_MAGNIFIER = "magnifier";
+    public static final String REGION_PURPOSE_TRANSLATION = "translation";
     public static final String MODE_TAP = "tap";
     public static final String MODE_HOLD = "hold";
     public static final String MODE_SWIPE = "swipe";
@@ -86,6 +91,8 @@ public final class CoordinateCaptureActivity extends Activity {
         result.putExtra(EXTRA_TARGET_ASPECT,
                 Math.max(0.2f, Math.min(5f,
                         getIntent().getFloatExtra(EXTRA_TARGET_ASPECT, 1f))));
+        result.putExtra(EXTRA_REGION_PURPOSE,
+                getIntent().getStringExtra(EXTRA_REGION_PURPOSE));
         sendBroadcast(result);
     }
 
@@ -100,6 +107,8 @@ public final class CoordinateCaptureActivity extends Activity {
             regionResultSent = true;
             Intent result = new Intent(ACTION_REGION_CANCELLED);
             result.setPackage(getPackageName());
+            result.putExtra(EXTRA_REGION_PURPOSE,
+                    getIntent().getStringExtra(EXTRA_REGION_PURPOSE));
             sendBroadcast(result);
         }
         finishAndRemoveTask();
@@ -119,6 +128,8 @@ public final class CoordinateCaptureActivity extends Activity {
         if (MODE_REGION.equals(getIntent().getStringExtra(EXTRA_MODE)) && !regionResultSent) {
             Intent result = new Intent(ACTION_REGION_CANCELLED);
             result.setPackage(getPackageName());
+            result.putExtra(EXTRA_REGION_PURPOSE,
+                    getIntent().getStringExtra(EXTRA_REGION_PURPOSE));
             sendBroadcast(result);
             regionResultSent = true;
         }
@@ -136,6 +147,7 @@ public final class CoordinateCaptureActivity extends Activity {
         private final int secondaryControlEdge;
         private final String mode;
         private final int displayId;
+        private final boolean translationDirectCommit;
         private float downX = -1;
         private float downY = -1;
         private float currentX = -1;
@@ -144,6 +156,8 @@ public final class CoordinateCaptureActivity extends Activity {
         private boolean selectionTooSmall;
         private final float targetAspectRatio;
         private final boolean circularRegion;
+        private final boolean translationRegion;
+        private final boolean lockAspect;
         private final RectF selectedRegion = new RectF();
         private final RectF cancelButton = new RectF();
         private final RectF confirmButton = new RectF();
@@ -178,6 +192,11 @@ public final class CoordinateCaptureActivity extends Activity {
             displayId = display == null ? Display.DEFAULT_DISPLAY : display.getDisplayId();
             targetAspectRatio = Math.max(0.2f, Math.min(5f,
                     getIntent().getFloatExtra(EXTRA_TARGET_ASPECT, 1f)));
+            translationRegion = REGION_PURPOSE_TRANSLATION.equals(
+                    getIntent().getStringExtra(EXTRA_REGION_PURPOSE));
+            translationDirectCommit = translationRegion && getIntent().getBooleanExtra(
+                    EXTRA_REGION_COMMIT_DIRECT, false);
+            lockAspect = getIntent().getBooleanExtra(EXTRA_LOCK_ASPECT, true);
             circularRegion = MODE_REGION.equals(this.mode)
                     && WidgetLayout.MAGNIFIER_SHAPE_CIRCLE.equals(
                             WidgetLayout.normalizeMagnifierShape(
@@ -196,7 +215,9 @@ public final class CoordinateCaptureActivity extends Activity {
             paint.setStyle(Paint.Style.FILL);
             paint.setColor(textColor);
             paint.setTextSize(34);
-            canvas.drawText(getString(MODE_REGION.equals(mode) ? R.string.capture_title_region
+            canvas.drawText(getString(MODE_REGION.equals(mode)
+                    ? (translationRegion ? R.string.capture_title_translation_region
+                            : R.string.capture_title_region)
                     : MODE_SWIPE.equals(mode) ? R.string.capture_title_swipe
                     : (MODE_HOLD.equals(mode) ? R.string.capture_title_hold
                             : R.string.capture_title_tap)), 36, 60, paint);
@@ -204,7 +225,8 @@ public final class CoordinateCaptureActivity extends Activity {
             paint.setColor(mutedColor);
             paint.setTextSize(22);
             canvas.drawText(MODE_REGION.equals(mode)
-                    ? getString(R.string.capture_instruction_region)
+                    ? getString(translationRegion ? R.string.capture_instruction_translation_region
+                            : R.string.capture_instruction_region)
                     : MODE_SWIPE.equals(mode)
                     ? getString(R.string.capture_instruction_swipe)
                     : (MODE_HOLD.equals(mode)
@@ -212,8 +234,8 @@ public final class CoordinateCaptureActivity extends Activity {
                     : getString(R.string.capture_instruction_tap)),
                     36, 96, paint);
             canvas.drawText(MODE_REGION.equals(mode)
-                    ? getString(R.string.capture_display_target_status, displayId,
-                            targetAspectRatio)
+                    ? (lockAspect ? getString(R.string.capture_display_target_status, displayId,
+                            targetAspectRatio) : getString(R.string.capture_display_status, displayId))
                     : getString(R.string.capture_display_status, displayId), 36, 126, paint);
 
             if (MODE_REGION.equals(mode) && downX >= 0 && downY >= 0
@@ -305,10 +327,16 @@ public final class CoordinateCaptureActivity extends Activity {
             paint.setStyle(Paint.Style.FILL);
             paint.setColor(textColor);
             paint.setTextSize(30);
-            canvas.drawText(getString(R.string.capture_adjust_title), 36, 58, paint);
+            canvas.drawText(getString(translationRegion
+                    ? R.string.capture_adjust_translation_title
+                    : R.string.capture_adjust_title), 36, 58, paint);
             paint.setColor(mutedColor);
             paint.setTextSize(21);
-            canvas.drawText(getString(R.string.capture_adjust_help), 36, 94, paint);
+            canvas.drawText(getString(translationRegion
+                    ? (translationDirectCommit
+                            ? R.string.capture_adjust_translation_quick_help
+                            : R.string.capture_adjust_translation_help)
+                    : R.string.capture_adjust_help), 36, 94, paint);
 
             float buttonHeight = 58;
             float buttonWidth = 138;
@@ -512,10 +540,12 @@ public final class CoordinateCaptureActivity extends Activity {
             float directionY = resizeTop ? -1f : 1f;
             float width = Math.max(48f, Math.abs(pointerX - anchorX));
             float height = Math.max(48f, Math.abs(pointerY - anchorY));
-            if (width / height > targetAspectRatio) {
-                height = width / targetAspectRatio;
-            } else {
-                width = height * targetAspectRatio;
+            if (lockAspect) {
+                if (width / height > targetAspectRatio) {
+                    height = width / targetAspectRatio;
+                } else {
+                    width = height * targetAspectRatio;
+                }
             }
             float availableWidth = directionX < 0 ? anchorX : getWidth() - anchorX;
             float availableHeight = directionY < 0 ? anchorY : getHeight() - anchorY;
@@ -551,10 +581,12 @@ public final class CoordinateCaptureActivity extends Activity {
             float directionY = dy < 0 ? -1f : 1f;
             float width = Math.max(1f, Math.abs(dx));
             float height = Math.max(1f, Math.abs(dy));
-            if (width / height > targetAspectRatio) {
-                height = width / targetAspectRatio;
-            } else {
-                width = height * targetAspectRatio;
+            if (lockAspect) {
+                if (width / height > targetAspectRatio) {
+                    height = width / targetAspectRatio;
+                } else {
+                    width = height * targetAspectRatio;
+                }
             }
 
             float availableWidth = directionX > 0 ? getWidth() - downX : downX;

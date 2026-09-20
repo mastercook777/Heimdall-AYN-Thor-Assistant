@@ -18,7 +18,6 @@ final class MacroButtonView extends Button {
             new PathInterpolator(0.2f, 0f, 0f, 1f);
     private static final long PRESS_IN_MS = 70L;
     private static final long PRESS_OUT_MS = 110L;
-    static final long EDIT_LONG_PRESS_TIMEOUT_MS = 1800L;
 
     private final Paint macroLabelPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint macroPressPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -136,7 +135,8 @@ final class MacroButtonView extends Button {
             boolean handled = super.onTouchEvent(event);
             if (handled && macroLongPressAction != null && event.getPointerCount() == 1) {
                 macroLongPressPending = true;
-                postDelayed(triggerMacroLongPress, EDIT_LONG_PRESS_TIMEOUT_MS);
+                postDelayed(triggerMacroLongPress,
+                        HeimdallInteraction.EDIT_LONG_PRESS_TIMEOUT_MS);
             }
             return handled;
         } else if (action == MotionEvent.ACTION_POINTER_DOWN) {

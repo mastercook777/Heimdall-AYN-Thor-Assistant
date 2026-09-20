@@ -169,7 +169,7 @@ final class CanvasWidgetView extends FrameLayout {
             if (state == State.READY && interactionEnabled && event.getPointerCount() == 1) {
                 optionsLongPressPending = true;
                 postDelayed(triggerOptionsLongPress,
-                        MacroButtonView.EDIT_LONG_PRESS_TIMEOUT_MS);
+                        HeimdallInteraction.EDIT_LONG_PRESS_TIMEOUT_MS);
             }
             return true;
         }

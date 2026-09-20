@@ -95,8 +95,12 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Date;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
 
 public class AssistantActivity extends Activity {
     private static final PathInterpolator UI_EASE_OUT =
@@ -134,7 +138,6 @@ public class AssistantActivity extends Activity {
     private static final int REQUEST_DIAGNOSTIC_EXPORT = 2112;
     private static final int MAGNIFIER_REGION_START_MAX_ATTEMPTS = 12;
     private static final long MAGNIFIER_REGION_START_RETRY_MS = 150L;
-    private static final long QUICK_ACTION_EDIT_LONG_PRESS_TIMEOUT_MS = 1800L;
     private static final int BG = HeimdallUi.COLOR_BG;
     private static final int PANEL = HeimdallUi.COLOR_SURFACE;
     private static final int PANEL_ALT = HeimdallUi.COLOR_SURFACE_RAISED;
@@ -161,6 +164,7 @@ public class AssistantActivity extends Activity {
     private static final int SETTINGS_APPEARANCE = 6;
     private static final int SETTINGS_DIAGNOSTICS = 7;
     private static final int SETTINGS_GETTING_STARTED = 8;
+    private static final int SETTINGS_TRANSLATION = 9;
     private static final String STATE_ACTIVE_SCREEN = "heimdall.active_screen";
     private static final String STATE_SETTINGS_SECTION = "heimdall.settings_section";
     private static final String STATE_SETTINGS_SCROLL_Y = "heimdall.settings_scroll_y";
@@ -169,6 +173,7 @@ public class AssistantActivity extends Activity {
     private static final String STATE_MACRO_MAPPING_PROTECTION_DRAFT =
             "heimdall.macro_mapping_protection_draft";
     private static final String STATE_MAGNIFIER_DRAFT = "heimdall.magnifier_draft";
+    private static final String STATE_TRANSLATION_DRAFT = "heimdall.translation_draft";
     private static final String STATE_THEME_DRAFT = "heimdall.theme_draft";
     private static final String STATE_COMPATIBILITY_DRAFT = "heimdall.compatibility_draft";
     private static final String STATE_TOUCHPAD_ADVANCED = "heimdall.touchpad_advanced";
@@ -243,6 +248,10 @@ public class AssistantActivity extends Activity {
     private Button settingsBindPlatformButton;
     private CheckBox settingsProfileDefaultInput;
     private WidgetLayout.Item settingsMagnifierDraft;
+    private WidgetLayout.Item translationEditorDraft;
+    private TranslationProviderConfig settingsTranslationProviderDraft;
+    private Runnable translationEditorRefresh;
+    private boolean translationRegionQuickEntry;
     private String settingsThemeDraft;
     private Boolean settingsPerformanceCompatibilityDraft;
     private boolean showTouchpadAdvancedSettings;
@@ -407,6 +416,11 @@ public class AssistantActivity extends Activity {
     private final List<QuickActionButtonView> quickRecordButtons = new ArrayList<>();
     private final List<UpperScreenMagnifierView> magnifierViews = new ArrayList<>();
     private final List<CanvasWidgetView> canvasViews = new ArrayList<>();
+    private final List<TranslationWidgetView> translationViews = new ArrayList<>();
+    private final Set<String> pausedTranslationSessions = new HashSet<>();
+    private final Map<String, TranslationRuntimeController.Snapshot>
+            translationRuntimeStates = new HashMap<>();
+    private final Set<String> translationRuntimeResetSessions = new HashSet<>();
     private String pendingRecordingProfileName;
     private WidgetLayout.Item pendingMagnifierProjectionItem;
     private WidgetLayout.Item pendingMagnifierRegionAfterProjectionItem;
@@ -417,6 +431,7 @@ public class AssistantActivity extends Activity {
     private boolean magnifierRegionCaptureInProgress;
     private boolean pendingMagnifierRegionUsesDraft;
     private boolean magnifierWasFrozenBeforeRegionCapture;
+    private boolean translationRegionCaptureInProgress;
     private GameProfile pendingCanvasImportProfile;
     private WidgetLayout.Item pendingCanvasImportItem;
     private int pendingCanvasImportFrameWidth = 1;
@@ -441,14 +456,23 @@ public class AssistantActivity extends Activity {
         @Override
         public void onReceive(Context context, Intent intent) {
             if (CoordinateCaptureActivity.ACTION_REGION_PREVIEW.equals(intent.getAction())) {
+                if (isTranslationRegionIntent(intent)) return;
                 handleMagnifierRegionPreview(intent);
                 return;
             }
             if (CoordinateCaptureActivity.ACTION_REGION_CANCELLED.equals(intent.getAction())) {
+                if (isTranslationRegionIntent(intent)) {
+                    cancelTranslationRegionCapture();
+                    return;
+                }
                 cancelMagnifierRegionCapture();
                 return;
             }
             if (CoordinateCaptureActivity.ACTION_REGION_CAPTURED.equals(intent.getAction())) {
+                if (isTranslationRegionIntent(intent)) {
+                    handleTranslationRegionCaptured(intent);
+                    return;
+                }
                 handleMagnifierRegionCaptured(intent);
                 return;
             }
@@ -562,6 +586,7 @@ public class AssistantActivity extends Activity {
                     settingsMacroMappingProtectionDraft);
         }
         putJsonState(outState, STATE_MAGNIFIER_DRAFT, settingsMagnifierDraft);
+        putJsonState(outState, STATE_TRANSLATION_DRAFT, translationEditorDraft);
         if (settingsThemeDraft != null) {
             outState.putString(STATE_THEME_DRAFT, settingsThemeDraft);
         }
@@ -623,6 +648,11 @@ public class AssistantActivity extends Activity {
             if (magnifierJson != null) {
                 settingsMagnifierDraft = WidgetLayout.Item.fromJson(
                         new JSONObject(magnifierJson));
+            }
+            String translationJson = state.getString(STATE_TRANSLATION_DRAFT);
+            if (translationJson != null) {
+                translationEditorDraft = WidgetLayout.Item.fromJson(
+                        new JSONObject(translationJson));
             }
             String bindingJson = state.getString(STATE_PROFILE_CONTEXT_BINDING_DRAFT);
             if (bindingJson != null) {
@@ -710,6 +740,7 @@ public class AssistantActivity extends Activity {
         closingAnimatedPanels.clear();
         endGamepadRecordingSession(activeGamepadRecordingSession);
         releaseMagnifierViews();
+        releaseTranslationViews();
         releaseCanvasViews();
         cancelPendingCanvasImport();
         cancelPendingProfileBundleWork();
@@ -769,6 +800,7 @@ public class AssistantActivity extends Activity {
         requestUpperDisplayFocusHandoffForStartedLifecycle();
         if (!DebugPerformanceDiagnostics.isStaticUi()) {
             resumeMagnifierViews();
+            resumeTranslationViews();
         }
         updateCanvasPlayback();
         if (activeMapWebView != null) {
@@ -789,6 +821,7 @@ public class AssistantActivity extends Activity {
         if (!magnifierRegionCaptureInProgress) {
             pauseMagnifierViews();
         }
+        pauseTranslationViews();
         pauseCanvasPlayback();
         resetRightStickIfNeeded();
         parkVirtualMouseDispatcher();
@@ -2019,6 +2052,7 @@ public class AssistantActivity extends Activity {
 
     private View createMainContent() {
         releaseMagnifierViews();
+        releaseTranslationViews();
         releaseCanvasViews();
         if (activeScreen != SCREEN_MAIN) {
             parkKeyboardInputSession();
@@ -2255,7 +2289,59 @@ public class AssistantActivity extends Activity {
             }
             return view;
         }
+        if (WidgetLayout.TYPE_TRANSLATION.equals(type)) {
+            GameProfile translationProfile = selectedProfile;
+            String translationSessionKey = translationSessionKey(translationProfile, item);
+            TranslationWidgetView view = new TranslationWidgetView(this, translationProfile, item,
+                    pausedTranslationSessions.contains(translationSessionKey),
+                    translationRuntimeStates.get(translationSessionKey),
+                    new TranslationWidgetView.Listener() {
+                        @Override
+                        public void onEditRequested(WidgetLayout.Item requestedItem) {
+                            showTranslationEditor(requestedItem);
+                        }
+
+                        @Override
+                        public void onRegionRequested(WidgetLayout.Item requestedItem) {
+                            startQuickTranslationRegionCapture(requestedItem);
+                        }
+
+                        @Override
+                        public void onRunningChanged(WidgetLayout.Item requestedItem,
+                                boolean running) {
+                            String key = translationSessionKey(translationProfile, requestedItem);
+                            if (running) {
+                                pausedTranslationSessions.remove(key);
+                            } else {
+                                pausedTranslationSessions.add(key);
+                            }
+                        }
+
+                        @Override
+                        public void onRuntimeSnapshot(WidgetLayout.Item requestedItem,
+                                TranslationRuntimeController.Snapshot snapshot) {
+                            String key = translationSessionKey(translationProfile, requestedItem);
+                            if (translationRuntimeResetSessions.remove(key)
+                                    || snapshot == null || snapshot.isEmpty()) {
+                                translationRuntimeStates.remove(key);
+                            } else {
+                                translationRuntimeStates.put(key, snapshot);
+                            }
+                        }
+                    });
+            translationViews.add(view);
+            if (activityResumed && activeScreen == SCREEN_MAIN && !hasUnsavedWidgetLayout()) {
+                view.resume();
+            }
+            return view;
+        }
         return null;
+    }
+
+    private static String translationSessionKey(GameProfile profile, WidgetLayout.Item item) {
+        String profileId = profile == null ? "" : profile.safeProfileId();
+        String itemId = item == null || item.itemId == null ? "" : item.itemId;
+        return profileId + ":" + itemId;
     }
 
     private View createMacroWidget(WidgetLayout.Item item) {
@@ -3040,6 +3126,110 @@ public class AssistantActivity extends Activity {
         resumeMagnifierViews();
     }
 
+    private boolean isTranslationRegionIntent(Intent intent) {
+        return CoordinateCaptureActivity.REGION_PURPOSE_TRANSLATION.equals(
+                intent.getStringExtra(CoordinateCaptureActivity.EXTRA_REGION_PURPOSE));
+    }
+
+    private void startTranslationRegionCapture() {
+        startTranslationRegionCapture(false);
+    }
+
+    private void startQuickTranslationRegionCapture(WidgetLayout.Item item) {
+        WidgetLayout.Item profileItem = resolveTranslationProfileItem(item);
+        if (profileItem == null) {
+            showErrorAction(getString(R.string.translation_widget_unavailable));
+            return;
+        }
+        translationEditorDraft = profileItem.copy();
+        startTranslationRegionCapture(true);
+    }
+
+    private void startTranslationRegionCapture(boolean quickEntry) {
+        WidgetLayout.Item draft = translationEditorDraft;
+        if (draft == null || captureInProgress) return;
+        Display targetDisplay = findCaptureDisplay();
+        if (targetDisplay == null) {
+            showErrorAction(getString(R.string.error_upper_screen_not_found));
+            return;
+        }
+        translationRegionQuickEntry = quickEntry;
+        translationRegionCaptureInProgress = true;
+        captureInProgress = true;
+        Intent intent = CoordinateCaptureActivity.createIntent(
+                this, CoordinateCaptureActivity.MODE_REGION);
+        intent.putExtra(CoordinateCaptureActivity.EXTRA_REGION_PURPOSE,
+                CoordinateCaptureActivity.REGION_PURPOSE_TRANSLATION);
+        intent.putExtra(CoordinateCaptureActivity.EXTRA_REGION_COMMIT_DIRECT, quickEntry);
+        intent.putExtra(CoordinateCaptureActivity.EXTRA_LOCK_ASPECT, false);
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                | Intent.FLAG_ACTIVITY_CLEAR_TASK
+                | Intent.FLAG_ACTIVITY_NO_ANIMATION);
+        ActivityOptions options = ActivityOptions.makeBasic();
+        options.setLaunchDisplayId(targetDisplay.getDisplayId());
+        try {
+            startActivity(intent, options.toBundle());
+        } catch (Throwable error) {
+            cancelTranslationRegionCapture();
+            showErrorAction(getString(R.string.error_translation_region_start));
+        }
+    }
+
+    private void handleTranslationRegionCaptured(Intent intent) {
+        WidgetLayout.Item draft = translationEditorDraft;
+        if (draft == null) {
+            finishTranslationRegionCapture();
+            return;
+        }
+        TranslationConfig config = draft.safeTranslation();
+        config.regionLeft = intent.getFloatExtra(
+                CoordinateCaptureActivity.EXTRA_REGION_LEFT, config.regionLeft);
+        config.regionTop = intent.getFloatExtra(
+                CoordinateCaptureActivity.EXTRA_REGION_TOP, config.regionTop);
+        config.regionRight = intent.getFloatExtra(
+                CoordinateCaptureActivity.EXTRA_REGION_RIGHT, config.regionRight);
+        config.regionBottom = intent.getFloatExtra(
+                CoordinateCaptureActivity.EXTRA_REGION_BOTTOM, config.regionBottom);
+        config.sanitize();
+        boolean quickEntry = translationRegionQuickEntry;
+        if (quickEntry) {
+            WidgetLayout.Item profileItem = resolveTranslationProfileItem(draft);
+            if (profileItem == null) {
+                translationEditorDraft = null;
+                finishTranslationRegionCapture();
+                showErrorAction(getString(R.string.translation_widget_unavailable));
+                return;
+            }
+            TranslationConfig saved = config.copy();
+            profileItem.translationConfig = saved.copy();
+            mirrorTranslationIntoDraft(profileItem, saved);
+            invalidateTranslationRuntime(profileItem);
+            ProfileStore.saveProfiles(this, profiles);
+            translationEditorDraft = null;
+            finishTranslationRegionCapture();
+            rebuildContent();
+            showAction(getString(R.string.translation_region_saved));
+            return;
+        }
+        finishTranslationRegionCapture();
+        if (translationEditorRefresh != null) {
+            translationEditorRefresh.run();
+        }
+        showAction(getString(R.string.translation_region_draft_updated));
+    }
+
+    private void cancelTranslationRegionCapture() {
+        boolean quickEntry = translationRegionQuickEntry;
+        finishTranslationRegionCapture();
+        if (quickEntry) translationEditorDraft = null;
+    }
+
+    private void finishTranslationRegionCapture() {
+        translationRegionCaptureInProgress = false;
+        captureInProgress = false;
+        translationRegionQuickEntry = false;
+    }
+
     private void resumeMagnifierViews() {
         for (UpperScreenMagnifierView view : magnifierViews) {
             view.resume();
@@ -3057,6 +3247,19 @@ public class AssistantActivity extends Activity {
             view.release();
         }
         magnifierViews.clear();
+    }
+
+    private void resumeTranslationViews() {
+        for (TranslationWidgetView view : translationViews) view.resume();
+    }
+
+    private void pauseTranslationViews() {
+        for (TranslationWidgetView view : translationViews) view.pause();
+    }
+
+    private void releaseTranslationViews() {
+        for (TranslationWidgetView view : translationViews) view.release();
+        translationViews.clear();
     }
 
     private void releaseCanvasViews() {
@@ -3503,6 +3706,36 @@ public class AssistantActivity extends Activity {
         }
     }
 
+    private WidgetLayout.Item resolveTranslationProfileItem(
+            WidgetLayout.Item requestedItem) {
+        if (selectedProfile == null || requestedItem == null
+                || !WidgetLayout.TYPE_TRANSLATION.equals(requestedItem.type)) {
+            return null;
+        }
+        WidgetLayout profileLayout = selectedProfile.safeWidgetLayout();
+        if (profileLayout.items.contains(requestedItem)) {
+            return requestedItem;
+        }
+        WidgetLayout.Item candidate = profileLayout.findItemById(requestedItem.itemId);
+        return candidate != null && WidgetLayout.TYPE_TRANSLATION.equals(candidate.type)
+                ? candidate : null;
+    }
+
+    private void mirrorTranslationIntoDraft(
+            WidgetLayout.Item profileItem, TranslationConfig saved) {
+        WidgetLayout.Item draftItem = equivalentDraftWidgetItem(
+                profileItem, WidgetLayout.TYPE_TRANSLATION);
+        if (draftItem != null) {
+            draftItem.translationConfig = saved.copy();
+        }
+    }
+
+    private void invalidateTranslationRuntime(WidgetLayout.Item profileItem) {
+        String runtimeKey = translationSessionKey(selectedProfile, profileItem);
+        translationRuntimeStates.remove(runtimeKey);
+        translationRuntimeResetSessions.add(runtimeKey);
+    }
+
     private void cancelPendingCanvasImport() {
         if (pendingCanvasImportRequest != null) {
             pendingCanvasImportRequest.cancel();
@@ -3591,6 +3824,8 @@ public class AssistantActivity extends Activity {
         draftWidgetLayout = null;
         settingsTouchpadDraft = null;
         settingsMagnifierDraft = null;
+        translationEditorDraft = null;
+        settingsTranslationProviderDraft = null;
         settingsGameContextBindingDraft = null;
         settingsThemeDraft = null;
         settingsMacroMappingProtectionInput = null;
@@ -4620,6 +4855,9 @@ public class AssistantActivity extends Activity {
         if (activeSettingsSection != section && activeSettingsSection == SETTINGS_MAGNIFIER) {
             settingsMagnifierDraft = null;
         }
+        if (activeSettingsSection != section && activeSettingsSection == SETTINGS_TRANSLATION) {
+            settingsTranslationProviderDraft = null;
+        }
         if (activeSettingsSection != section && activeSettingsSection == SETTINGS_MACRO) {
             settingsMacroMappingProtectionInput = null;
             settingsMacroMappingProtectionDraft = null;
@@ -4630,6 +4868,9 @@ public class AssistantActivity extends Activity {
         }
         if (section == SETTINGS_MAGNIFIER) {
             ensureSettingsMagnifierDraft();
+        }
+        if (section == SETTINGS_TRANSLATION) {
+            ensureSettingsTranslationProviderDraft();
         }
         if (section == SETTINGS_MACRO && settingsMacroMappingProtectionDraft == null) {
             settingsMacroMappingProtectionDraft =
@@ -4674,6 +4915,8 @@ public class AssistantActivity extends Activity {
                 R.drawable.ic_macro, SETTINGS_MACRO));
         nav.addView(settingsCategoryButton(getString(R.string.settings_category_magnifier),
                 R.drawable.ic_fullscreen, SETTINGS_MAGNIFIER));
+        nav.addView(settingsCategoryButton(getString(R.string.settings_category_translation),
+                R.drawable.ic_guide, SETTINGS_TRANSLATION));
         nav.addView(settingsCategoryButton(getString(R.string.settings_category_appearance),
                 R.drawable.ic_settings, SETTINGS_APPEARANCE));
         nav.addView(settingsCategoryButton(getString(R.string.settings_category_connection),
@@ -4879,6 +5122,8 @@ public class AssistantActivity extends Activity {
             populateMacroSettingsContent(content);
         } else if (activeSettingsSection == SETTINGS_MAGNIFIER) {
             populateMagnifierSettingsContent(content);
+        } else if (activeSettingsSection == SETTINGS_TRANSLATION) {
+            populateTranslationSettingsContent(content);
         } else if (activeSettingsSection == SETTINGS_INPUT) {
             populateInputSettingsContent(content);
         } else if (activeSettingsSection == SETTINGS_APPEARANCE) {
@@ -5852,6 +6097,136 @@ public class AssistantActivity extends Activity {
         return shapeChanged;
     }
 
+    private void populateTranslationSettingsContent(LinearLayout content) {
+        WidgetLayout.Item currentItem = selectedProfile.safeWidgetLayout().findItem(
+                WidgetLayout.TYPE_TRANSLATION);
+        if (currentItem == null) {
+            addSettingsInfoCard(content, getString(R.string.translation_missing_title),
+                    getString(R.string.translation_missing_help), HeimdallUi.SEMANTIC_WARNING);
+        }
+        TranslationProviderConfig provider = ensureSettingsTranslationProviderDraft();
+
+        addSettingsLabel(content, getString(R.string.translation_provider));
+        LinearLayout providerRow = settingsActionRow(content);
+        providerRow.addView(translationProviderButton("SiliconFlow",
+                TranslationProviderConfig.PROVIDER_SILICONFLOW));
+        providerRow.addView(translationProviderButton(
+                getString(R.string.translation_provider_custom),
+                TranslationProviderConfig.PROVIDER_CUSTOM));
+
+        if (TranslationProviderConfig.PROVIDER_SILICONFLOW.equals(provider.provider)) {
+            addSettingsLabel(content, getString(R.string.translation_region));
+            LinearLayout endpointRow = settingsActionRow(content);
+            endpointRow.addView(translationRegionButton(
+                    getString(R.string.translation_region_china),
+                    TranslationProviderConfig.REGION_CHINA));
+            endpointRow.addView(translationRegionButton(
+                    getString(R.string.translation_region_global),
+                    TranslationProviderConfig.REGION_GLOBAL));
+            addSettingsInfoCard(content, getString(R.string.translation_provider_details),
+                    provider.resolvedBaseUrl() + "\n" + provider.resolvedModel(),
+                    HeimdallUi.SEMANTIC_NEUTRAL);
+        } else {
+            addSettingsLabel(content, getString(R.string.translation_base_url));
+            EditText baseUrl = settingsEditText(provider.customBaseUrl);
+            baseUrl.setHint("https://example.com/v1");
+            watchTranslationText(baseUrl, value -> provider.customBaseUrl = value);
+            content.addView(baseUrl, translationInputParams());
+            addSettingsLabel(content, getString(R.string.translation_model));
+            EditText model = settingsEditText(provider.customModel);
+            watchTranslationText(model, value -> provider.customModel = value);
+            content.addView(model, translationInputParams());
+        }
+
+        addSettingsLabel(content, getString(R.string.translation_api_key));
+        EditText apiKey = settingsEditText(provider.apiKey);
+        apiKey.setInputType(android.text.InputType.TYPE_CLASS_TEXT
+                | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        apiKey.setHint("sk-...");
+        watchTranslationText(apiKey, value -> provider.apiKey = value);
+        content.addView(apiKey, translationInputParams());
+        LinearLayout testRow = settingsActionRow(content);
+        testRow.addView(editorButton(getString(R.string.translation_test_connection),
+                this::testTranslationConnection));
+        addSettingsHelp(content, getString(R.string.translation_settings_help));
+    }
+
+    private TranslationProviderConfig ensureSettingsTranslationProviderDraft() {
+        if (settingsTranslationProviderDraft == null) {
+            settingsTranslationProviderDraft = TranslationSettingsStore.load(this);
+        }
+        return settingsTranslationProviderDraft;
+    }
+
+    private Button translationProviderButton(String label, String providerId) {
+        Button button = editorButton(label, () -> {
+            ensureSettingsTranslationProviderDraft().provider = providerId;
+            refreshSettingsContent();
+        });
+        HeimdallUi.applyChoiceButton(this, button, providerId.equals(
+                ensureSettingsTranslationProviderDraft().provider));
+        return button;
+    }
+
+    private Button translationRegionButton(String label, String region) {
+        Button button = editorButton(label, () -> {
+            ensureSettingsTranslationProviderDraft().region = region;
+            refreshSettingsContent();
+        });
+        HeimdallUi.applyChoiceButton(this, button, region.equals(
+                ensureSettingsTranslationProviderDraft().region));
+        return button;
+    }
+
+    private LinearLayout.LayoutParams translationInputParams() {
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, dp(42));
+        params.setMargins(0, 0, 0, dp(6));
+        return params;
+    }
+
+    private interface TranslationTextConsumer { void accept(String value); }
+
+    private void watchTranslationText(EditText input, TranslationTextConsumer consumer) {
+        input.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+            @Override public void onTextChanged(CharSequence s, int start, int before, int count) {
+                consumer.accept(s == null ? "" : s.toString().trim());
+            }
+            @Override public void afterTextChanged(Editable editable) {}
+        });
+    }
+
+    private void testTranslationConnection() {
+        TranslationProviderConfig provider = ensureSettingsTranslationProviderDraft().copy();
+        if (!provider.isComplete()) {
+            showErrorAction(getString(R.string.translation_provider_incomplete));
+            return;
+        }
+        showAction(getString(R.string.translation_testing_connection));
+        TranslationApiClient client = new TranslationApiClient();
+        client.translate(provider, "Hello", TranslationConfig.LANGUAGE_CHINESE_SIMPLIFIED,
+                new TranslationApiClient.Callback() {
+                    @Override public void onSuccess(String translatedText) {
+                        client.shutdown();
+                        showAction(getString(R.string.translation_connection_success));
+                    }
+                    @Override public void onError(String message) {
+                        client.shutdown();
+                        showErrorAction(getString(R.string.translation_connection_failed, message));
+                    }
+                });
+    }
+
+    private boolean applySettingsTranslationDraft() {
+        TranslationProviderConfig provider = ensureSettingsTranslationProviderDraft();
+        if (!TranslationSettingsStore.save(this, provider)) {
+            showErrorAction(getString(R.string.translation_secure_save_failed));
+            return false;
+        }
+        settingsTranslationProviderDraft = null;
+        return true;
+    }
+
     private void applyProfileSettingsInputs() {
         if (settingsProfileNameInput == null || settingsProfilePackageInput == null
                 || settingsProfileDefaultInput == null) {
@@ -6233,6 +6608,9 @@ public class AssistantActivity extends Activity {
         if (activeSettingsSection == SETTINGS_MAGNIFIER) {
             return getString(R.string.settings_category_magnifier);
         }
+        if (activeSettingsSection == SETTINGS_TRANSLATION) {
+            return getString(R.string.settings_category_translation);
+        }
         if (activeSettingsSection == SETTINGS_INPUT) {
             return getString(R.string.settings_category_connection);
         }
@@ -6266,6 +6644,9 @@ public class AssistantActivity extends Activity {
                 return getString(R.string.settings_summary_magnifier_missing);
             }
             return getString(R.string.settings_summary_magnifier);
+        }
+        if (activeSettingsSection == SETTINGS_TRANSLATION) {
+            return getString(R.string.settings_summary_translation);
         }
         if (activeSettingsSection == SETTINGS_INPUT) {
             return getString(R.string.settings_summary_connection);
@@ -6310,6 +6691,11 @@ public class AssistantActivity extends Activity {
                 settingsMagnifierDraft.magnifierZoom = 1f;
             }
             showDebugAction(getString(R.string.settings_reset_magnifier_draft));
+            refreshSettingsContent();
+            return;
+        } else if (activeSettingsSection == SETTINGS_TRANSLATION) {
+            settingsTranslationProviderDraft = TranslationSettingsStore.load(this);
+            showDebugAction(getString(R.string.settings_reset_translation_draft));
             refreshSettingsContent();
             return;
         } else if (activeSettingsSection == SETTINGS_APPEARANCE) {
@@ -6362,6 +6748,13 @@ public class AssistantActivity extends Activity {
         if (activeSettingsSection == SETTINGS_MAGNIFIER) {
             magnifierShapeChanged = applySettingsMagnifierDraft();
             settingsMagnifierDraft = null;
+        }
+        if (activeSettingsSection == SETTINGS_TRANSLATION) {
+            if (!applySettingsTranslationDraft()) return;
+            showDebugAction(getString(R.string.settings_section_saved,
+                    settingsSectionTitle()));
+            refreshSettingsContent();
+            return;
         }
         if (activeSettingsSection == SETTINGS_PROFILE) {
             applyProfileSettingsInputs();
@@ -6604,6 +6997,8 @@ public class AssistantActivity extends Activity {
                 () -> gridEditor.addWidget(WidgetLayout.TYPE_TOUCHPAD)));
         actions.addView(editorButton(getString(R.string.grid_editor_add_magnifier),
                 () -> gridEditor.addWidget(WidgetLayout.TYPE_MAGNIFIER)));
+        actions.addView(editorButton(getString(R.string.grid_editor_add_translation),
+                () -> gridEditor.addWidget(WidgetLayout.TYPE_TRANSLATION)));
         actions.addView(editorButton(getString(R.string.grid_editor_add_canvas),
                 () -> gridEditor.addWidget(WidgetLayout.TYPE_CANVAS)));
         actions.addView(editorButton(getString(R.string.grid_editor_add_quick_actions),
@@ -9785,7 +10180,7 @@ public class AssistantActivity extends Activity {
                 downX = event.getX();
                 downY = event.getY();
                 pending = true;
-                host.postDelayed(this, QUICK_ACTION_EDIT_LONG_PRESS_TIMEOUT_MS);
+                host.postDelayed(this, HeimdallInteraction.EDIT_LONG_PRESS_TIMEOUT_MS);
             } else if (action == MotionEvent.ACTION_POINTER_DOWN) {
                 cancelPending();
             } else if (action == MotionEvent.ACTION_MOVE) {
@@ -10545,6 +10940,186 @@ public class AssistantActivity extends Activity {
     private String nonEmpty(String value, String fallback) {
         String trimmed = value == null ? "" : value.trim();
         return trimmed.length() == 0 ? fallback : trimmed;
+    }
+
+    private void showTranslationEditor(WidgetLayout.Item item) {
+        WidgetLayout.Item profileItem = resolveTranslationProfileItem(item);
+        if (profileItem == null) {
+            showErrorAction(getString(R.string.translation_widget_unavailable));
+            return;
+        }
+        WidgetLayout.Item draftItem = translationEditorDraft != null
+                && profileItem.itemId.equals(translationEditorDraft.itemId)
+                ? translationEditorDraft : profileItem.copy();
+        translationEditorDraft = draftItem;
+        TranslationConfig draft = draftItem.safeTranslation();
+        final PanelOverlay[] holder = new PanelOverlay[1];
+
+        LinearLayout shell = new LinearLayout(this);
+        shell.setOrientation(LinearLayout.VERTICAL);
+        shell.setPadding(dp(14), dp(10), dp(14), dp(10));
+        shell.setBackground(HeimdallUi.isFreyaFamily(this)
+                ? HeimdallUi.cncFlush(this, 14)
+                : HeimdallUi.glassSurface(this, ThemeGlassColors.OVERLAY, 14, 2));
+
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        shell.addView(header, new LinearLayout.LayoutParams(-1, dp(48)));
+        TextView title = text(getString(R.string.translation_editor_title),
+                HeimdallUi.TYPE_EDITOR_TITLE, TEXT, true);
+        header.addView(title, new LinearLayout.LayoutParams(0, -1, 1));
+        Button close = gridCloseButton(() -> {
+            if (holder[0] != null) dismissPanelAnimated(holder[0]);
+        });
+        close.setContentDescription(getString(R.string.common_close));
+        header.addView(close, new LinearLayout.LayoutParams(dp(42), dp(38)));
+
+        View headerDivider = new View(this);
+        headerDivider.setBackgroundColor(HeimdallUi.componentColors(this).structuralDivider);
+        shell.addView(headerDivider, new LinearLayout.LayoutParams(-1, dp(1)));
+
+        TextView help = text(getString(R.string.translation_editor_help),
+                HeimdallUi.TYPE_META, MUTED, false);
+        help.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
+        shell.addView(help, new LinearLayout.LayoutParams(-1, dp(36)));
+
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(true);
+        LinearLayout body = new LinearLayout(this);
+        body.setOrientation(LinearLayout.VERTICAL);
+        body.setPadding(dp(2), dp(2), dp(2), dp(8));
+        scroll.addView(body, new ScrollView.LayoutParams(-1, -2));
+        shell.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+
+        addSettingsLabel(body, getString(R.string.translation_source_region));
+        TextView regionSummary = text("", HeimdallUi.TYPE_HELP, MUTED, false);
+        regionSummary.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
+        regionSummary.setPadding(dp(10), dp(6), dp(10), dp(6));
+        regionSummary.setBackground(HeimdallUi.fieldPanel(this, 8));
+        body.addView(regionSummary, new LinearLayout.LayoutParams(-1, dp(46)));
+        Button selectRegion = editorButton(getString(R.string.translation_select_region),
+                this::startTranslationRegionCapture);
+        LinearLayout.LayoutParams regionActionParams = new LinearLayout.LayoutParams(-1, dp(46));
+        regionActionParams.setMargins(0, dp(5), 0, dp(8));
+        body.addView(selectRegion, regionActionParams);
+
+        addSettingsLabel(body, getString(R.string.translation_ocr_script));
+        LinearLayout scriptRow = settingsActionRow(body);
+        Button latin = editorButton("Latin", () -> {
+            draft.ocrScript = TranslationConfig.SCRIPT_LATIN;
+            if (translationEditorRefresh != null) translationEditorRefresh.run();
+        });
+        Button japanese = editorButton("\u65e5\u672c\u8a9e", () -> {
+            draft.ocrScript = TranslationConfig.SCRIPT_JAPANESE;
+            if (translationEditorRefresh != null) translationEditorRefresh.run();
+        });
+        Button chinese = editorButton("\u4e2d\u6587", () -> {
+            draft.ocrScript = TranslationConfig.SCRIPT_CHINESE;
+            if (translationEditorRefresh != null) translationEditorRefresh.run();
+        });
+        Button korean = editorButton("\ud55c\uad6d\uc5b4", () -> {
+            draft.ocrScript = TranslationConfig.SCRIPT_KOREAN;
+            if (translationEditorRefresh != null) translationEditorRefresh.run();
+        });
+        scriptRow.addView(latin);
+        scriptRow.addView(japanese);
+        scriptRow.addView(chinese);
+        scriptRow.addView(korean);
+
+        addSettingsLabel(body, getString(R.string.translation_target_language));
+        LinearLayout targetRowOne = settingsActionRow(body);
+        Button simplified = editorButton("\u7b80\u4f53\u4e2d\u6587", () -> {
+            draft.targetLanguage = TranslationConfig.LANGUAGE_CHINESE_SIMPLIFIED;
+            if (translationEditorRefresh != null) translationEditorRefresh.run();
+        });
+        Button traditional = editorButton("\u7e41\u9ad4\u4e2d\u6587", () -> {
+            draft.targetLanguage = TranslationConfig.LANGUAGE_CHINESE_TRADITIONAL;
+            if (translationEditorRefresh != null) translationEditorRefresh.run();
+        });
+        targetRowOne.addView(simplified);
+        targetRowOne.addView(traditional);
+        LinearLayout targetRowTwo = settingsActionRow(body);
+        Button english = editorButton("English", () -> {
+            draft.targetLanguage = TranslationConfig.LANGUAGE_ENGLISH;
+            if (translationEditorRefresh != null) translationEditorRefresh.run();
+        });
+        Button targetJapanese = editorButton("\u65e5\u672c\u8a9e", () -> {
+            draft.targetLanguage = TranslationConfig.LANGUAGE_JAPANESE;
+            if (translationEditorRefresh != null) translationEditorRefresh.run();
+        });
+        Button targetKorean = editorButton("\ud55c\uad6d\uc5b4", () -> {
+            draft.targetLanguage = TranslationConfig.LANGUAGE_KOREAN;
+            if (translationEditorRefresh != null) translationEditorRefresh.run();
+        });
+        targetRowTwo.addView(english);
+        targetRowTwo.addView(targetJapanese);
+        targetRowTwo.addView(targetKorean);
+
+        translationEditorRefresh = () -> {
+            regionSummary.setText(getString(R.string.translation_region_summary,
+                    Math.round(draft.regionLeft * 100f),
+                    Math.round(draft.regionTop * 100f),
+                    Math.round(draft.regionRight * 100f),
+                    Math.round(draft.regionBottom * 100f)));
+            HeimdallUi.applyChoiceButton(this, latin,
+                    TranslationConfig.SCRIPT_LATIN.equals(draft.ocrScript));
+            HeimdallUi.applyChoiceButton(this, japanese,
+                    TranslationConfig.SCRIPT_JAPANESE.equals(draft.ocrScript));
+            HeimdallUi.applyChoiceButton(this, chinese,
+                    TranslationConfig.SCRIPT_CHINESE.equals(draft.ocrScript));
+            HeimdallUi.applyChoiceButton(this, korean,
+                    TranslationConfig.SCRIPT_KOREAN.equals(draft.ocrScript));
+            HeimdallUi.applyChoiceButton(this, simplified,
+                    TranslationConfig.LANGUAGE_CHINESE_SIMPLIFIED.equals(
+                            draft.targetLanguage));
+            HeimdallUi.applyChoiceButton(this, traditional,
+                    TranslationConfig.LANGUAGE_CHINESE_TRADITIONAL.equals(
+                            draft.targetLanguage));
+            HeimdallUi.applyChoiceButton(this, english,
+                    TranslationConfig.LANGUAGE_ENGLISH.equals(draft.targetLanguage));
+            HeimdallUi.applyChoiceButton(this, targetJapanese,
+                    TranslationConfig.LANGUAGE_JAPANESE.equals(draft.targetLanguage));
+            HeimdallUi.applyChoiceButton(this, targetKorean,
+                    TranslationConfig.LANGUAGE_KOREAN.equals(draft.targetLanguage));
+        };
+        translationEditorRefresh.run();
+
+        View footerDivider = new View(this);
+        footerDivider.setBackgroundColor(HeimdallUi.componentColors(this).structuralDivider);
+        shell.addView(footerDivider, new LinearLayout.LayoutParams(-1, dp(1)));
+        LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        actions.setPadding(0, dp(5), 0, 0);
+        shell.addView(actions, new LinearLayout.LayoutParams(-1, dp(58)));
+        actions.addView(editorButton(getString(R.string.common_cancel), () -> {
+            if (holder[0] != null) dismissPanelAnimated(holder[0]);
+        }));
+        Button save = editorButton(getString(R.string.common_save), () -> {
+            TranslationConfig saved = draft.copy();
+            profileItem.translationConfig = saved.copy();
+            item.translationConfig = saved.copy();
+            mirrorTranslationIntoDraft(profileItem, saved);
+            invalidateTranslationRuntime(profileItem);
+            ProfileStore.saveProfiles(this, profiles);
+            showAction(getString(R.string.translation_editor_saved));
+            if (holder[0] != null) {
+                dismissPanelAnimated(holder[0], this::rebuildContent);
+            } else {
+                rebuildContent();
+            }
+        });
+        HeimdallUi.applyPrimaryActionButton(this, save);
+        actions.addView(save);
+
+        DisplayMetrics metrics = getResources().getDisplayMetrics();
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
+                Math.min(dp(700), metrics.widthPixels - dp(40)),
+                Math.min(dp(760), metrics.heightPixels - dp(72)), Gravity.CENTER);
+        holder[0] = showPanelOverlay(shell, params, () -> {
+            if (translationEditorDraft == draftItem) translationEditorDraft = null;
+            translationEditorRefresh = null;
+        });
     }
 
     private void showKeyboardPadEditor(WidgetLayout.Item item) {
@@ -13183,10 +13758,10 @@ public class AssistantActivity extends Activity {
         open.setMinWidth(0);
         open.setPadding(dp(10), 0, dp(8), 0);
         open.setOnClickListener(v -> openAction.run());
-        open.setOnLongClickListener(v -> {
-            editAction.run();
-            return true;
-        });
+        DelayedEditLongPressGesture editGesture =
+                new DelayedEditLongPressGesture(open, editAction);
+        open.setLongClickable(false);
+        open.setOnTouchListener((view, event) -> editGesture.onTouchEvent(event));
         row.addView(open, new LinearLayout.LayoutParams(0, dp(52), 1));
         return row;
     }

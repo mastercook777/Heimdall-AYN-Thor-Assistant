@@ -6,6 +6,9 @@ import android.accessibilityservice.GestureDescription;
 import android.content.Context;
 import android.graphics.Path;
 import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.graphics.Paint;
+import android.graphics.Rect;
 import android.hardware.HardwareBuffer;
 import android.os.Build;
 import android.os.Handler;
@@ -19,6 +22,8 @@ import android.view.accessibility.AccessibilityWindowInfo;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public final class ThorAccessibilityService extends AccessibilityService {
     private static final String FOCUS_TAG = "HeimdallGameFocus";
@@ -28,6 +33,12 @@ public final class ThorAccessibilityService extends AccessibilityService {
     private static final List<String> recentPackageNames = new ArrayList<>();
 
     private final Handler handler = new Handler(Looper.getMainLooper());
+    private final ExecutorService screenshotExecutor = Executors.newSingleThreadExecutor(
+            runnable -> {
+                Thread thread = new Thread(runnable, "heimdall-accessibility-screenshot");
+                thread.setPriority(Math.max(Thread.MIN_PRIORITY, Thread.NORM_PRIORITY - 1));
+                return thread;
+            });
     private final Runnable foregroundRefresh = this::refreshForegroundApp;
     private GestureDescription.StrokeDescription activeTouchpadStroke;
     private InputBridge.Callback activeTouchpadCallback;
@@ -100,10 +111,26 @@ public final class ThorAccessibilityService extends AccessibilityService {
         captureDisplayR(service, displayId, callback);
     }
 
+    public static void captureDisplayRegion(Context context, int displayId,
+            float normalizedLeft, float normalizedTop, float normalizedRight,
+            float normalizedBottom, int maximumSide, ScreenshotCallback callback) {
+        ThorAccessibilityService service = instance;
+        if (service == null) {
+            callback.onError(context.getString(R.string.accessibility_enable_required));
+            return;
+        }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            callback.onError(service.getString(R.string.accessibility_screenshot_unsupported));
+            return;
+        }
+        captureDisplayRegionR(service, displayId, normalizedLeft, normalizedTop,
+                normalizedRight, normalizedBottom, maximumSide, callback);
+    }
+
     @TargetApi(Build.VERSION_CODES.R)
     private static void captureDisplayR(ThorAccessibilityService service, int displayId,
             ScreenshotCallback callback) {
-        service.takeScreenshot(displayId, service.getMainExecutor(),
+        service.takeScreenshot(displayId, service.screenshotExecutor,
                 new AccessibilityService.TakeScreenshotCallback() {
                     @Override
                     public void onSuccess(ScreenshotResult screenshot) {
@@ -127,6 +154,83 @@ public final class ThorAccessibilityService extends AccessibilityService {
                 });
     }
 
+    @TargetApi(Build.VERSION_CODES.R)
+    private static void captureDisplayRegionR(ThorAccessibilityService service, int displayId,
+            float normalizedLeft, float normalizedTop, float normalizedRight,
+            float normalizedBottom, int maximumSide, ScreenshotCallback callback) {
+        service.takeScreenshot(displayId, service.screenshotExecutor,
+                new AccessibilityService.TakeScreenshotCallback() {
+                    @Override
+                    public void onSuccess(ScreenshotResult screenshot) {
+                        HardwareBuffer buffer = screenshot.getHardwareBuffer();
+                        Bitmap region = null;
+                        try {
+                            Bitmap wrapped = Bitmap.wrapHardwareBuffer(
+                                    buffer, screenshot.getColorSpace());
+                            if (wrapped != null) {
+                                region = copyRegion(wrapped, normalizedLeft, normalizedTop,
+                                        normalizedRight, normalizedBottom, maximumSide);
+                            }
+                        } catch (Throwable ignored) {
+                            region = null;
+                        } finally {
+                            buffer.close();
+                        }
+                        if (region == null) {
+                            callback.onError(service.getString(
+                                    R.string.accessibility_screenshot_image_failed));
+                        } else {
+                            callback.onCaptured(region);
+                        }
+                    }
+
+                    @Override
+                    public void onFailure(int errorCode) {
+                        callback.onError(service.getString(
+                                R.string.accessibility_screenshot_error_code, errorCode));
+                    }
+                });
+    }
+
+    private static Bitmap copyRegion(Bitmap source, float normalizedLeft, float normalizedTop,
+            float normalizedRight, float normalizedBottom, int maximumSide) {
+        if (source == null || source.getWidth() <= 0 || source.getHeight() <= 0) return null;
+        Bitmap softwareSource = source.copy(Bitmap.Config.ARGB_8888, false);
+        if (softwareSource == null) return null;
+        float leftValue = Math.max(0f, Math.min(0.98f, normalizedLeft));
+        float topValue = Math.max(0f, Math.min(0.98f, normalizedTop));
+        float rightValue = Math.max(leftValue + 0.02f,
+                Math.min(1f, normalizedRight));
+        float bottomValue = Math.max(topValue + 0.02f,
+                Math.min(1f, normalizedBottom));
+        int left = Math.max(0, Math.min(source.getWidth() - 1,
+                Math.round(leftValue * source.getWidth())));
+        int top = Math.max(0, Math.min(source.getHeight() - 1,
+                Math.round(topValue * source.getHeight())));
+        int right = Math.max(left + 1, Math.min(source.getWidth(),
+                Math.round(rightValue * source.getWidth())));
+        int bottom = Math.max(top + 1, Math.min(source.getHeight(),
+                Math.round(bottomValue * source.getHeight())));
+        int sourceWidth = right - left;
+        int sourceHeight = bottom - top;
+        int boundedMaximum = Math.max(320, maximumSide);
+        float scale = Math.min(1f, boundedMaximum
+                / (float) Math.max(sourceWidth, sourceHeight));
+        int outputWidth = Math.max(1, Math.round(sourceWidth * scale));
+        int outputHeight = Math.max(1, Math.round(sourceHeight * scale));
+        Bitmap output = Bitmap.createBitmap(
+                outputWidth, outputHeight, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(output);
+        Paint paint = new Paint(Paint.FILTER_BITMAP_FLAG | Paint.DITHER_FLAG);
+        try {
+            canvas.drawBitmap(softwareSource, new Rect(left, top, right, bottom),
+                    new Rect(0, 0, outputWidth, outputHeight), paint);
+        } finally {
+            softwareSource.recycle();
+        }
+        return output;
+    }
+
     @Override
     protected void onServiceConnected() {
         super.onServiceConnected();
@@ -142,6 +246,7 @@ public final class ThorAccessibilityService extends AccessibilityService {
     @Override
     public void onDestroy() {
         handler.removeCallbacks(foregroundRefresh);
+        screenshotExecutor.shutdownNow();
         cancelMacro();
         HeimdallStabilityDiagnostics.recordFocusDiagnostic(
                 this, "accessibility service-destroyed");
