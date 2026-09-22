@@ -49,6 +49,7 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
         try {
             target = getTargetContext();
             assertNotNull(target);
+            testHardwareMonitorModelContract();
             testControllerSequenceSafetyPolicy();
             testComposedControllerSequenceContract();
             testMacroCloneAndDispatchGateContract();
@@ -931,6 +932,63 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
         profiles.put(new JSONObject(duplicate.toString()));
         List<GameProfile> imported = ProfileStore.profilesFromJson(profiles.toString());
         assertFalse(imported.get(0).safeProfileId().equals(imported.get(1).safeProfileId()));
+    }
+
+    public void testHardwareMonitorModelContract() throws Exception {
+        WidgetLayout layout = new WidgetLayout();
+        layout.items.clear();
+        layout.items.add(new WidgetLayout.Item(
+                WidgetLayout.TYPE_HARDWARE_MONITOR, 0, 0, 4, 2));
+        layout.items.add(new WidgetLayout.Item(
+                WidgetLayout.TYPE_HARDWARE_MONITOR, 4, 0, 4, 2));
+        layout.sanitize();
+        assertEquals(1, layout.items.size());
+        assertEquals(WidgetLayout.TYPE_HARDWARE_MONITOR, layout.items.get(0).type);
+        WidgetLayout restored = WidgetLayout.fromJson(layout.toJson());
+        assertEquals(WidgetLayout.TYPE_HARDWARE_MONITOR, restored.items.get(0).type);
+
+        assertEquals(Float.valueOf(58.125f),
+                HardwareMonitorSampler.convertMilliCelsius("58125"));
+        assertNull(HardwareMonitorSampler.convertMilliCelsius("battery"));
+        assertNull(HardwareMonitorSampler.convertMilliCelsius("200000"));
+
+        File thermalRoot = new File(target.getCacheDir(),
+                "hardware-monitor-contract-" + System.nanoTime());
+        File batteryZone = new File(thermalRoot, "thermal_zone1");
+        File cpuZone = new File(thermalRoot, "thermal_zone48");
+        assertTrue(batteryZone.mkdirs());
+        assertTrue(cpuZone.mkdirs());
+        File batteryType = new File(batteryZone, "type");
+        File batteryTemp = new File(batteryZone, "temp");
+        File cpuType = new File(cpuZone, "type");
+        File cpuTemp = new File(cpuZone, "temp");
+        writeFile(batteryType, "battery\n".getBytes(StandardCharsets.US_ASCII));
+        writeFile(batteryTemp, "31000\n".getBytes(StandardCharsets.US_ASCII));
+        writeFile(cpuType, "cpu-0-1\n".getBytes(StandardCharsets.US_ASCII));
+        writeFile(cpuTemp, "58125\n".getBytes(StandardCharsets.US_ASCII));
+        assertEquals(cpuTemp.getCanonicalPath(),
+                HardwareMonitorSampler.findCpuTemperatureFile(thermalRoot).getCanonicalPath());
+        assertEquals(Float.valueOf(58.125f),
+                HardwareMonitorSampler.readTemperatureCelsius(cpuTemp));
+
+        File duplicateZone = new File(thermalRoot, "thermal_zone49");
+        assertTrue(duplicateZone.mkdirs());
+        File duplicateType = new File(duplicateZone, "type");
+        File duplicateTemp = new File(duplicateZone, "temp");
+        writeFile(duplicateType, "cpu-0-1\n".getBytes(StandardCharsets.US_ASCII));
+        writeFile(duplicateTemp, "59000\n".getBytes(StandardCharsets.US_ASCII));
+        assertNull(HardwareMonitorSampler.findCpuTemperatureFile(thermalRoot));
+
+        assertTrue(duplicateTemp.delete());
+        assertTrue(duplicateType.delete());
+        assertTrue(duplicateZone.delete());
+        assertTrue(cpuTemp.delete());
+        assertTrue(cpuType.delete());
+        assertTrue(cpuZone.delete());
+        assertTrue(batteryTemp.delete());
+        assertTrue(batteryType.delete());
+        assertTrue(batteryZone.delete());
+        assertTrue(thermalRoot.delete());
     }
 
     public void testProfileIconDecodePolicy() {

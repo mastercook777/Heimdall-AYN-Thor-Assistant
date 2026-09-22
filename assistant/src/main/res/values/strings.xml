@@ -219,10 +219,10 @@
     <string name="grid_editor_close">Close Grid editor</string>
     <string name="grid_editor_canvas_description">Grid editor. Drag modules to move. Use the lower-right handle to resize.</string>
     <string name="grid_editor_empty">Add a module below</string>
-    <string name="grid_editor_add_macro">+ Macro</string>
-    <string name="grid_editor_add_touch">+ Pad</string>
-    <string name="grid_editor_add_magnifier">+ Zoom</string>
-    <string name="grid_editor_add_quick_actions">+ Actions</string>
+    <string name="grid_editor_add_macro">Macro</string>
+    <string name="grid_editor_add_touch">Pad</string>
+    <string name="grid_editor_add_magnifier">Zoom</string>
+    <string name="grid_editor_add_quick_actions">Actions</string>
     <string name="grid_editor_copy">Copy</string>
     <string name="grid_editor_delete">Delete</string>
     <string name="grid_editor_reset">Reset</string>
@@ -1002,7 +1002,7 @@
     <string name="canvas_remove_image">Remove media</string>
     <string name="canvas_remove_confirm">Remove the media from this Canvas? The Canvas module will remain in the Grid.</string>
     <string name="canvas_image_removed">Canvas media removed.</string>
-    <string name="grid_editor_add_canvas">+ Canvas</string>
+    <string name="grid_editor_add_canvas">Canvas</string>
     <string name="gamepad_system_navigation_warning_title">System navigation macro · Experimental</string>
     <string name="gamepad_system_navigation_warning_body">This recording contains %1$s. Heimdall will replay its recorded down/up events together. Testing can navigate Android or the emulator; the replay timeout will restore Heimdall controls if the route stalls.</string>
     <string name="gamepad_system_key_back">Android Back</string>
@@ -1011,7 +1011,7 @@
     <string name="native_controller_replay_too_large">Controller replay was blocked because the recorded sequence exceeds the safe event or duration limit. Rerecord this step.</string>
     <string name="native_controller_replay_missing_release">Controller replay was blocked because a system-navigation key has no recorded release. Rerecord this step.</string>
     <string name="native_controller_replay_timed_out">Controller replay timed out and was stopped. Replay controls are available again.</string>
-    <string name="grid_editor_add_control">+ Control</string>
+    <string name="grid_editor_add_control">Control</string>
     <string name="grid_editor_control_type_title">Add control module</string>
     <string name="grid_editor_control_type_macro">Macro</string>
     <string name="grid_editor_control_type_keyboard_pad">Keypad</string>
@@ -1055,6 +1055,13 @@
     <string name="grid_editor_add_translation">Translation</string>
     <string name="grid_editor_translation_limit">Each Profile supports one Translation Widget.</string>
     <string name="grid_widget_translation">Translation</string>
+    <string name="grid_editor_add_hardware_monitor">Monitor</string>
+    <string name="grid_editor_hardware_monitor_limit">Each Profile supports one Hardware Monitor Widget.</string>
+    <string name="grid_widget_hardware_monitor">Hardware Monitor</string>
+    <string name="hardware_monitor_cpu">CPU</string>
+    <string name="hardware_monitor_ram">RAM</string>
+    <string name="hardware_monitor_unavailable">unavailable</string>
+    <string name="hardware_monitor_content_description">CPU %1$s. RAM %2$s.</string>
     <string name="translation_waiting_text">Waiting for text…</string>
     <string name="translation_direction">%1$s  →  %2$s</string>
     <string name="translation_status_starting">Starting</string>

@@ -325,6 +325,10 @@ final class HeimdallUi {
         return settingsContentPanel(context, radiusDp);
     }
 
+    static Drawable hardwareMonitorContentPanel(Context context, int radiusDp) {
+        return settingsContentPanel(context, radiusDp);
+    }
+
     static int translationTextColor(Context context) {
         return isFreyaFamily(context) ? textColor(context) : accent(context);
     }

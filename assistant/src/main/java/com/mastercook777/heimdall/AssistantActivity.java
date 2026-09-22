@@ -417,6 +417,7 @@ public class AssistantActivity extends Activity {
     private final List<UpperScreenMagnifierView> magnifierViews = new ArrayList<>();
     private final List<CanvasWidgetView> canvasViews = new ArrayList<>();
     private final List<TranslationWidgetView> translationViews = new ArrayList<>();
+    private final List<HardwareMonitorWidgetView> hardwareMonitorViews = new ArrayList<>();
     private final Set<String> pausedTranslationSessions = new HashSet<>();
     private final Map<String, TranslationRuntimeController.Snapshot>
             translationRuntimeStates = new HashMap<>();
@@ -742,6 +743,7 @@ public class AssistantActivity extends Activity {
         releaseMagnifierViews();
         releaseTranslationViews();
         releaseCanvasViews();
+        releaseHardwareMonitorViews();
         cancelPendingCanvasImport();
         cancelPendingProfileBundleWork();
         stopMagnifierProjection();
@@ -801,6 +803,7 @@ public class AssistantActivity extends Activity {
         if (!DebugPerformanceDiagnostics.isStaticUi()) {
             resumeMagnifierViews();
             resumeTranslationViews();
+            resumeHardwareMonitorViews();
         }
         updateCanvasPlayback();
         if (activeMapWebView != null) {
@@ -823,6 +826,7 @@ public class AssistantActivity extends Activity {
         }
         pauseTranslationViews();
         pauseCanvasPlayback();
+        pauseHardwareMonitorViews();
         resetRightStickIfNeeded();
         parkVirtualMouseDispatcher();
         parkKeyboardInputSession();
@@ -2054,6 +2058,7 @@ public class AssistantActivity extends Activity {
         releaseMagnifierViews();
         releaseTranslationViews();
         releaseCanvasViews();
+        releaseHardwareMonitorViews();
         if (activeScreen != SCREEN_MAIN) {
             parkKeyboardInputSession();
         }
@@ -2330,6 +2335,14 @@ public class AssistantActivity extends Activity {
                         }
                     });
             translationViews.add(view);
+            if (activityResumed && activeScreen == SCREEN_MAIN && !hasUnsavedWidgetLayout()) {
+                view.resume();
+            }
+            return view;
+        }
+        if (WidgetLayout.TYPE_HARDWARE_MONITOR.equals(type)) {
+            HardwareMonitorWidgetView view = new HardwareMonitorWidgetView(this);
+            hardwareMonitorViews.add(view);
             if (activityResumed && activeScreen == SCREEN_MAIN && !hasUnsavedWidgetLayout()) {
                 view.resume();
             }
@@ -3260,6 +3273,20 @@ public class AssistantActivity extends Activity {
     private void releaseTranslationViews() {
         for (TranslationWidgetView view : translationViews) view.release();
         translationViews.clear();
+    }
+
+    private void resumeHardwareMonitorViews() {
+        if (activeScreen != SCREEN_MAIN || hasUnsavedWidgetLayout()) return;
+        for (HardwareMonitorWidgetView view : hardwareMonitorViews) view.resume();
+    }
+
+    private void pauseHardwareMonitorViews() {
+        for (HardwareMonitorWidgetView view : hardwareMonitorViews) view.pause();
+    }
+
+    private void releaseHardwareMonitorViews() {
+        for (HardwareMonitorWidgetView view : hardwareMonitorViews) view.release();
+        hardwareMonitorViews.clear();
     }
 
     private void releaseCanvasViews() {
@@ -6999,6 +7026,8 @@ public class AssistantActivity extends Activity {
                 () -> gridEditor.addWidget(WidgetLayout.TYPE_MAGNIFIER)));
         actions.addView(editorButton(getString(R.string.grid_editor_add_translation),
                 () -> gridEditor.addWidget(WidgetLayout.TYPE_TRANSLATION)));
+        actions.addView(editorButton(getString(R.string.grid_editor_add_hardware_monitor),
+                () -> gridEditor.addWidget(WidgetLayout.TYPE_HARDWARE_MONITOR)));
         actions.addView(editorButton(getString(R.string.grid_editor_add_canvas),
                 () -> gridEditor.addWidget(WidgetLayout.TYPE_CANVAS)));
         actions.addView(editorButton(getString(R.string.grid_editor_add_quick_actions),

@@ -24,6 +24,7 @@ public final class WidgetLayout {
     public static final String TYPE_QUICK_ACTIONS = "quick_actions";
     public static final String TYPE_MAGNIFIER = "upper_screen_magnifier";
     public static final String TYPE_TRANSLATION = "translation";
+    public static final String TYPE_HARDWARE_MONITOR = "hardware_monitor";
     public static final String MAGNIFIER_SCALE_FILL = "fill";
     public static final String MAGNIFIER_SCALE_FIT = "fit";
     public static final String MAGNIFIER_SHAPE_RECTANGLE = "rectangle";
@@ -195,6 +196,7 @@ public final class WidgetLayout {
         schemaVersion = CURRENT_SCHEMA_VERSION;
         migrateToCurrentGrid();
         boolean foundTranslation = false;
+        boolean foundHardwareMonitor = false;
         for (int i = 0; i < items.size();) {
             if (TYPE_TRANSLATION.equals(items.get(i).type)) {
                 if (foundTranslation) {
@@ -202,6 +204,13 @@ public final class WidgetLayout {
                     continue;
                 }
                 foundTranslation = true;
+            }
+            if (TYPE_HARDWARE_MONITOR.equals(items.get(i).type)) {
+                if (foundHardwareMonitor) {
+                    items.remove(i);
+                    continue;
+                }
+                foundHardwareMonitor = true;
             }
             i++;
         }
@@ -305,7 +314,8 @@ public final class WidgetLayout {
                 || TYPE_CANVAS.equals(type)
                 || TYPE_QUICK_ACTIONS.equals(type)
                 || TYPE_MAGNIFIER.equals(type)
-                || TYPE_TRANSLATION.equals(type);
+                || TYPE_TRANSLATION.equals(type)
+                || TYPE_HARDWARE_MONITOR.equals(type);
     }
 
     private static int clamp(int value, int min, int max) {
