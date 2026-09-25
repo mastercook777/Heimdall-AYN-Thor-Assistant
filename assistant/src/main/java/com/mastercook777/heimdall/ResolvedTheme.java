@@ -3,6 +3,7 @@ package com.mastercook777.heimdall;
 /** Immutable theme resolved from one stable registry definition. */
 final class ResolvedTheme {
     final ThemeDefinition definition;
+    final int hardwareAccent;
     final ThemePalette palette;
     final ThemeComponentColors componentColors;
     final SemanticStateColors semanticStates;
@@ -12,6 +13,7 @@ final class ResolvedTheme {
 
     ResolvedTheme(ThemeDefinition definition) {
         this.definition = definition;
+        this.hardwareAccent = definition.hardwareAccent;
         this.palette = definition.palette;
         this.componentColors = definition.componentColors;
         this.semanticStates = definition.semanticStates;

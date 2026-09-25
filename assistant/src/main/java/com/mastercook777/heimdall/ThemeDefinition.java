@@ -4,6 +4,7 @@ final class ThemeDefinition {
     final String id;
     final String[] legacyAliases;
     final ThemeFamily family;
+    final int hardwareAccent;
     final ThemePalette palette;
     final ThemeComponentColors componentColors;
     final SemanticStateColors semanticStates;
@@ -13,6 +14,7 @@ final class ThemeDefinition {
     final int displayNameRes;
 
     ThemeDefinition(String id, String[] legacyAliases, ThemeFamily family,
+            int hardwareAccent,
             ThemePalette palette, ThemeComponentColors componentColors,
             SemanticStateColors semanticStates,
             ThemeMaterialSpec materials, ThemeGlassColors glassColors,
@@ -37,6 +39,7 @@ final class ThemeDefinition {
         this.id = id;
         this.legacyAliases = legacyAliases.clone();
         this.family = family;
+        this.hardwareAccent = hardwareAccent;
         this.palette = palette;
         this.componentColors = componentColors;
         this.semanticStates = semanticStates;

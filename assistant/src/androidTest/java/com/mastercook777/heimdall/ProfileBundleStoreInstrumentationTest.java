@@ -153,6 +153,40 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
         ResolvedTheme white = ThemeRegistry.resolve(ThemeRegistry.ID_FREYA_WHITE);
         ResolvedTheme rosewood = ThemeRegistry.resolve(ThemeRegistry.ID_FREYA_ROSEWOOD);
         ResolvedTheme celadon = ThemeRegistry.resolve(ThemeRegistry.ID_FREYA_CELADON);
+        assertEquals(0xFF1450B0, blue.hardwareAccent);
+        assertEquals(0xFFC2550A, amber.hardwareAccent);
+        assertEquals(0xFF318A42, nocturne.hardwareAccent);
+        assertEquals(0xFFCF6818, white.hardwareAccent);
+        assertEquals(0xFFA84C68, rosewood.hardwareAccent);
+        assertEquals(0xFF248F62, celadon.hardwareAccent);
+        for (ResolvedTheme theme : new ResolvedTheme[]{
+                blue, amber, nocturne, white, rosewood, celadon}) {
+            assertEquals(0xFF000000, theme.hardwareAccent & 0xFF000000);
+            assertFalse(theme.hardwareAccent == theme.palette.accent);
+            assertEquals(theme.hardwareAccent,
+                    ThemeJoystickLighting.scaleHardwareColor(
+                            theme.hardwareAccent,
+                            ThemeJoystickLighting.DEFAULT_BRIGHTNESS_PERCENT));
+        }
+        assertEquals(10, ThemeJoystickLighting.normalizeBrightnessPercent(0));
+        assertEquals(50, ThemeJoystickLighting.normalizeBrightnessPercent(52));
+        assertEquals(55, ThemeJoystickLighting.normalizeBrightnessPercent(53));
+        assertEquals(100, ThemeJoystickLighting.normalizeBrightnessPercent(200));
+        assertEquals(0xFF091A2B,
+                ThemeJoystickLighting.scaleHardwareColor(0xFF123456, 50));
+        assertEquals(0xFF020509,
+                ThemeJoystickLighting.scaleHardwareColor(0xFF123456, 0));
+        String ledCommand = ThorJoystickLedAdapter.buildStaticColorCommand(0xFF123456);
+        assertEquals(
+                "echo 1-18:52:86:255 > /sys/class/sn3112l/led/brightness"
+                        + "; echo 1-18:52:86:255 > /sys/class/sn3112r/led/brightness",
+                ledCommand);
+        String ledOffCommand = ThorJoystickLedAdapter.buildTurnOffCommand();
+        assertEquals(
+                "echo 1-0:0:0:0 > /sys/class/sn3112l/led/brightness"
+                        + "; echo 1-0:0:0:0 > /sys/class/sn3112r/led/brightness",
+                ledOffCommand);
+        assertEquals(0, ThorJoystickLedAdapter.TRANSACTION_FLAGS);
         assertEquals(1, blue.materials.mediaFrameContentInsetDp);
         assertEquals(6, white.materials.mediaFrameContentInsetDp);
         assertEquals(0xFF4EA1FF, blue.palette.accent);

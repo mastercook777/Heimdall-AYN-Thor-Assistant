@@ -3880,9 +3880,11 @@ public class AssistantActivity extends Activity {
     private void applySelectedProfileTheme() {
         if (selectedProfile == null) {
             HeimdallUi.clearActiveProfileTheme();
+            ThemeJoystickLighting.syncIfEnabled(this);
             return;
         }
         HeimdallUi.setActiveProfileTheme(selectedProfile.normalizedThemeId());
+        ThemeJoystickLighting.syncIfEnabled(this);
     }
 
     private void maybeAutoSwitchProfile(ForegroundAppTracker.Snapshot snapshot) {
@@ -5214,6 +5216,65 @@ public class AssistantActivity extends Activity {
         }
         addSettingsHelp(content, getString(R.string.settings_theme_help));
 
+        CheckBox joystickLighting = new CheckBox(this);
+        joystickLighting.setText(getString(R.string.settings_match_joystick_lighting));
+        joystickLighting.setTextSize(12);
+        joystickLighting.setChecked(ThemeJoystickLighting.isEnabled(this));
+        styleCheckBox(joystickLighting);
+        content.addView(joystickLighting, new LinearLayout.LayoutParams(-1, dp(42)));
+        addSettingsHelp(content,
+                getString(R.string.settings_match_joystick_lighting_help));
+
+        LinearLayout brightnessLabelRow = new LinearLayout(this);
+        brightnessLabelRow.setOrientation(LinearLayout.HORIZONTAL);
+        brightnessLabelRow.setGravity(Gravity.CENTER_VERTICAL);
+        TextView brightnessTitle = text(
+                getString(R.string.settings_joystick_lighting_brightness), 12, MUTED, true);
+        brightnessLabelRow.addView(brightnessTitle,
+                new LinearLayout.LayoutParams(0, -1, 1));
+        TextView brightnessValue = text("", 12, MUTED, true);
+        brightnessValue.setGravity(Gravity.CENTER_VERTICAL | Gravity.END);
+        brightnessLabelRow.addView(brightnessValue,
+                new LinearLayout.LayoutParams(dp(72), -1));
+        content.addView(brightnessLabelRow, new LinearLayout.LayoutParams(-1, dp(28)));
+
+        SeekBar brightnessBar = new SeekBar(this);
+        brightnessBar.setMax((ThemeJoystickLighting.MAX_BRIGHTNESS_PERCENT
+                - ThemeJoystickLighting.MIN_BRIGHTNESS_PERCENT)
+                / ThemeJoystickLighting.BRIGHTNESS_STEP_PERCENT);
+        brightnessBar.setProgress((ThemeJoystickLighting.getBrightnessPercent(this)
+                - ThemeJoystickLighting.MIN_BRIGHTNESS_PERCENT)
+                / ThemeJoystickLighting.BRIGHTNESS_STEP_PERCENT);
+        styleSettingsSeekBar(brightnessBar);
+        brightnessBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                updateJoystickBrightnessLabel(seekBar, brightnessValue);
+            }
+
+            @Override
+            public void onStartTrackingTouch(SeekBar seekBar) {
+            }
+
+            @Override
+            public void onStopTrackingTouch(SeekBar seekBar) {
+                ThemeJoystickLighting.setBrightnessPercent(
+                        AssistantActivity.this, joystickBrightnessPercent(seekBar));
+            }
+        });
+        updateJoystickBrightnessLabel(brightnessBar, brightnessValue);
+        content.addView(brightnessBar, new LinearLayout.LayoutParams(-1, dp(42)));
+        addSettingsHelp(content,
+                getString(R.string.settings_joystick_lighting_brightness_help));
+
+        setJoystickBrightnessControlEnabled(brightnessBar, brightnessTitle,
+                brightnessValue, joystickLighting.isChecked());
+        joystickLighting.setOnCheckedChangeListener((button, checked) -> {
+            ThemeJoystickLighting.setEnabled(this, checked);
+            setJoystickBrightnessControlEnabled(
+                    brightnessBar, brightnessTitle, brightnessValue, checked);
+        });
+
         addSettingsLabel(content, getString(R.string.settings_language));
         LinearLayout languageRow = settingsActionRow(content);
         languageRow.addView(languageChoiceButton(R.string.language_system_default,
@@ -6368,6 +6429,37 @@ public class AssistantActivity extends Activity {
         content.addView(title, params);
     }
 
+    private void styleSettingsSeekBar(SeekBar seekBar) {
+        int active = HeimdallUi.accent(this);
+        int track = HeimdallUi.componentColors(this).sliderTrack;
+        seekBar.setProgressTintList(ColorStateList.valueOf(active));
+        seekBar.setProgressBackgroundTintList(ColorStateList.valueOf(track));
+        seekBar.setThumbTintList(ColorStateList.valueOf(active));
+        seekBar.setSplitTrack(false);
+    }
+
+    private int joystickBrightnessPercent(SeekBar seekBar) {
+        return ThemeJoystickLighting.MIN_BRIGHTNESS_PERCENT
+                + seekBar.getProgress() * ThemeJoystickLighting.BRIGHTNESS_STEP_PERCENT;
+    }
+
+    private void updateJoystickBrightnessLabel(SeekBar seekBar, TextView valueLabel) {
+        int percent = joystickBrightnessPercent(seekBar);
+        String value = getString(R.string.settings_joystick_lighting_brightness_value, percent);
+        valueLabel.setText(value);
+        seekBar.setContentDescription(getString(
+                R.string.settings_joystick_lighting_brightness) + ", " + value);
+    }
+
+    private void setJoystickBrightnessControlEnabled(SeekBar seekBar,
+            TextView title, TextView value, boolean enabled) {
+        seekBar.setEnabled(enabled);
+        float alpha = enabled ? 1f : 0.45f;
+        seekBar.setAlpha(alpha);
+        title.setAlpha(alpha);
+        value.setAlpha(alpha);
+    }
+
     private void addConnectionCapabilityOption(LinearLayout content, String title, String summary,
                                                String stateLabel, boolean ready,
                                                String actionLabel, boolean actionEnabled,
@@ -6793,6 +6885,7 @@ public class AssistantActivity extends Activity {
                     HeimdallUi.globalTheme(this));
             HeimdallUi.setTheme(this, settingsThemeDraft);
             HeimdallUi.setActiveProfileTheme(settingsThemeDraft);
+            ThemeJoystickLighting.syncIfEnabled(this);
             boolean compatibilityEnabled =
                     Boolean.TRUE.equals(settingsPerformanceCompatibilityDraft);
             ThorPerformanceCompatibility.setEnabled(this, compatibilityEnabled);
@@ -7024,8 +7117,12 @@ public class AssistantActivity extends Activity {
                 () -> gridEditor.addWidget(WidgetLayout.TYPE_TOUCHPAD)));
         actions.addView(editorButton(getString(R.string.grid_editor_add_magnifier),
                 () -> gridEditor.addWidget(WidgetLayout.TYPE_MAGNIFIER)));
-        actions.addView(editorButton(getString(R.string.grid_editor_add_translation),
-                () -> gridEditor.addWidget(WidgetLayout.TYPE_TRANSLATION)));
+        Button addTranslation = editorButton(
+                getString(R.string.grid_editor_add_translation),
+                () -> gridEditor.addWidget(WidgetLayout.TYPE_TRANSLATION));
+        addTranslation.setSingleLine(true);
+        addTranslation.setPadding(dp(2), 0, dp(2), 0);
+        actions.addView(addTranslation);
         actions.addView(editorButton(getString(R.string.grid_editor_add_hardware_monitor),
                 () -> gridEditor.addWidget(WidgetLayout.TYPE_HARDWARE_MONITOR)));
         actions.addView(editorButton(getString(R.string.grid_editor_add_canvas),

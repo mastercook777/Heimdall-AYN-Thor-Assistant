@@ -217,6 +217,10 @@ final class HeimdallUi {
         return resolvedTheme(context).palette.accent;
     }
 
+    static int hardwareAccent(Context context) {
+        return resolvedTheme(context).hardwareAccent;
+    }
+
     static int accentStrong(Context context) {
         return resolvedTheme(context).palette.accentStrong;
     }

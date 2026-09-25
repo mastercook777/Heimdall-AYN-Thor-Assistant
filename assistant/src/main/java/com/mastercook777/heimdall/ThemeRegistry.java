@@ -33,6 +33,7 @@ final class ThemeRegistry {
                 ID_HEIMDALL_BLUE,
                 new String[]{LEGACY_DARK},
                 ThemeFamily.HEIMDALL,
+                0xFF1450B0,
                 new ThemePalette(
                         0xFF070A10, 0xFF0E141B,
                         0xCC101722, 0xD1172131, 0x990B1018,
@@ -107,6 +108,7 @@ final class ThemeRegistry {
                 ID_HEIMDALL_AMBER,
                 new String[0],
                 ThemeFamily.HEIMDALL,
+                0xFFC2550A,
                 new ThemePalette(
                         0xFF090B0D, 0xFF090B0D,
                         0xFF090B0D, 0xFF121619, 0xFF07090A,
@@ -181,6 +183,7 @@ final class ThemeRegistry {
                 ID_HEIMDALL_NOCTURNE,
                 new String[0],
                 ThemeFamily.HEIMDALL,
+                0xFF318A42,
                 new ThemePalette(
                         0xFF0E0C10, 0xFF0E0C10,
                         0xFF16131B, 0xFF231C29, 0xFF09080C,
@@ -255,6 +258,7 @@ final class ThemeRegistry {
                 ID_FREYA_WHITE,
                 new String[]{LEGACY_PEARL},
                 ThemeFamily.FREYA,
+                0xFFCF6818,
                 new ThemePalette(
                         0xFFE3E6E7, 0xFFE5E7E8,
                         0xFFEEF0EF, 0xFFF6F5F3, 0xFFD8DCDD,
@@ -324,6 +328,7 @@ final class ThemeRegistry {
                 ID_FREYA_ROSEWOOD,
                 new String[0],
                 ThemeFamily.FREYA,
+                0xFFA84C68,
                 new ThemePalette(
                         0xFFF1E7E2, 0xFFF1E7E2,
                         0xFFF6EEEA, 0xFFFBF5F1, 0xFFD9CCC6,
@@ -393,6 +398,7 @@ final class ThemeRegistry {
                 ID_FREYA_CELADON,
                 new String[0],
                 ThemeFamily.FREYA,
+                0xFF248F62,
                 new ThemePalette(
                         0xFFEEEAE3, 0xFFEEEAE3,
                         0xFFECE8E1, 0xFFF7F4EE, 0xFFD1D1C7,
