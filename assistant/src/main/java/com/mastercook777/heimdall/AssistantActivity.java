@@ -6296,7 +6296,8 @@ public class AssistantActivity extends Activity {
                 new TranslationApiClient.Callback() {
                     @Override public void onSuccess(String translatedText) {
                         client.shutdown();
-                        showAction(getString(R.string.translation_connection_success));
+                        showConfirmationAction(
+                                getString(R.string.translation_connection_success));
                     }
                     @Override public void onError(String message) {
                         client.shutdown();
@@ -13648,6 +13649,15 @@ public class AssistantActivity extends Activity {
     }
 
     private void showErrorAction(String message) {
+        String visible = message == null || message.trim().length() == 0
+                ? getString(R.string.status_updated) : message.trim();
+        if (statusText != null) {
+            statusText.setText(productStatusMessage(visible));
+        }
+        Toast.makeText(this, visible, Toast.LENGTH_SHORT).show();
+    }
+
+    private void showConfirmationAction(String message) {
         String visible = message == null || message.trim().length() == 0
                 ? getString(R.string.status_updated) : message.trim();
         if (statusText != null) {

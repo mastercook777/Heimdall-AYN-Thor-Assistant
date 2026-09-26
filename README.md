@@ -53,7 +53,7 @@ Heimdall keeps the game on Thor's upper screen while the lower screen becomes a 
 | Reference tools | Local maps, PDFs, guides, Interactive Map links, and Profile-owned image or muted looping-video Canvases. |
 | Upper-screen tools | Screenshot, screen recording, and one live region magnifier per Profile. |
 | Translation and status | Profile-owned upper-screen text translation with on-device OCR, plus a passive CPU-temperature and RAM monitor when Thor exposes the required ordinary-App sensor. |
-| Appearance | Six registered Heimdall/Freya colorways, optional per-Profile theme binding, and an App-global opt-in switch that matches supported Thor joystick LEDs to the resolved theme. |
+| Appearance | Six registered Heimdall/Freya colorways, optional per-Profile theme binding, and an experimental App-global opt-in switch for theme-matched Thor joystick LEDs. |
 
 <table>
   <tr>
@@ -210,7 +210,7 @@ Enhanced Touch protects Thor's built-in mapping by default and rejects Macros co
 
 ### Themes And Joystick Lighting
 
-Choose a registered Heimdall or Freya colorway under Appearance. A Profile can use its own saved theme or follow the App default. The optional **Match joystick lighting** switch is App-global and off by default; on supported Thor firmware it applies the resolved theme color and one shared brightness to both joystick rings. Heimdall does not use Shizuku, root, polling, animation, or game events for this feature, and theme changes remain usable if the firmware lighting call is unavailable.
+Choose a registered Heimdall or Freya colorway under Appearance. A Profile can use its own saved theme or follow the App default. The experimental **Match joystick lighting** switch is App-global and off by default; on supported Thor firmware it applies the resolved theme color and one shared brightness to both joystick rings. Heimdall does not use Shizuku, root, polling, animation, or game events for this feature, and theme changes remain usable if the firmware lighting call is unavailable.
 
 ### Screenshot And Recording
 
@@ -232,7 +232,7 @@ Android platform backup is disabled for this Alpha. Uninstalling the App removes
 - After a lower-screen Tab round trip, the frozen magnifier's Stop marker can occasionally be missing; stopping can also leave the final retained frame visible. These are known presentation-state issues, not proof that the frame is still live.
 - Translation quality, latency, and service availability depend on the selected OCR script, network, model, and provider. SiliconFlow China with Hunyuan-MT-7B is the owner-tested route; other listed or custom OpenAI-compatible endpoints are protocol-compatible but not all are Thor-validated.
 - Hardware Monitor reports CPU temperature only when Thor exposes one unique readable `cpu-0-1` thermal source to the ordinary App process. It intentionally does not substitute battery temperature or estimate fan speed.
-- Theme-matched joystick lighting depends on the Thor firmware service and remains opt-in. The accepted immediate Theme/brightness/off interaction path does not by itself prove every restart or automatic Profile-switch sequence.
+- Theme-matched joystick lighting is experimental, depends on Thor firmware behavior, and remains off by default. A fixed segment near the upper-left of the left joystick may retain a stale/different color or remain lit after Theme, brightness, or switch changes. If this occurs, use Thor's system lighting controls to restore or disable the lights.
 
 Read the [v0.3.0-alpha.1 release notes](docs/releases/v0.3.0-alpha.1.md) for the complete tested scope, migration notes, and known limitations. The visually reviewed 0.2.0 [English](docs/guides/Heimdall-0.2.0-alpha.1-User-Guide-en.pdf) and [Simplified-Chinese](docs/guides/Heimdall-0.2.0-alpha.1-User-Guide-zh-CN.pdf) PDF guides remain available as archived references; this README is the current setup guide for 0.3.0.
 

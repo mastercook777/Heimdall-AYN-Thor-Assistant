@@ -209,7 +209,7 @@
     <string name="theme_freya_celadon">Freya Celadon</string>
     <string name="settings_theme_help">Saved with the current Profile and restored whenever that Profile becomes active. It also becomes the default for older Profiles without a saved theme.</string>
     <string name="settings_match_joystick_lighting">Match joystick lighting</string>
-    <string name="settings_match_joystick_lighting_help">Match the joystick LEDs to the current theme.</string>
+    <string name="settings_match_joystick_lighting_help">Experimental and off by default. Matches the joystick LEDs to the current theme. A left-stick segment can retain a different color after theme, brightness, or switch changes; use Thor system lighting controls to recover.</string>
     <string name="settings_joystick_lighting_brightness">Joystick brightness</string>
     <string name="settings_joystick_lighting_brightness_value">%1$d%%</string>
     <string name="settings_joystick_lighting_brightness_help">Set one global brightness for theme-matched joystick lighting. Applied when you release the slider.</string>

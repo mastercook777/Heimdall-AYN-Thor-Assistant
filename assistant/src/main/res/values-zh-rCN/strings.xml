@@ -207,7 +207,7 @@
     <string name="theme_freya_celadon">Freya Celadon</string>
     <string name="settings_theme_help">主题随当前 Profile 保存，并在该 Profile 激活时恢复；同时作为尚未保存主题的旧 Profile 默认值。</string>
     <string name="settings_match_joystick_lighting">匹配摇杆灯光</string>
-    <string name="settings_match_joystick_lighting_help">让摇杆 LED 与当前主题匹配。</string>
+    <string name="settings_match_joystick_lighting_help">实验性功能，默认关闭。让摇杆 LED 与当前主题匹配；切换主题、亮度或开关后，左摇杆一处灯段可能残留异色，可用 Thor 原厂灯光设置恢复。</string>
     <string name="settings_joystick_lighting_brightness">摇杆灯光亮度</string>
     <string name="settings_joystick_lighting_brightness_value">%1$d%%</string>
     <string name="settings_joystick_lighting_brightness_help">为所有主题匹配的摇杆灯设置统一亮度；松开滑杆时应用。</string>
