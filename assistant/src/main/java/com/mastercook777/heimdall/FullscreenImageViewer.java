@@ -133,7 +133,8 @@ final class FullscreenImageViewer extends FrameLayout {
                                 : error == CanvasImageLoader.Error.PLATFORM_UNSUPPORTED
                                         ? R.string.canvas_animation_platform_unsupported
                                         : R.string.canvas_decode_error);
-                        stateView.setTextColor(HeimdallUi.COLOR_DANGER);
+                        stateView.setTextColor(HeimdallUi.semanticColor(
+                                getContext(), HeimdallUi.SEMANTIC_ERROR));
                         showControls();
                     }
                 });
@@ -161,7 +162,8 @@ final class FullscreenImageViewer extends FrameLayout {
             public void onError() {
                 stateView.setText(CanvasAssetStore.resolve(getContext(), config.assetId) == null
                         ? R.string.canvas_image_missing : R.string.canvas_decode_error);
-                stateView.setTextColor(HeimdallUi.COLOR_DANGER);
+                stateView.setTextColor(HeimdallUi.semanticColor(
+                        getContext(), HeimdallUi.SEMANTIC_ERROR));
                 stateView.setVisibility(VISIBLE);
                 showControls();
             }
@@ -174,12 +176,8 @@ final class FullscreenImageViewer extends FrameLayout {
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(dp(8), dp(3), dp(4), dp(3));
-        row.setBackground(HeimdallUi.isPearl(getContext())
-                ? HeimdallUi.cncFlush(getContext(), HeimdallUi.RADIUS_PANEL)
-                : HeimdallUi.glass(getContext(), 0xDD111824, 0xEE080C12,
-                        HeimdallUi.COLOR_SYSTEM_BORDER_TOP,
-                        HeimdallUi.COLOR_SYSTEM_BORDER_BOTTOM,
-                        HeimdallUi.RADIUS_PANEL, 2));
+        row.setBackground(HeimdallUi.fullscreenToolbarPanel(
+                getContext(), HeimdallUi.RADIUS_PANEL));
         TextView title = new TextView(getContext());
         title.setText(R.string.canvas_name);
         title.setTextColor(HeimdallUi.textColor(getContext()));
@@ -219,12 +217,8 @@ final class FullscreenImageViewer extends FrameLayout {
         button.setColorFilter(HeimdallUi.textColor(getContext()));
         button.setContentDescription(getResources().getString(descriptionRes));
         button.setPadding(dp(10), dp(10), dp(10), dp(10));
-        button.setBackground(HeimdallUi.isPearl(getContext())
-                ? HeimdallUi.pearlMenuControl(getContext(),
-                        HeimdallUi.RADIUS_BUTTON, false, false)
-                : HeimdallUi.glass(getContext(), 0xB20F1622, 0xD0090E16,
-                        0x665F7C9A, 0x33344150,
-                        HeimdallUi.RADIUS_BUTTON, 1));
+        button.setBackground(HeimdallUi.fullscreenToolbarControl(
+                getContext(), HeimdallUi.RADIUS_BUTTON));
         button.setOnClickListener(view -> {
             action.run();
             showControls();

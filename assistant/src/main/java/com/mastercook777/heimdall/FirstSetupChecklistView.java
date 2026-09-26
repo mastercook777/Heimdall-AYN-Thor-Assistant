@@ -152,7 +152,7 @@ final class FirstSetupChecklistView extends LinearLayout {
     }
 
     private int successColor() {
-        return HeimdallUi.isPearl(getContext()) ? 0xFF2F8B59 : 0xFF5FD18A;
+        return HeimdallUi.semanticColor(getContext(), HeimdallUi.SEMANTIC_SUCCESS);
     }
 
     private TextView label(String value, int sizeSp, int color, boolean bold) {

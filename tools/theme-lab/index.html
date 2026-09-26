@@ -1,0 +1,322 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Heimdall Theme Lab</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="lab-app">
+    <header class="lab-header">
+      <div>
+        <p class="eyebrow">Heimdall design tooling</p>
+        <h1>Theme Lab</h1>
+      </div>
+      <div class="lab-contract" aria-label="Theme Lab scope">
+        <span>Family locked</span>
+        <span>Colorway only</span>
+        <span>Local preview</span>
+      </div>
+    </header>
+
+    <main class="lab-layout">
+      <aside class="editor" aria-label="Colorway editor">
+        <section class="editor-section editor-identity">
+          <div class="section-heading">
+            <div>
+              <p class="section-kicker">Definition</p>
+              <h2>Colorway</h2>
+            </div>
+            <span id="dirtyBadge" class="status-badge">Saved</span>
+          </div>
+
+          <label class="field-label" for="familySelect">Family</label>
+          <select id="familySelect" class="lab-select">
+            <option value="heimdall">Heimdall</option>
+            <option value="freya">Freya</option>
+          </select>
+          <p id="familyContract" class="field-help"></p>
+
+          <div class="identity-grid">
+            <label>
+              <span class="field-label">Display name</span>
+              <input id="displayNameInput" type="text" maxlength="48" autocomplete="off">
+            </label>
+            <label>
+              <span class="field-label">Canonical ID</span>
+              <input id="idInput" type="text" maxlength="64" spellcheck="false" autocomplete="off">
+            </label>
+          </div>
+
+          <label class="field-label" for="presetSelect">Preset / saved colorway</label>
+          <div class="inline-controls">
+            <select id="presetSelect" class="lab-select"></select>
+            <button id="loadPresetButton" class="button button-secondary" type="button">Load</button>
+          </div>
+          <div class="inline-controls three-up">
+            <button id="duplicateButton" class="button button-secondary" type="button">Duplicate</button>
+            <button id="saveAsButton" class="button button-primary" type="button">Save as</button>
+            <button id="resetDraftButton" class="button button-quiet" type="button">Reset</button>
+          </div>
+        </section>
+
+        <section class="editor-section">
+          <div class="section-heading compact">
+            <div>
+              <p class="section-kicker">Fixture state</p>
+              <h2>Preview state</h2>
+            </div>
+            <span class="locked-label">Semantic colors locked</span>
+          </div>
+          <div id="stateSelector" class="chip-grid" role="radiogroup" aria-label="Preview state"></div>
+        </section>
+
+        <section class="editor-section">
+          <div class="section-heading compact">
+            <div>
+              <p class="section-kicker">Registry-aligned</p>
+              <h2>Color tokens</h2>
+            </div>
+            <span id="tokenCount" class="count-label"></span>
+          </div>
+          <div id="tokenEditor" class="token-editor"></div>
+        </section>
+
+        <section class="editor-section">
+          <div class="section-heading compact">
+            <div>
+              <p class="section-kicker">Selected token</p>
+              <h2 id="selectedTokenLabel">HSL</h2>
+            </div>
+            <output id="selectedTokenValue" class="mono-value"></output>
+          </div>
+          <div id="hslEditor" class="hsl-editor"></div>
+        </section>
+
+        <section class="editor-section">
+          <div class="section-heading compact">
+            <div>
+              <p class="section-kicker">Optional helper</p>
+              <h2>Group adjust</h2>
+            </div>
+            <span class="locked-label">Non-destructive until apply</span>
+          </div>
+          <div id="groupAdjustments"></div>
+        </section>
+
+        <section class="editor-section">
+          <div class="section-heading compact">
+            <div>
+              <p class="section-kicker">Rapid review</p>
+              <h2>A/B compare</h2>
+            </div>
+            <span id="compareSummary" class="count-label">No snapshots</span>
+          </div>
+          <div class="compare-grid">
+            <button id="setAButton" class="button button-secondary" type="button">Set current as A</button>
+            <button id="setBButton" class="button button-secondary" type="button">Set current as B</button>
+            <button id="showAButton" class="button button-quiet" type="button" disabled>Preview A</button>
+            <button id="showBButton" class="button button-quiet" type="button" disabled>Preview B</button>
+          </div>
+          <button id="returnDraftButton" class="button button-primary full-width" type="button" disabled>Return to draft</button>
+          <p id="compareNote" class="field-help">Capture two drafts to compare their fixed fixtures.</p>
+        </section>
+
+        <section class="editor-section export-section">
+          <div class="section-heading compact">
+            <div>
+              <p class="section-kicker">Portable definition</p>
+              <h2>Import / export</h2>
+            </div>
+            <span class="schema-label">v1</span>
+          </div>
+          <div class="inline-controls">
+            <button id="importButton" class="button button-secondary" type="button">Import JSON</button>
+            <button id="exportButton" class="button button-primary" type="button">Export Colorway</button>
+          </div>
+          <input id="importInput" type="file" accept="application/json,.json" hidden>
+          <p class="field-help">Exports colorway-owned tokens only. Family material and semantic states stay outside the file.</p>
+        </section>
+      </aside>
+
+      <section class="workspace" aria-label="Canonical preview workspace">
+        <div class="workspace-toolbar">
+          <div>
+            <p class="section-kicker">Canonical fixture</p>
+            <div class="workspace-title-row">
+              <h2>1240 × 1080 Preview</h2>
+              <span id="previewSourceBadge" class="preview-source">Draft</span>
+            </div>
+          </div>
+          <div class="toolbar-meta">
+            <span id="contrastStatus" class="contrast-status">Contrast check</span>
+            <span id="scaleLabel" class="scale-label">100%</span>
+          </div>
+        </div>
+
+        <div id="previewViewport" class="preview-viewport">
+          <div id="previewWrap" class="preview-wrap">
+            <article id="themePreview" class="theme-preview family-heimdall" data-state="idle" aria-label="Heimdall fixed colorway preview">
+              <svg class="icon-sprite" aria-hidden="true">
+                <symbol id="icon-camera" viewBox="0 0 24 24"><path d="M4 7.5h3l1.4-2h7.2l1.4 2h3v11H4z"/><circle cx="12" cy="13" r="3.4"/></symbol>
+                <symbol id="icon-record" viewBox="0 0 24 24"><rect x="4" y="5" width="12" height="14" rx="3"/><path d="m16 10 4-2v8l-4-2z"/></symbol>
+                <symbol id="icon-home" viewBox="0 0 24 24"><path d="m4 11 8-7 8 7v9h-5v-6H9v6H4z"/></symbol>
+                <symbol id="icon-map" viewBox="0 0 24 24"><path d="m3 6 6-3 6 3 6-3v15l-6 3-6-3-6 3zM9 3v15M15 6v15"/></symbol>
+                <symbol id="icon-book" viewBox="0 0 24 24"><path d="M4 5.5A3.5 3.5 0 0 1 7.5 2H12v18H7.5A3.5 3.5 0 0 0 4 23zM20 5.5A3.5 3.5 0 0 0 16.5 2H12v18h4.5A3.5 3.5 0 0 1 20 23z"/></symbol>
+                <symbol id="icon-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19 13.5v-3l-2.2-.7-.5-1.2 1.1-2.1-2.1-2.1-2.1 1.1-1.2-.5L10.5 2h-3l-.7 2.2-1.2.5-2.1-1.1-2.1 2.1 1.1 2.1-.5 1.2-2 .7v3l2.2.7.5 1.2-1.1 2.1 2.1 2.1 2.1-1.1 1.2.5.7 2.2h3l.7-2.2 1.2-.5 2.1 1.1 2.1-2.1-1.1-2.1.5-1.2z"/></symbol>
+                <symbol id="icon-shield" viewBox="0 0 24 24"><path d="M12 2 20 5v6c0 5-3.4 9.3-8 11-4.6-1.7-8-6-8-11V5z"/></symbol>
+                <symbol id="icon-lightning" viewBox="0 0 24 24"><path d="M13 2 5 14h6l-1 8 9-13h-6z"/></symbol>
+                <symbol id="icon-target" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M1 12h4M19 12h4"/></symbol>
+                <symbol id="icon-menu" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></symbol>
+              </svg>
+
+              <header class="preview-header surface-chrome">
+                <div class="profile-mark" aria-hidden="true">H</div>
+                <div class="profile-copy">
+                  <span class="preview-overline">CURRENT PROFILE</span>
+                  <strong>METROID PRIME</strong>
+                  <span>Tallon IV · Exploration</span>
+                </div>
+                <div class="header-spacer"></div>
+                <div class="header-status semantic-message" aria-live="polite">
+                  <span class="semantic-dot"></span>
+                  <span class="semantic-label">Ready</span>
+                </div>
+                <div class="battery" aria-label="Battery 82 percent">
+                  <div class="battery-shell"><span></span></div>
+                  <strong>82%</strong>
+                </div>
+                <time>20:41</time>
+              </header>
+
+              <main class="preview-grid">
+                <section class="fixture-panel macro-panel" aria-label="Macro buttons">
+                  <div class="fixture-heading">
+                    <div><span>MACROS</span><strong>Combat deck</strong></div>
+                    <span class="fixture-meta">4 actions</span>
+                  </div>
+                  <div class="macro-grid">
+                    <button class="macro-button macro-primary" type="button">
+                      <svg><use href="#icon-target"/></svg><span>Precision shot</span><small>RT + A</small>
+                    </button>
+                    <button class="macro-button" type="button">
+                      <svg><use href="#icon-shield"/></svg><span>Guard pulse</span><small>LB hold</small>
+                    </button>
+                    <button class="macro-button" type="button">
+                      <svg><use href="#icon-lightning"/></svg><span>Boost chain</span><small>3 steps</small>
+                    </button>
+                    <button class="macro-button" type="button">
+                      <svg><use href="#icon-menu"/></svg><span>Map marker</span><small>Y · 320 ms</small>
+                    </button>
+                  </div>
+                </section>
+
+                <section class="fixture-panel touch-panel" aria-label="Touchpad and Precision Aim">
+                  <div class="fixture-heading">
+                    <div><span>PRECISION AIM</span><strong>Fine control surface</strong></div>
+                    <span class="mode-pill">ACTIVE</span>
+                  </div>
+                  <div class="touch-surface">
+                    <div class="touch-grid-lines"></div>
+                    <div class="corner corner-tl"></div><div class="corner corner-tr"></div>
+                    <div class="corner corner-bl"></div><div class="corner corner-br"></div>
+                    <div class="reticle"><i></i><b></b></div>
+                    <div class="touch-trace"></div>
+                    <div class="touch-contact"></div>
+                    <span class="touch-hint">Relative aim · 0.68×</span>
+                  </div>
+                </section>
+
+                <section class="fixture-panel quick-panel" aria-label="Quick actions">
+                  <div class="fixture-heading">
+                    <div><span>QUICK ACTIONS</span><strong>Capture & audio</strong></div>
+                    <span class="fixture-meta">P1</span>
+                  </div>
+                  <div class="quick-actions">
+                    <button class="quick-action" type="button"><svg><use href="#icon-camera"/></svg><span>Screenshot</span></button>
+                    <button class="quick-action recording-action" type="button"><svg><use href="#icon-record"/></svg><span>Recording</span></button>
+                  </div>
+                  <div class="volume-control">
+                    <div class="volume-label"><span>MEDIA VOLUME</span><strong>64</strong></div>
+                    <div class="volume-track"><span></span><i></i></div>
+                  </div>
+                </section>
+
+                <section class="fixture-panel keyboard-panel" aria-label="Keypad sample">
+                  <div class="fixture-heading">
+                    <div><span>KEYPAD</span><strong>Movement layer</strong></div>
+                    <span class="fixture-meta">12 keys</span>
+                  </div>
+                  <div class="keyboard-chassis">
+                    <div class="keyboard-bed">
+                      <kbd>1<small>Slot</small></kbd><kbd>W<small>Up</small></kbd><kbd>2<small>Scan</small></kbd>
+                      <kbd>A<small>Left</small></kbd><kbd class="key-active">S<small>Back</small></kbd><kbd>D<small>Right</small></kbd>
+                      <kbd>Q<small>Prev</small></kbd><kbd>E<small>Use</small></kbd><kbd>R<small>Reload</small></kbd>
+                    </div>
+                  </div>
+                </section>
+
+                <section class="fixture-panel media-panel" aria-label="Canvas and media frame">
+                  <div class="fixture-heading">
+                    <div><span>CANVAS</span><strong>Route reference</strong></div>
+                    <span class="content-neutral-label">CONTENT NEUTRAL</span>
+                  </div>
+                  <div class="media-frame">
+                    <div class="media-art">
+                      <div class="orbit orbit-one"></div><div class="orbit orbit-two"></div>
+                      <div class="terrain terrain-back"></div><div class="terrain terrain-front"></div>
+                      <span class="media-pin">A</span>
+                      <div class="media-caption"><strong>CHOZO RUINS</strong><span>Artifact route · 04</span></div>
+                    </div>
+                  </div>
+                </section>
+
+                <section class="fixture-panel settings-panel" aria-label="Settings controls">
+                  <div class="fixture-heading">
+                    <div><span>SETTINGS</span><strong>Control samples</strong></div>
+                    <span class="fixture-meta">P2</span>
+                  </div>
+                  <label class="setting-row"><span><strong>Haptic feedback</strong><small>Short pulse on press</small></span><input type="checkbox" checked><i class="toggle"></i></label>
+                  <label class="setting-row"><span><strong>Aim sensitivity</strong><small>Balanced response</small></span><span class="setting-value">68%</span></label>
+                  <div class="setting-slider"><span></span><i></i></div>
+                  <label class="setting-row disabled-setting"><span><strong>Experimental route</strong><small>Backend unavailable</small></span><span class="setting-value">OFF</span></label>
+                  <button class="settings-action" type="button">Open module settings</button>
+                </section>
+              </main>
+
+              <nav class="preview-dock surface-chrome" aria-label="Bottom Dock">
+                <button class="dock-item selected" type="button"><svg><use href="#icon-home"/></svg><span>Main</span></button>
+                <button class="dock-item" type="button"><svg><use href="#icon-map"/></svg><span>Map</span></button>
+                <button class="dock-item" type="button"><svg><use href="#icon-book"/></svg><span>Guide</span></button>
+                <button class="dock-item" type="button"><svg><use href="#icon-settings"/></svg><span>Settings</span></button>
+              </nav>
+              <div class="state-overlay" aria-hidden="true"><span class="state-overlay-dot"></span><strong class="state-overlay-title"></strong><small class="state-overlay-copy"></small></div>
+            </article>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="saveDialog" class="lab-dialog">
+    <form method="dialog" id="saveForm">
+      <div class="dialog-heading">
+        <p class="section-kicker">Local preset</p>
+        <h2>Save colorway as</h2>
+        <p>Saved presets stay in this browser. Export JSON for a portable copy.</p>
+      </div>
+      <label><span class="field-label">Display name</span><input id="saveNameInput" required maxlength="48"></label>
+      <label><span class="field-label">Canonical ID</span><input id="saveIdInput" required maxlength="64" spellcheck="false"></label>
+      <p id="saveError" class="dialog-error" role="alert"></p>
+      <div class="dialog-actions">
+        <button class="button button-quiet" value="cancel" type="button" id="cancelSaveButton">Cancel</button>
+        <button class="button button-primary" value="default" type="submit">Save preset</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="app.js"></script>
+</body>
+</html>

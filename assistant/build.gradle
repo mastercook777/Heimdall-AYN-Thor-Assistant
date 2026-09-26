@@ -91,6 +91,13 @@ android {
         buildConfig true
     }
 
+    lint {
+        // ML Kit brings AppCompat transitively, but Heimdall intentionally uses framework
+        // Activities and programmatic framework Views. Do not reinterpret those existing
+        // custom Views as AppCompat subclasses solely because OCR is on the classpath.
+        disable "AppCompatCustomView"
+    }
+
     signingConfigs {
         if (hasCompleteDebugSigning) {
             heimdallPrivateDebug {
@@ -143,4 +150,8 @@ dependencies {
     def shizuku_version = "13.1.5"
     implementation "dev.rikka.shizuku:api:$shizuku_version"
     implementation "dev.rikka.shizuku:provider:$shizuku_version"
+    implementation "com.google.mlkit:text-recognition:16.0.1"
+    implementation "com.google.mlkit:text-recognition-chinese:16.0.1"
+    implementation "com.google.mlkit:text-recognition-japanese:16.0.1"
+    implementation "com.google.mlkit:text-recognition-korean:16.0.1"
 }

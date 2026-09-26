@@ -10,14 +10,14 @@
 
 <p align="center">
   <a href="https://github.com/mastercook777/Heimdall-AYN-Thor-Assistant/releases"><strong>Download Alpha</strong></a>
-  · <a href="docs/guides/Heimdall-0.2.0-alpha.1-User-Guide-en.pdf"><strong>English User Guide</strong></a>
-  · <a href="docs/guides/Heimdall-0.2.0-alpha.1-User-Guide-zh-CN.pdf"><strong>简体中文使用教程</strong></a>
+  · <a href="#start-here-choose-only-what-you-need"><strong>Setup Guide</strong></a>
+  · <a href="README.zh-CN.md#先看结论安装-heimdall-不需要开发者模式"><strong>简体中文设置指南</strong></a>
   · <a href="https://github.com/mastercook777/Heimdall-AYN-Thor-Assistant/issues">Report an issue</a>
 </p>
 
 English | [简体中文](README.zh-CN.md)
 
-Heimdall keeps the game on Thor's upper screen while the lower screen becomes a persistent control and reference console: Profiles, macros, touch controls, maps, guides, local-media Canvases, magnification, recording, and Quick Actions stay within thumb reach.
+Heimdall keeps the game on Thor's upper screen while the lower screen becomes a persistent control and reference console: Profiles, macros, touch controls, translation, hardware status, maps, guides, local-media Canvases, magnification, recording, and Quick Actions stay within thumb reach.
 
 > **Alpha software:** Heimdall targets AYN Thor. Compatibility is not guaranteed for every Thor firmware, controller mode, game, emulator, or other dual-screen device.
 
@@ -46,17 +46,19 @@ Heimdall keeps the game on Thor's upper screen while the lower screen becomes a 
 
 | Area | What Heimdall provides |
 | --- | --- |
-| Profiles and Grid | Separate game layouts, App bindings, touch settings, maps, guides, and Canvases. Drag and resize modules on a visible 6 x 8 Grid, then save explicitly. |
+| Profiles and Grid | Separate game layouts, App bindings, themes, touch settings, maps, guides, and Canvases. Drag and resize modules on a visible 12 x 8 Grid, then save explicitly. |
 | Macros | Structured tap, hold, swipe, wait, and physical-controller sequences, including a controller composer with chords, charge holds, recomposition, mirroring, cloning, and bounded cancellation. No free-form command editing is required. |
 | Touch and aiming | Basic Touch, touchpad drag, Virtual Right Stick, Precision Aim, a real relative Virtual Mouse, and mapping-compatible Shizuku Touch when the required route is available. |
 | PC keyboard | A temporary complete US ANSI keyboard plus Profile-owned configurable Keypad modules through Shizuku/uinput. This is active-play PC input, not Android IME text entry. |
 | Reference tools | Local maps, PDFs, guides, Interactive Map links, and Profile-owned image or muted looping-video Canvases. |
 | Upper-screen tools | Screenshot, screen recording, and one live region magnifier per Profile. |
+| Translation and status | Profile-owned upper-screen text translation with on-device OCR, plus a passive CPU-temperature and RAM monitor when Thor exposes the required ordinary-App sensor. |
+| Appearance | Six registered Heimdall/Freya colorways, optional per-Profile theme binding, and an App-global opt-in switch that matches supported Thor joystick LEDs to the resolved theme. |
 
 <table>
   <tr>
     <td width="50%"><img src="docs/assets/readme/heimdall-main-grid.png" alt="Heimdall Freya White Main Grid with Macro buttons, Quick Actions, and touchpad"></td>
-    <td width="50%"><img src="docs/assets/readme/heimdall-grid-editor.png" alt="Heimdall visual 6 by 8 Grid editor with draggable and resizable modules"></td>
+    <td width="50%"><img src="docs/assets/readme/heimdall-grid-editor.png" alt="Heimdall visual Grid editor with draggable and resizable modules"></td>
   </tr>
   <tr>
     <td align="center"><strong>Play view:</strong> controls stay glanceable on the lower screen</td>
@@ -72,6 +74,7 @@ Heimdall keeps the game on Thor's upper screen while the lower screen becomes a 
 | --- | --- |
 | Profiles, Grid, maps, guides, Canvas, and normal UI | Install Heimdall only. No Developer options or Shizuku required. |
 | Upper-screen taps, holds, swipes, and compatible touchpad drag | Enable the Heimdall Accessibility service for **Basic Touch**. |
+| Real-time Translation | Enable Heimdall Accessibility for upper-screen capture, then configure a supported HTTPS translation provider and API key. OCR runs on-device; recognized text is sent to the selected provider. |
 | Physical-controller recording/replay, Virtual Right Stick, Precision Aim, Virtual Mouse, PC Keyboard, or mapping-compatible Enhanced Touch | Install, start, and authorize **Shizuku**. This route needs Developer options for wireless debugging. |
 | Live magnifier or screen recording | Accept Android's screen-capture consent when Heimdall requests it. |
 
@@ -170,7 +173,7 @@ If Shizuku stays on "Searching for pairing service," allow it to run in the back
 
 ### Grid And Modules
 
-Open the visual Grid editor to add, drag, resize, or remove modules. Modules snap to the 6 x 8 Grid. Preview first, then save the Grid and Profile explicitly.
+Open the visual Grid editor to add, drag, resize, or remove modules. Modules snap to the 12 x 8 Grid. Preview first, then save the Grid and Profile explicitly. Layouts from earlier Alpha releases migrate forward; review the result before saving further edits.
 
 ### Touch Macros
 
@@ -198,6 +201,17 @@ Enhanced Touch protects Thor's built-in mapping by default and rejects Macros co
 - Maps and guides belong to the current Profile and may reference local images, PDFs, text, or an Interactive Map URL.
 - Canvas accepts local JPG, PNG, GIF, WebP, and MP4 media. GIF and animated WebP require Android 9 or newer; MP4 is always muted and loops. A Profile can contain multiple independent static Canvases, while GIF, animated WebP, and MP4 share a limit of one dynamic Canvas. Files are limited to 50 MiB; images may be up to 4096 × 4096 and MP4 video up to 2048px on its longest side. APNG is not supported. Double-tap a Canvas for full-screen viewing and hold it to replace its media or adjust composition.
 
+### Translation And Hardware Monitor
+
+- Add one Translation module to a Profile, hold it to choose the upper-screen region, OCR script, and target language, then save the component. The runtime region shortcut commits only the confirmed region; it does not save unrelated Grid placement changes.
+- Translation uses Heimdall Accessibility screenshots and bundled on-device ML Kit OCR. It does not acquire MediaProjection. Only recognized text is sent over HTTPS to the configured SiliconFlow or custom OpenAI-compatible `/chat/completions` endpoint.
+- Provider settings and the API key are App-global. The API key is encrypted with Android Keystore and is not included in Profile JSON or `.heimdall-profile` exports.
+- Add one Hardware Monitor per Profile to show CPU temperature and used/total RAM. It needs no Shizuku permission and shows unavailable rather than guessing when Thor's verified CPU sensor cannot be read uniquely.
+
+### Themes And Joystick Lighting
+
+Choose a registered Heimdall or Freya colorway under Appearance. A Profile can use its own saved theme or follow the App default. The optional **Match joystick lighting** switch is App-global and off by default; on supported Thor firmware it applies the resolved theme color and one shared brightness to both joystick rings. Heimdall does not use Shizuku, root, polling, animation, or game events for this feature, and theme changes remain usable if the firmware lighting call is unavailable.
+
 ### Screenshot And Recording
 
 Quick Actions can capture the upper screen. Recording uses Android MediaProjection and Android Audio Playback Capture rather than microphone input. The upper App may still forbid its game audio from being captured.
@@ -216,8 +230,11 @@ Android platform backup is disabled for this Alpha. Uninstalling the App removes
 - Thor's mapper may hide mapped controller buttons from the Macro recorder.
 - Only one live magnifier is supported per Profile, and magnification cannot share MediaProjection with recording.
 - After a lower-screen Tab round trip, the frozen magnifier's Stop marker can occasionally be missing; stopping can also leave the final retained frame visible. These are known presentation-state issues, not proof that the frame is still live.
+- Translation quality, latency, and service availability depend on the selected OCR script, network, model, and provider. SiliconFlow China with Hunyuan-MT-7B is the owner-tested route; other listed or custom OpenAI-compatible endpoints are protocol-compatible but not all are Thor-validated.
+- Hardware Monitor reports CPU temperature only when Thor exposes one unique readable `cpu-0-1` thermal source to the ordinary App process. It intentionally does not substitute battery temperature or estimate fan speed.
+- Theme-matched joystick lighting depends on the Thor firmware service and remains opt-in. The accepted immediate Theme/brightness/off interaction path does not by itself prove every restart or automatic Profile-switch sequence.
 
-Read the [v0.2.0-alpha.1 release notes](docs/releases/v0.2.0-alpha.1.md) for the complete tested scope, migration notes, and known limitations. Previous Alpha notes remain available under [`docs/releases`](docs/releases).
+Read the [v0.3.0-alpha.1 release notes](docs/releases/v0.3.0-alpha.1.md) for the complete tested scope, migration notes, and known limitations. The visually reviewed 0.2.0 [English](docs/guides/Heimdall-0.2.0-alpha.1-User-Guide-en.pdf) and [Simplified-Chinese](docs/guides/Heimdall-0.2.0-alpha.1-User-Guide-zh-CN.pdf) PDF guides remain available as archived references; this README is the current setup guide for 0.3.0.
 
 ## Helpful Bug Reports
 
@@ -260,7 +277,7 @@ The public repository contains no signing key. Local Debug builds use the Androi
 
 ## Data, Privacy, And Contributing
 
-Profile data stays on the device unless the player explicitly imports or exports it. Internet access is used for player-configured Interactive Map pages; Heimdall exposes no JavaScript bridge to those pages. See [docs/PRIVACY.md](docs/PRIVACY.md).
+Profile data stays on the device unless the player explicitly imports or exports it. Internet access is used for player-configured Interactive Map pages and optional Translation requests. Translation OCR runs locally, but recognized text is sent to the provider selected by the player. See [docs/PRIVACY.md](docs/PRIVACY.md).
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) before submitting a change. Native input, cross-display routing, MediaProjection, performance, and physical ergonomics require clearly scoped AYN Thor evidence.
 

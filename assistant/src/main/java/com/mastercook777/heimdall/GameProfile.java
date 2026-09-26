@@ -6,11 +6,15 @@ import org.json.JSONObject;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 
 public final class GameProfile {
+    public String profileId = UUID.randomUUID().toString();
     public String name;
     public String mode;
     public String packageHint;
+    /** Canonical Theme Registry id. Empty means follow the App-global default. */
+    public String themeId = "";
     public GameContextBinding gameContextBinding = new GameContextBinding();
     /** Legacy 0.2.0 field retained for import/export compatibility; no longer resolved. */
     public String romContextHint = "";
@@ -55,9 +59,14 @@ public final class GameProfile {
         ensureMapEntries();
         syncLegacyMapFields();
         JSONObject object = new JSONObject();
+        object.put("profileId", safeProfileId());
         object.put("name", name);
         object.put("mode", mode);
         object.put("packageHint", packageHint);
+        String savedThemeId = normalizedThemeId();
+        if (savedThemeId.length() > 0) {
+            object.put("themeId", savedThemeId);
+        }
         object.put("romContextHint", romContextHint);
         if (safeGameContextBinding().isBound()) {
             object.put("gameContextBinding", safeGameContextBinding().toJson());
@@ -128,7 +137,10 @@ public final class GameProfile {
                 object.optString("packageHint", ""),
                 macroCount,
                 parsedMacros);
+        profile.profileId = object.optString("profileId", "").trim();
+        if (profile.profileId.length() == 0) profile.profileId = UUID.randomUUID().toString();
         profile.macroColumns = object.optInt("macroColumns", 4);
+        profile.themeId = normalizeThemeId(object.optString("themeId", ""));
         profile.macroRows = object.optInt("macroRows", 0);
         profile.rightHandPriority = object.optBoolean("rightHandPriority", true);
         profile.protectThorMappingDuringEnhancedTouch = object.optBoolean(
@@ -182,6 +194,27 @@ public final class GameProfile {
         }
         profile.normalizeLayout();
         return profile;
+    }
+
+    public String normalizedThemeId() {
+        return normalizeThemeId(themeId);
+    }
+
+    public String safeProfileId() {
+        profileId = profileId == null ? "" : profileId.trim();
+        if (profileId.length() == 0) profileId = UUID.randomUUID().toString();
+        return profileId;
+    }
+
+    public void setThemeId(String value) {
+        themeId = normalizeThemeId(value);
+    }
+
+    public String effectiveThemeId(String globalThemeId) {
+        String savedThemeId = normalizedThemeId();
+        return savedThemeId.length() == 0
+                ? ThemeRegistry.canonicalId(globalThemeId)
+                : savedThemeId;
     }
 
     public TouchpadSettings safeTouchpadSettings() {
@@ -257,6 +290,10 @@ public final class GameProfile {
 
     private static int clampMacroCount(int value) {
         return Math.max(1, Math.min(24, value));
+    }
+
+    private static String normalizeThemeId(String value) {
+        return ThemeRegistry.isKnown(value) ? ThemeRegistry.canonicalId(value) : "";
     }
 
     private static int clamp(int value, int min, int max) {

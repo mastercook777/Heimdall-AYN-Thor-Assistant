@@ -115,10 +115,11 @@ final class CanvasImageLoader {
             normalizedZoom = CanvasConfig.MIN_ZOOM;
         }
         normalizedZoom = Math.max(CanvasConfig.MIN_ZOOM,
-                Math.min(CanvasConfig.MAX_ZOOM, normalizedZoom));
+                Math.min(CanvasConfig.MAX_GESTURE_ZOOM, normalizedZoom));
         // BitmapFactory samples in coarse steps. Preserve the existing 2x headroom and
-        // apply the saved crop zoom on top so the retained Bitmap can cover the visible
-        // source region without being enlarged again by CanvasImageView.
+        // the accepted 8x decode-budget ceiling. Extreme-aspect Fill may persist a
+        // larger composition zoom, but it must not silently raise the 2048px runtime
+        // Bitmap bound or the multi-Canvas memory envelope.
         double requested = Math.ceil(viewportSide
                 * normalizedZoom * RUNTIME_SAMPLE_HEADROOM);
         return (int) Math.max(RUNTIME_MIN_DECODE_SIDE,

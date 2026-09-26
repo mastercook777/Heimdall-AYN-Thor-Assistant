@@ -70,14 +70,13 @@ final class CanvasWidgetView extends FrameLayout {
         setFocusable(true);
         longPressTouchSlop = ViewConfiguration.get(context).getScaledTouchSlop();
         displayFrame = new FrameLayout(context);
-        displayFrame.setBackground(HeimdallUi.isPearl(context)
+        displayFrame.setBackground(HeimdallUi.isFreyaFamily(context)
                 ? HeimdallUi.cncInputFrame(context, HeimdallUi.RADIUS_MODULE, circular)
                 : circular
-                        ? HeimdallUi.glassCircle(context, 0xB20C131D, 0xD2070B11,
-                                0x555F7C9A, 0x33344150, HeimdallUi.STROKE_HAIRLINE)
-                        : HeimdallUi.glass(context, 0xB20C131D, 0xD2070B11,
-                                0x555F7C9A, 0x33344150, HeimdallUi.RADIUS_MODULE,
-                                HeimdallUi.STROKE_HAIRLINE));
+                        ? HeimdallUi.glassCircleSurface(context,
+                                ThemeGlassColors.MEDIA_FRAME, HeimdallUi.STROKE_HAIRLINE)
+                        : HeimdallUi.glassSurface(context, ThemeGlassColors.MEDIA_FRAME,
+                                HeimdallUi.RADIUS_MODULE, HeimdallUi.STROKE_HAIRLINE));
         addView(displayFrame, new LayoutParams(-1, -1));
 
         viewport = new FrameLayout(context);
@@ -90,15 +89,12 @@ final class CanvasWidgetView extends FrameLayout {
                     outline.setOval(0, 0, view.getWidth(), view.getHeight());
                     return;
                 }
-                int insetDp = HeimdallUi.isPearl(getContext()) ? 6 : 1;
-                float radius = HeimdallUi.isPearl(getContext())
-                        ? HeimdallUi.concentricInnerRadiusDp(
-                                HeimdallUi.RADIUS_MODULE, insetDp)
-                        : Math.max(0f, HeimdallUi.RADIUS_MODULE - insetDp);
+                float radius = HeimdallUi.mediaFrameInnerRadiusDp(
+                        getContext(), HeimdallUi.RADIUS_MODULE);
                 outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), dp(radius));
             }
         });
-        int inset = dp(HeimdallUi.isPearl(context) ? 6 : 1);
+        int inset = dp(HeimdallUi.mediaFrameContentInsetDp(context));
         LayoutParams viewportParams = new LayoutParams(-1, -1);
         viewportParams.setMargins(inset, inset, inset, inset);
         displayFrame.addView(viewport, viewportParams);
@@ -173,7 +169,7 @@ final class CanvasWidgetView extends FrameLayout {
             if (state == State.READY && interactionEnabled && event.getPointerCount() == 1) {
                 optionsLongPressPending = true;
                 postDelayed(triggerOptionsLongPress,
-                        MacroButtonView.EDIT_LONG_PRESS_TIMEOUT_MS);
+                        HeimdallInteraction.EDIT_LONG_PRESS_TIMEOUT_MS);
             }
             return true;
         }
@@ -418,7 +414,7 @@ final class CanvasWidgetView extends FrameLayout {
     }
 
     private void showPressedEdge() {
-        int color = HeimdallUi.isPearl(getContext()) ? 0xC8F08A2A : 0xAA70B7FF;
+        int color = HeimdallUi.componentColors(getContext()).canvasPressedEdge;
         if (circular) {
             GradientDrawable edge = new GradientDrawable();
             edge.setShape(GradientDrawable.OVAL);

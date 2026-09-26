@@ -8,7 +8,11 @@ final class CanvasConfig {
     static final String SHAPE_RECTANGLE = "rectangle";
     static final String SHAPE_CIRCLE = "circle";
     static final float MIN_ZOOM = 1f;
-    static final float MAX_ZOOM = 8f;
+    static final float MAX_GESTURE_ZOOM = 8f;
+    // A Fill composition may legitimately exceed the ordinary gesture range when an
+    // accepted 4096px source is placed in an extreme 12 x 1 Grid viewport. Keep a
+    // bounded persisted range so that Fill can cover without trusting corrupt JSON.
+    static final float MAX_COMPOSITION_ZOOM = 65536f;
 
     String sourceType = SOURCE_LOCAL_IMAGE;
     String assetId = "";
@@ -45,7 +49,7 @@ final class CanvasConfig {
         assetId = assetId == null ? "" : assetId.trim();
         focusX = clamp(focusX, 0f, 1f);
         focusY = clamp(focusY, 0f, 1f);
-        zoom = clamp(zoom, MIN_ZOOM, MAX_ZOOM);
+        zoom = normalizeZoom(zoom);
         shape = normalizeShape(shape);
     }
 
@@ -82,6 +86,10 @@ final class CanvasConfig {
 
     private static String normalizeShape(String value) {
         return SHAPE_CIRCLE.equals(value) ? SHAPE_CIRCLE : SHAPE_RECTANGLE;
+    }
+
+    static float normalizeZoom(float value) {
+        return clamp(value, MIN_ZOOM, MAX_COMPOSITION_ZOOM);
     }
 
     private static float clamp(float value, float min, float max) {

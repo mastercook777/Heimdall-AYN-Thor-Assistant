@@ -9,7 +9,7 @@ import android.view.MotionEvent;
 import android.view.View;
 
 final class WidgetGridEditor extends View {
-    static final int COLUMNS = 6;
+    static final int COLUMNS = 12;
     static final int ROWS = 8;
 
     interface Host {
@@ -51,6 +51,16 @@ final class WidgetGridEditor extends View {
         if (WidgetLayout.TYPE_MAGNIFIER.equals(type)
                 && layout.findItem(WidgetLayout.TYPE_MAGNIFIER) != null) {
             host.showError(getContext().getString(R.string.grid_editor_magnifier_limit));
+            return;
+        }
+        if (WidgetLayout.TYPE_TRANSLATION.equals(type)
+                && layout.findItem(WidgetLayout.TYPE_TRANSLATION) != null) {
+            host.showError(getContext().getString(R.string.grid_editor_translation_limit));
+            return;
+        }
+        if (WidgetLayout.TYPE_HARDWARE_MONITOR.equals(type)
+                && layout.findItem(WidgetLayout.TYPE_HARDWARE_MONITOR) != null) {
+            host.showError(getContext().getString(R.string.grid_editor_hardware_monitor_limit));
             return;
         }
         int[] size = defaultWidgetSize(type);
@@ -152,7 +162,8 @@ final class WidgetGridEditor extends View {
 
         editorPaint.setStyle(Paint.Style.STROKE);
         editorPaint.setStrokeWidth(dp(1));
-        editorPaint.setColor(HeimdallUi.isPearl(getContext()) ? 0x335D6975 : 0x334EA1FF);
+        ThemeComponentColors colors = HeimdallUi.componentColors(getContext());
+        editorPaint.setColor(colors.gridLine);
         for (int col = 1; col < layout.columns; col++) {
             canvas.drawLine(col * cellW, 0, col * cellW, getHeight(), editorPaint);
         }
@@ -161,7 +172,7 @@ final class WidgetGridEditor extends View {
         }
 
         editorPaint.setStrokeWidth(dp(2));
-        editorPaint.setColor(HeimdallUi.isPearl(getContext()) ? 0x886D7B88 : 0x664EA1FF);
+        editorPaint.setColor(colors.gridOuterBoundary);
         canvas.drawRect(0, 0, getWidth(), getHeight(), editorPaint);
         if (layout.items.isEmpty()) {
             editorPaint.setStyle(Paint.Style.FILL);
@@ -190,7 +201,7 @@ final class WidgetGridEditor extends View {
         editorPaint.setStyle(Paint.Style.STROKE);
         editorPaint.setStrokeWidth(selected ? dp(3) : dp(1));
         editorPaint.setColor(selected ? HeimdallUi.accent(getContext())
-                : (HeimdallUi.isPearl(getContext()) ? 0x886D7B88 : 0x884EA1FF));
+                : HeimdallUi.componentColors(getContext()).gridItemBoundary);
         canvas.drawRoundRect(editorRect, dp(10), dp(10), editorPaint);
         editorPaint.setStyle(Paint.Style.FILL);
         editorPaint.setColor(HeimdallUi.textColor(getContext()));
@@ -204,10 +215,11 @@ final class WidgetGridEditor extends View {
                 editorRect.top + dp(44), editorPaint);
         if (selected) {
             float handle = dp(24);
-            editorPaint.setColor(HeimdallUi.isPearl(getContext()) ? 0xDDF08A2A : 0xDD4EA1FF);
+            ThemeComponentColors colors = HeimdallUi.componentColors(getContext());
+            editorPaint.setColor(colors.gridResizeHandle);
             canvas.drawRoundRect(editorRect.right - handle, editorRect.bottom - handle,
                     editorRect.right, editorRect.bottom, dp(8), dp(8), editorPaint);
-            editorPaint.setColor(0xFFFFFFFF);
+            editorPaint.setColor(colors.gridResizeGlyph);
             editorPaint.setStrokeWidth(dp(2));
             canvas.drawLine(editorRect.right - dp(7), editorRect.bottom - dp(18),
                     editorRect.right - dp(18), editorRect.bottom - dp(7), editorPaint);
@@ -436,13 +448,15 @@ final class WidgetGridEditor extends View {
     }
 
     private int[] defaultWidgetSize(String type) {
-        if (WidgetLayout.TYPE_TOUCHPAD.equals(type)) return new int[]{3, 4};
-        if (WidgetLayout.TYPE_MACRO_GROUP.equals(type)) return new int[]{2, 4};
-        if (WidgetLayout.TYPE_KEYBOARD_PAD.equals(type)) return new int[]{3, 4};
-        if (WidgetLayout.TYPE_QUICK_ACTIONS.equals(type)) return new int[]{2, 2};
-        if (WidgetLayout.TYPE_MAGNIFIER.equals(type)) return new int[]{3, 3};
-        if (WidgetLayout.TYPE_CANVAS.equals(type)) return new int[]{3, 3};
-        return new int[]{2, 1};
+        if (WidgetLayout.TYPE_TOUCHPAD.equals(type)) return new int[]{6, 4};
+        if (WidgetLayout.TYPE_MACRO_GROUP.equals(type)) return new int[]{4, 4};
+        if (WidgetLayout.TYPE_KEYBOARD_PAD.equals(type)) return new int[]{6, 4};
+        if (WidgetLayout.TYPE_QUICK_ACTIONS.equals(type)) return new int[]{4, 2};
+        if (WidgetLayout.TYPE_MAGNIFIER.equals(type)) return new int[]{6, 3};
+        if (WidgetLayout.TYPE_CANVAS.equals(type)) return new int[]{6, 3};
+        if (WidgetLayout.TYPE_TRANSLATION.equals(type)) return new int[]{6, 3};
+        if (WidgetLayout.TYPE_HARDWARE_MONITOR.equals(type)) return new int[]{5, 2};
+        return new int[]{4, 1};
     }
 
     private WidgetLayout.Item firstAvailableWidgetItem(WidgetLayout layout,
@@ -480,32 +494,21 @@ final class WidgetGridEditor extends View {
     }
 
     private int widgetPreviewColor(String type) {
-        if (HeimdallUi.isPearl(getContext())) {
-            if (WidgetLayout.TYPE_TOUCHPAD.equals(type)) return 0xFFD6DEE6;
-            if (WidgetLayout.TYPE_MACRO_GROUP.equals(type)) return 0xFFE3DFE8;
-            if (WidgetLayout.TYPE_KEYBOARD_PAD.equals(type)) return 0xFFD9DEE4;
-            if (WidgetLayout.TYPE_QUICK_ACTIONS.equals(type)) return 0xFFDCE3E9;
-            if (WidgetLayout.TYPE_MAGNIFIER.equals(type)) return 0xFFD6E1E3;
-            if (WidgetLayout.TYPE_CANVAS.equals(type)) return 0xFFD4D9DE;
-            return 0xFFDCE5DF;
-        }
-        if (WidgetLayout.TYPE_TOUCHPAD.equals(type)) return 0xFF15243A;
-        if (WidgetLayout.TYPE_MACRO_GROUP.equals(type)) return 0xFF241D3A;
-        if (WidgetLayout.TYPE_KEYBOARD_PAD.equals(type)) return 0xFF192331;
-        if (WidgetLayout.TYPE_QUICK_ACTIONS.equals(type)) return 0xFF17263B;
-        if (WidgetLayout.TYPE_MAGNIFIER.equals(type)) return 0xFF142A35;
-        if (WidgetLayout.TYPE_CANVAS.equals(type)) return 0xFF101820;
-        return 0xFF142A22;
+        return HeimdallUi.componentColors(getContext()).gridPreview(gridColorSlot(type));
     }
 
     private int selectedWidgetColor(String type) {
-        if (HeimdallUi.isPearl(getContext())) return 0xFFE7E1D9;
-        if (WidgetLayout.TYPE_TOUCHPAD.equals(type)) return 0xCC1F4D78;
-        if (WidgetLayout.TYPE_MACRO_GROUP.equals(type)) return 0xCC4A3278;
-        if (WidgetLayout.TYPE_KEYBOARD_PAD.equals(type)) return 0xCC2C4B68;
-        if (WidgetLayout.TYPE_MAGNIFIER.equals(type)) return 0xCC20566A;
-        if (WidgetLayout.TYPE_CANVAS.equals(type)) return 0xCC283B4C;
-        return 0xCC1D5A3B;
+        return HeimdallUi.componentColors(getContext()).gridSelected(gridColorSlot(type));
+    }
+
+    private int gridColorSlot(String type) {
+        if (WidgetLayout.TYPE_TOUCHPAD.equals(type)) return ThemeComponentColors.GRID_TOUCHPAD;
+        if (WidgetLayout.TYPE_MACRO_GROUP.equals(type)) return ThemeComponentColors.GRID_MACRO_GROUP;
+        if (WidgetLayout.TYPE_KEYBOARD_PAD.equals(type)) return ThemeComponentColors.GRID_KEYBOARD_PAD;
+        if (WidgetLayout.TYPE_QUICK_ACTIONS.equals(type)) return ThemeComponentColors.GRID_QUICK_ACTIONS;
+        if (WidgetLayout.TYPE_MAGNIFIER.equals(type)) return ThemeComponentColors.GRID_MAGNIFIER;
+        if (WidgetLayout.TYPE_CANVAS.equals(type)) return ThemeComponentColors.GRID_CANVAS;
+        return ThemeComponentColors.GRID_OTHER;
     }
 
     private String widgetTypeLabel(String type) {
@@ -516,6 +519,8 @@ final class WidgetGridEditor extends View {
         if (WidgetLayout.TYPE_CANVAS.equals(type)) return getContext().getString(R.string.canvas_name);
         if (WidgetLayout.TYPE_QUICK_ACTIONS.equals(type)) return getContext().getString(R.string.grid_widget_quick_actions);
         if (WidgetLayout.TYPE_MAGNIFIER.equals(type)) return getContext().getString(R.string.grid_widget_magnifier);
+        if (WidgetLayout.TYPE_TRANSLATION.equals(type)) return getContext().getString(R.string.grid_widget_translation);
+        if (WidgetLayout.TYPE_HARDWARE_MONITOR.equals(type)) return getContext().getString(R.string.grid_widget_hardware_monitor);
         return getContext().getString(R.string.grid_widget_module);
     }
 

@@ -10,14 +10,14 @@
 
 <p align="center">
   <a href="https://github.com/mastercook777/Heimdall-AYN-Thor-Assistant/releases"><strong>下载 Alpha</strong></a>
-  · <a href="docs/guides/Heimdall-0.2.0-alpha.1-User-Guide-en.pdf"><strong>English User Guide</strong></a>
-  · <a href="docs/guides/Heimdall-0.2.0-alpha.1-User-Guide-zh-CN.pdf"><strong>简体中文使用教程</strong></a>
+  · <a href="#先看结论安装-heimdall-不需要开发者模式"><strong>设置指南</strong></a>
+  · <a href="README.md#start-here-choose-only-what-you-need"><strong>English Setup Guide</strong></a>
   · <a href="https://github.com/mastercook777/Heimdall-AYN-Thor-Assistant/issues">反馈问题</a>
 </p>
 
 [English](README.md) | 简体中文
 
-Heimdall 让游戏继续显示在 Thor 上屏，同时把下屏变成常驻控制与资料中心：Profile、宏、触摸控制、地图、攻略、本地媒体 Canvas、放大镜、录屏和快捷操作都在拇指可及的位置。
+Heimdall 让游戏继续显示在 Thor 上屏，同时把下屏变成常驻控制与资料中心：Profile、宏、触摸控制、实时翻译、硬件状态、地图、攻略、本地媒体 Canvas、放大镜、录屏和快捷操作都在拇指可及的位置。
 
 > **Alpha 软件：** Heimdall 以 AYN Thor 为目标设备，不承诺兼容所有 Thor 固件、手柄模式、游戏、模拟器或其他双屏设备。
 
@@ -46,17 +46,19 @@ Heimdall 让游戏继续显示在 Thor 上屏，同时把下屏变成常驻控�
 
 | 功能 | 用途 |
 | --- | --- |
-| Profile 与 Grid | 为不同游戏分别保存布局、App 绑定、触摸设置、地图、攻略和 Canvas。直接在 6 × 8 Grid 上拖动、缩放模块，再明确保存。 |
+| Profile 与 Grid | 为不同游戏分别保存布局、App 绑定、主题、触摸设置、地图、攻略和 Canvas。直接在 12 × 8 Grid 上拖动、缩放模块，再明确保存。 |
 | 宏 | 通过结构化编辑器添加点击、长按、滑动、等待和实体手柄步骤；手柄编辑器支持组合键、蓄力、无损重新编辑、镜像、克隆和有边界取消，不需要手写命令。 |
 | 触摸与瞄准 | 基础触控、触摸板拖动、虚拟右摇杆、精准瞄准、真实相对虚拟鼠标，以及条件满足时可与 Thor 自带映射共存的 Shizuku 触控。 |
 | PC 键盘 | 经 Shizuku/uinput 提供临时完整 US ANSI 键盘和 Profile 级可配置小键盘；这是游戏中的 PC 输入，不是 Android IME 文字输入。 |
 | 游戏资料 | 本地地图、PDF、攻略、Interactive Map 链接，以及 Profile 级图片或静音循环视频 Canvas。 |
 | 上屏工具 | 上屏截图、录屏，以及每个 Profile 一个实时局部放大镜。 |
+| 翻译与状态 | 用本地 OCR 识别上屏选区并按 Profile 实时翻译；在 Thor 向普通 App 暴露所需传感器时，被动显示 CPU 温度和内存占用。 |
+| 外观 | 六个已注册的 Heimdall/Freya 配色、可选的 Profile 主题绑定，以及让受支持 Thor 摇杆灯跟随当前主题的全局开关。 |
 
 <table>
   <tr>
     <td width="50%"><img src="docs/assets/readme/heimdall-main-grid.png" alt="Heimdall Freya White 主界面，包含宏、快捷操作和触摸板"></td>
-    <td width="50%"><img src="docs/assets/readme/heimdall-grid-editor.png" alt="Heimdall 6 乘 8 可视化 Grid 编辑器，可直接拖动和缩放模块"></td>
+    <td width="50%"><img src="docs/assets/readme/heimdall-grid-editor.png" alt="Heimdall 可视化 Grid 编辑器，可直接拖动和缩放模块"></td>
   </tr>
   <tr>
     <td align="center"><strong>游玩界面：</strong>下屏控制清晰、易扫视</td>
@@ -72,6 +74,7 @@ Heimdall 让游戏继续显示在 Thor 上屏，同时把下屏变成常驻控�
 | --- | --- |
 | Profile、Grid、地图、攻略、Canvas 和普通界面 | 只安装 Heimdall；不需要开发者模式，也不需要 Shizuku。 |
 | 向上屏发送点击、长按、滑动或兼容触摸板拖动 | 为“基础触控”启用 Heimdall 无障碍服务。 |
+| 实时翻译 | 为上屏截图启用 Heimdall 无障碍服务，再配置受支持的 HTTPS 翻译服务和 API Key。本地完成 OCR，识别出的文字会发送给所选服务。 |
 | 实体手柄录制/回放、虚拟右摇杆、精准瞄准、虚拟鼠标、PC 键盘或映射兼容的增强触控 | 安装、启动并授权 Shizuku；通过无线调试启动时才需要开发者模式。 |
 | 实时放大镜或录屏 | 功能首次启动时，按 Android 系统提示允许屏幕捕获。 |
 
@@ -170,7 +173,7 @@ Thor 重启后，在使用控制器功能前先检查 Shizuku 状态。如果服
 
 ### Grid 与模块
 
-在可视化 Grid 编辑器中添加、拖动、缩放或删除模块；模块会吸附到 6 × 8 Grid。先预览，再明确保存 Grid 和当前 Profile。
+在可视化 Grid 编辑器中添加、拖动、缩放或删除模块；模块会吸附到 12 × 8 Grid。旧 Alpha 的布局会向前迁移；继续编辑和保存前请先检查结果。先预览，再明确保存 Grid 和当前 Profile。
 
 ### 触摸宏
 
@@ -198,6 +201,17 @@ Thor 重启后，在使用控制器功能前先检查 Shizuku 状态。如果服
 - 地图与攻略属于当前 Profile，可以保存本地图片、PDF、文本或 Interactive Map 地址。
 - Canvas 支持本地 JPG、PNG、GIF、WebP 和 MP4。GIF 与动态 WebP 需要 Android 9 或更高版本；MP4 始终静音并循环播放。一个 Profile 可以添加多个独立静态 Canvas，但 GIF、动态 WebP 和 MP4 合计最多一个动态 Canvas。文件不超过 50 MiB；图片不超过 4096 × 4096，MP4 最长边不超过 2048；不支持 APNG。双击进入全屏查看，长按更换媒体或调整构图。
 
+### 实时翻译与硬件监控
+
+- 在 Profile 中添加一个翻译模块，长按选择上屏区域、OCR 文字类型和目标语言，再保存组件。运行中的快速选区只提交确认过的区域，不会顺带保存无关的 Grid 位置变化。
+- 翻译使用 Heimdall 无障碍截图和内置 ML Kit 在本机完成 OCR，不占用 MediaProjection。只有识别出的文字会通过 HTTPS 发送给已配置的 SiliconFlow 或自定义 OpenAI 兼容 `/chat/completions` 接口。
+- 翻译服务与 API Key 属于 App 全局设置。API Key 使用 Android Keystore 加密，不会写入 Profile JSON 或 `.heimdall-profile` 导出。
+- 每个 Profile 可以添加一个硬件监控模块，显示 CPU 温度和已用/总内存。它不需要 Shizuku；当普通 App 无法唯一读取 Thor 的已验证 CPU 传感器时会显示不可用，不会猜测数值。
+
+### 主题与摇杆灯光
+
+在“外观”中选择已注册的 Heimdall 或 Freya 配色。Profile 可以保存自己的主题，也可以跟随 App 默认主题。可选的 **匹配摇杆灯光** 是默认关闭的 App 全局开关；在受支持的 Thor 固件上，它会把当前主题颜色与统一亮度应用到两个摇杆灯环。该功能不使用 Shizuku、Root、轮询、动画或游戏事件；固件灯光调用不可用时，不影响主题本身。
+
 ### 截图与录屏
 
 Quick Actions 可以捕获上屏。录屏使用 Android MediaProjection 和 Audio Playback Capture，而不是麦克风输入；上屏应用仍可以禁止自身游戏声音被捕获。
@@ -215,8 +229,11 @@ Alpha 默认关闭 Android 平台备份。卸载应用会删除 Heimdall 本地�
 - Thor 映射可能隐藏宏录制需要的已映射实体按键。
 - 每个 Profile 当前只支持一个实时放大镜；放大镜不能与录屏共享 MediaProjection。
 - 从其他下屏 Tab 返回 Main 后，冻结画面的 Stop 标记偶尔可能不显示；停止后也可能保留最后一帧。这是已知显示状态问题，不代表画面仍在实时更新。
+- 翻译质量、延迟和服务可用性取决于 OCR 文字类型、网络、模型与服务商。机主已验证的是 SiliconFlow 中国区配合 Hunyuan-MT-7B；其他列出的服务或自定义 OpenAI 兼容接口属于协议兼容，并非都完成 Thor 实机验证。
+- 硬件监控只有在 Thor 向普通 App 暴露唯一、可读的 `cpu-0-1` 温度源时才显示 CPU 温度；它不会拿电池温度代替，也不会估算风扇转速。
+- 主题匹配摇杆灯依赖 Thor 固件服务，并且默认关闭。已接受的主题/亮度/开关即时操作路径不能代替每一种重启或自动 Profile 切换场景的验证。
 
-完整测试范围、迁移说明和限制请阅读 [v0.1.1-alpha.1 发行说明](docs/releases/v0.1.1-alpha.1.md)。[v0.1.0-alpha.1 发行说明](docs/releases/v0.1.0-alpha.1.md)仍保留，供查阅上一版公开 Alpha。
+完整测试范围、迁移说明和限制请阅读 [v0.3.0-alpha.1 发行说明](docs/releases/v0.3.0-alpha.1.md)。经过版式检查的 0.2.0 [English](docs/guides/Heimdall-0.2.0-alpha.1-User-Guide-en.pdf) 与[简体中文](docs/guides/Heimdall-0.2.0-alpha.1-User-Guide-zh-CN.pdf) PDF 继续作为历史参考保留；0.3.0 的当前设置说明以本 README 为准。
 
 ## 如何提供有效反馈
 
@@ -259,7 +276,7 @@ Alpha 默认关闭 Android 平台备份。卸载应用会删除 Heimdall 本地�
 
 ## 数据、隐私与贡献
 
-除非玩家主动导入或导出，Profile 数据只保存在设备本地。联网权限用于玩家自行配置的 Interactive Map 页面；Heimdall 不会向这些页面暴露 JavaScript 接口。详见 [docs/PRIVACY.zh-CN.md](docs/PRIVACY.zh-CN.md)。
+除非玩家主动导入或导出，Profile 数据只保存在设备本地。联网权限用于玩家自行配置的 Interactive Map 页面和可选的翻译请求。翻译 OCR 在本机完成，但识别出的文字会发送给玩家选择的翻译服务。详见 [docs/PRIVACY.zh-CN.md](docs/PRIVACY.zh-CN.md)。
 
 提交更改前请阅读 [CONTRIBUTING.md](CONTRIBUTING.md)（英语）。原生输入、跨屏路由、MediaProjection、性能和实体操作体验都需要范围明确的 AYN Thor 实机证据。
 

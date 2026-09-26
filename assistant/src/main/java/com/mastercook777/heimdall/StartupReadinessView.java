@@ -92,10 +92,10 @@ final class StartupReadinessView extends FrameLayout {
     private int statusColor(StartupReadinessCoordinator.Status status) {
         switch (status) {
             case READY:
-                return HeimdallUi.isPearl(getContext()) ? 0xFF2F8B59 : 0xFF5FD18A;
+                return HeimdallUi.semanticColor(getContext(), HeimdallUi.SEMANTIC_SUCCESS);
             case ACTION_REQUIRED:
             case UNAVAILABLE:
-                return HeimdallUi.isPearl(getContext()) ? 0xFFC46B20 : 0xFFD8A13A;
+                return HeimdallUi.semanticColor(getContext(), HeimdallUi.SEMANTIC_WARNING);
             case OPTIONAL:
                 return HeimdallUi.mutedTextColor(getContext());
             case CHECKING:

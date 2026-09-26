@@ -42,7 +42,7 @@ final class GuideTextReaderView extends FrameLayout {
     GuideTextReaderView(Context context, boolean originalLayout) {
         super(context);
         this.originalLayout = originalLayout;
-        setBackground(HeimdallUi.isPearl(context)
+        setBackground(HeimdallUi.isFreyaFamily(context)
                 ? HeimdallUi.cncShallowInset(context, 8)
                 : HeimdallUi.insetPanel(context, 8));
     }

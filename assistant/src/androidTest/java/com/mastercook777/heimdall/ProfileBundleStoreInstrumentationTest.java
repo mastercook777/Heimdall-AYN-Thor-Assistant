@@ -49,6 +49,7 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
         try {
             target = getTargetContext();
             assertNotNull(target);
+            testHardwareMonitorModelContract();
             testControllerSequenceSafetyPolicy();
             testComposedControllerSequenceContract();
             testMacroCloneAndDispatchGateContract();
@@ -56,7 +57,12 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
             testVirtualKeyboardTransportContract();
             testKeyboardPadModelContract();
             testQuickActionsModelContract();
+            testThemeRegistryContract();
+            testProfileThemeBindingContract();
+            testWidgetLayoutIdentityContract();
+            testTranslationWidgetModelContract();
             testCanvasRuntimeDecodePolicy();
+            testCanvasExtremeAspectFillPolicy();
             testCanvasAnimationContract();
             testProfileIconDecodePolicy();
             testUserMacroIconDeletionContract();
@@ -65,6 +71,7 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
             testForegroundObservationClearAndUnicodeExportFilenameContract();
             testGameContextUserServiceLifetimeContract();
             testEdenGameContextIdentityAndResolverContract();
+            testGameNativeCurrentStateGameContextContract();
             testPpssppPositiveLaunchGameContextContract();
             testRetroArchTwoLevelGameContextContract();
             testAssistantActivitySingleTaskContract();
@@ -100,6 +107,449 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
                 ShizukuNativeUserService.TRANSACTION_RELEASE_VIRTUAL_KEYBOARD_KEYS);
         assertEquals(ShizukuNativeUserService.TRANSACTION_RELEASE_VIRTUAL_KEYBOARD_KEYS + 1,
                 ShizukuNativeUserService.TRANSACTION_RELEASE_VIRTUAL_KEYBOARD);
+    }
+
+    public void testThemeRegistryContract() {
+        HeimdallUi.clearActiveProfileTheme();
+        List<ThemeDefinition> themes = ThemeRegistry.selectableThemes();
+        assertEquals(6, themes.size());
+        assertEquals(ThemeRegistry.ID_HEIMDALL_BLUE, themes.get(0).id);
+        assertEquals(ThemeFamily.HEIMDALL, themes.get(0).family);
+        assertEquals(ThemeRegistry.ID_HEIMDALL_AMBER, themes.get(1).id);
+        assertEquals(ThemeFamily.HEIMDALL, themes.get(1).family);
+        assertEquals(ThemeRegistry.ID_HEIMDALL_NOCTURNE, themes.get(2).id);
+        assertEquals(ThemeFamily.HEIMDALL, themes.get(2).family);
+        assertEquals(ThemeRegistry.ID_FREYA_WHITE, themes.get(3).id);
+        assertEquals(ThemeFamily.FREYA, themes.get(3).family);
+        assertEquals(ThemeRegistry.ID_FREYA_ROSEWOOD, themes.get(4).id);
+        assertEquals(ThemeFamily.FREYA, themes.get(4).family);
+        assertEquals(ThemeRegistry.ID_FREYA_CELADON, themes.get(5).id);
+        assertEquals(ThemeFamily.FREYA, themes.get(5).family);
+        assertTrue(themes.get(0).displayNameRes != 0);
+        assertTrue(themes.get(1).displayNameRes != 0);
+        assertTrue(themes.get(2).displayNameRes != 0);
+        assertTrue(themes.get(3).displayNameRes != 0);
+        assertTrue(themes.get(4).displayNameRes != 0);
+        assertTrue(themes.get(5).displayNameRes != 0);
+
+        assertEquals(ThemeRegistry.ID_HEIMDALL_BLUE,
+                ThemeRegistry.resolve(" dark ").id());
+        assertEquals(ThemeRegistry.ID_FREYA_WHITE,
+                ThemeRegistry.resolve("PEARL").id());
+        assertEquals(ThemeRegistry.ID_HEIMDALL_BLUE,
+                ThemeRegistry.resolve("future.unknown").id());
+        assertTrue(ThemeRegistry.isKnown(ThemeRegistry.ID_HEIMDALL_BLUE));
+        assertTrue(ThemeRegistry.isKnown(ThemeRegistry.ID_HEIMDALL_AMBER));
+        assertTrue(ThemeRegistry.isKnown(ThemeRegistry.ID_HEIMDALL_NOCTURNE));
+        assertTrue(ThemeRegistry.isKnown(ThemeRegistry.LEGACY_PEARL));
+        assertTrue(ThemeRegistry.isKnown(ThemeRegistry.ID_FREYA_ROSEWOOD));
+        assertTrue(ThemeRegistry.isKnown(ThemeRegistry.ID_FREYA_CELADON));
+        assertFalse(ThemeRegistry.isKnown("freya.rose"));
+        assertFalse(ThemeRegistry.isKnown("future.unknown"));
+
+        ResolvedTheme blue = ThemeRegistry.resolve(ThemeRegistry.ID_HEIMDALL_BLUE);
+        ResolvedTheme amber = ThemeRegistry.resolve(ThemeRegistry.ID_HEIMDALL_AMBER);
+        ResolvedTheme nocturne = ThemeRegistry.resolve(ThemeRegistry.ID_HEIMDALL_NOCTURNE);
+        ResolvedTheme white = ThemeRegistry.resolve(ThemeRegistry.ID_FREYA_WHITE);
+        ResolvedTheme rosewood = ThemeRegistry.resolve(ThemeRegistry.ID_FREYA_ROSEWOOD);
+        ResolvedTheme celadon = ThemeRegistry.resolve(ThemeRegistry.ID_FREYA_CELADON);
+        assertEquals(0xFF1450B0, blue.hardwareAccent);
+        assertEquals(0xFFC2550A, amber.hardwareAccent);
+        assertEquals(0xFF318A42, nocturne.hardwareAccent);
+        assertEquals(0xFFCF6818, white.hardwareAccent);
+        assertEquals(0xFFA84C68, rosewood.hardwareAccent);
+        assertEquals(0xFF248F62, celadon.hardwareAccent);
+        for (ResolvedTheme theme : new ResolvedTheme[]{
+                blue, amber, nocturne, white, rosewood, celadon}) {
+            assertEquals(0xFF000000, theme.hardwareAccent & 0xFF000000);
+            assertFalse(theme.hardwareAccent == theme.palette.accent);
+            assertEquals(theme.hardwareAccent,
+                    ThemeJoystickLighting.scaleHardwareColor(
+                            theme.hardwareAccent,
+                            ThemeJoystickLighting.DEFAULT_BRIGHTNESS_PERCENT));
+        }
+        assertEquals(10, ThemeJoystickLighting.normalizeBrightnessPercent(0));
+        assertEquals(50, ThemeJoystickLighting.normalizeBrightnessPercent(52));
+        assertEquals(55, ThemeJoystickLighting.normalizeBrightnessPercent(53));
+        assertEquals(100, ThemeJoystickLighting.normalizeBrightnessPercent(200));
+        assertEquals(0xFF091A2B,
+                ThemeJoystickLighting.scaleHardwareColor(0xFF123456, 50));
+        assertEquals(0xFF020509,
+                ThemeJoystickLighting.scaleHardwareColor(0xFF123456, 0));
+        String ledCommand = ThorJoystickLedAdapter.buildStaticColorCommand(0xFF123456);
+        assertEquals(
+                "echo 1-18:52:86:255 > /sys/class/sn3112l/led/brightness"
+                        + "; echo 1-18:52:86:255 > /sys/class/sn3112r/led/brightness",
+                ledCommand);
+        String ledOffCommand = ThorJoystickLedAdapter.buildTurnOffCommand();
+        assertEquals(
+                "echo 1-0:0:0:0 > /sys/class/sn3112l/led/brightness"
+                        + "; echo 1-0:0:0:0 > /sys/class/sn3112r/led/brightness",
+                ledOffCommand);
+        assertEquals(0, ThorJoystickLedAdapter.TRANSACTION_FLAGS);
+        assertEquals(1, blue.materials.mediaFrameContentInsetDp);
+        assertEquals(6, white.materials.mediaFrameContentInsetDp);
+        assertEquals(0xFF4EA1FF, blue.palette.accent);
+        assertEquals(0xFF090B0D, amber.palette.pageBackground);
+        assertEquals(0xFF090B0D, amber.palette.surfaceBase);
+        assertEquals(0xFF121619, amber.palette.surfaceRaised);
+        assertEquals(0xFF07090A, amber.palette.surfaceInset);
+        assertEquals(0xFF101417, amber.palette.surfaceControl);
+        assertEquals(0xFF0C1013, amber.palette.surfaceField);
+        assertEquals(0xFFEEECE6, amber.palette.textPrimary);
+        assertEquals(0xFFA5A59F, amber.palette.textSecondary);
+        assertEquals(0xFF303538, amber.palette.edgeNeutral);
+        assertEquals(0xFF4B4B45, amber.palette.edgeStrong);
+        assertEquals(0xFFD99A2B, amber.palette.accent);
+        assertEquals(0xFFE7A436, amber.palette.focus);
+        assertEquals(0xFFD99A2B, amber.palette.selection);
+        assertEquals(0xFFF0B84C, amber.palette.activeInput);
+        assertTrue(blue.materials == amber.materials);
+        assertEquals(0xFF0E0C10, nocturne.palette.pageBackground);
+        assertEquals(0xFF0E0C10, nocturne.palette.flatPageBackground);
+        assertEquals(0xFF16131B, nocturne.palette.surfaceBase);
+        assertEquals(0xFF231C29, nocturne.palette.surfaceRaised);
+        assertEquals(0xFF09080C, nocturne.palette.surfaceInset);
+        assertEquals(0xFF1E1823, nocturne.palette.surfaceControl);
+        assertEquals(0xFF131016, nocturne.palette.surfaceField);
+        assertEquals(0xFFF1EDF4, nocturne.palette.textPrimary);
+        assertEquals(0xFFAAA3B0, nocturne.palette.textSecondary);
+        assertEquals(0x8CAAA3B0, nocturne.palette.textDisabled);
+        assertEquals(0xFF33293C, nocturne.palette.edgeNeutral);
+        assertEquals(0xFF50385F, nocturne.palette.edgeStrong);
+        assertEquals(0xFF809D74, nocturne.palette.accent);
+        assertEquals(0xFF4F5F4C, nocturne.palette.accentGradientEnd);
+        assertEquals(0xFF9BC089, nocturne.palette.accentStrong);
+        assertEquals(0xFF9BC089, nocturne.palette.focus);
+        assertEquals(0xFF809D74, nocturne.palette.selection);
+        assertEquals(0xFFADD297, nocturne.palette.activeInput);
+        assertEquals(0xAA557A4F, nocturne.palette.inputEdgeIdle);
+        assertEquals(0x3333293C, nocturne.palette.quickActionDivider);
+        assertTrue(blue.materials == nocturne.materials);
+        assertTrue(amber.materials == nocturne.materials);
+        assertTrue(blue.glassColors != null);
+        assertTrue(amber.glassColors != null);
+        assertTrue(nocturne.glassColors != null);
+        assertTrue(nocturne.cncColors == null);
+        assertTrue(amber.cncColors == null);
+        assertEquals(0xCC111824, blue.glassColors.surface(
+                ThemeGlassColors.SYSTEM_CHROME).top);
+        assertEquals(0xCC121619, amber.glassColors.surface(
+                ThemeGlassColors.SYSTEM_CHROME).top);
+        assertEquals(0xA8101417, amber.glassColors.surface(
+                ThemeGlassColors.QUICK_ACTIONS).top);
+        assertEquals(0xC0121619, amber.glassColors.surface(
+                ThemeGlassColors.MACRO_PRIMARY).top);
+        assertEquals(0xD00C1013, amber.glassColors.surface(
+                ThemeGlassColors.MACRO_PRIMARY).bottom);
+        assertEquals(0x88D99A2B, amber.glassColors.surface(
+                ThemeGlassColors.MACRO_PRIMARY).edgeTop);
+        assertEquals(0x44303538, amber.glassColors.surface(
+                ThemeGlassColors.MACRO_PRIMARY).edgeBottom);
+        assertEquals(0xFFE7A436, amber.glassColors.surface(
+                ThemeGlassColors.MACRO_FOCUSED).edgeTop);
+        assertEquals(0x760C1013, amber.glassColors.surface(
+                ThemeGlassColors.FIELD).top);
+        assertEquals(0xFFD99A2B, amber.componentColors.quickVolumeThumbIdle);
+        assertEquals(0xFF101417, amber.componentColors.inputFaceIdleTop);
+        assertEquals(0xFF0C1013, amber.componentColors.inputFaceIdleBottom);
+        assertEquals(0x66303538, amber.glassColors.rightStickWellEdge);
+        assertEquals(0xAAF0B84C, amber.glassColors.rightStickCapActiveEdge);
+        assertEquals(0xFF0B1018, blue.glassColors.surface(
+                ThemeGlassColors.SETTINGS_CONTENT).top);
+        assertEquals(0xFF2B3748, blue.glassColors.surface(
+                ThemeGlassColors.SETTINGS_CONTENT).edgeTop);
+        assertEquals(0xFF0C1013, amber.glassColors.surface(
+                ThemeGlassColors.SETTINGS_CONTENT).top);
+        assertEquals(0xFF303538, amber.glassColors.surface(
+                ThemeGlassColors.SETTINGS_CONTENT).edgeTop);
+        assertEquals(0xCC231C29, nocturne.glassColors.surface(
+                ThemeGlassColors.SYSTEM_CHROME).top);
+        assertEquals(0xA81E1823, nocturne.glassColors.surface(
+                ThemeGlassColors.QUICK_ACTIONS).top);
+        assertEquals(0xC0231C29, nocturne.glassColors.surface(
+                ThemeGlassColors.MACRO_PRIMARY).top);
+        assertEquals(0xD0131016, nocturne.glassColors.surface(
+                ThemeGlassColors.MACRO_PRIMARY).bottom);
+        assertEquals(0x88809D74, nocturne.glassColors.surface(
+                ThemeGlassColors.MACRO_PRIMARY).edgeTop);
+        assertEquals(0xFF9BC089, nocturne.glassColors.surface(
+                ThemeGlassColors.MACRO_FOCUSED).edgeTop);
+        assertEquals(0xFF131016, nocturne.glassColors.surface(
+                ThemeGlassColors.SETTINGS_CONTENT).top);
+        assertEquals(0xFF33293C, nocturne.glassColors.surface(
+                ThemeGlassColors.SETTINGS_CONTENT).edgeTop);
+        assertEquals(0xFF809D74, nocturne.componentColors.quickActionIconIdle);
+        assertEquals(0xFF809D74, nocturne.componentColors.quickVolumeThumbIdle);
+        assertEquals(0xFF1E1823, nocturne.componentColors.inputFaceIdleTop);
+        assertEquals(0xFF131016, nocturne.componentColors.inputFaceIdleBottom);
+        assertEquals(nocturne.componentColors.inputFaceIdleTop,
+                nocturne.componentColors.inputFaceActiveTop);
+        assertEquals(nocturne.componentColors.inputFaceIdleBottom,
+                nocturne.componentColors.inputFaceActiveBottom);
+        assertEquals(0x6633293C, nocturne.glassColors.rightStickWellEdge);
+        assertEquals(0xAAADD297, nocturne.glassColors.rightStickCapActiveEdge);
+        assertEquals(0xFF809D74, nocturne.componentColors.batteryFill);
+        assertEquals(0xFFADD297, nocturne.componentColors.keyboard.lockedText);
+        assertEquals(0xFFF08A2A, white.palette.accent);
+        assertEquals(0xFFF1E7E2, rosewood.palette.pageBackground);
+        assertEquals(0xFFF6EEEA, rosewood.palette.surfaceBase);
+        assertEquals(0xFFFBF5F1, rosewood.palette.surfaceRaised);
+        assertEquals(0xFFD9CCC6, rosewood.palette.surfaceInset);
+        assertEquals(0xFF49332D, rosewood.palette.textPrimary);
+        assertEquals(0xFFC65D7B, rosewood.palette.accent);
+        assertEquals(0xFFD16A87, rosewood.palette.focus);
+        assertEquals(0xFFD97993, rosewood.palette.activeInput);
+        assertEquals(0xFFEEEAE3, celadon.palette.pageBackground);
+        assertEquals(0xFFEEEAE3, celadon.palette.flatPageBackground);
+        assertEquals(0xFFECE8E1, celadon.palette.surfaceBase);
+        assertEquals(0xFFF7F4EE, celadon.palette.surfaceRaised);
+        assertEquals(0xFFD1D1C7, celadon.palette.surfaceInset);
+        assertEquals(0xFFE6E2DA, celadon.palette.surfaceControl);
+        assertEquals(0xFFE1DED7, celadon.palette.surfaceField);
+        assertEquals(0xFF2E3431, celadon.palette.textPrimary);
+        assertEquals(0xFF68716C, celadon.palette.textSecondary);
+        assertEquals(0x8C68716C, celadon.palette.textDisabled);
+        assertEquals(0xFFB7BEB9, celadon.palette.edgeNeutral);
+        assertEquals(0xFF8F9A95, celadon.palette.edgeStrong);
+        assertEquals(0xFF6F947F, celadon.palette.accent);
+        assertEquals(0xFF9EB4A8, celadon.palette.accentGradientEnd);
+        assertEquals(0xFF557B67, celadon.palette.accentStrong);
+        assertEquals(0xFF557B67, celadon.palette.focus);
+        assertEquals(0xFF6F947F, celadon.palette.selection);
+        assertEquals(0xFF416B57, celadon.palette.activeInput);
+        assertEquals(0xAA829B8E, celadon.palette.inputEdgeIdle);
+        assertEquals(0x33949C97, celadon.palette.quickActionDivider);
+        assertTrue(white.materials == rosewood.materials);
+        assertTrue(white.materials == celadon.materials);
+        assertTrue(rosewood.materials == celadon.materials);
+        assertTrue(white.glassColors == null);
+        assertTrue(celadon.glassColors == null);
+        ThemeCncColors.Surface whiteRaised = white.cncColors.surface(ThemeCncColors.RAISED);
+        assertEquals(0xFFF7F6F4, whiteRaised.faceTop);
+        assertEquals(0xFFF0F1EF, whiteRaised.faceBottom);
+        assertEquals(0xFFF9FAF9, whiteRaised.shellColors()[0]);
+        assertEquals(0xFFFFFFFF, whiteRaised.rimColors()[0]);
+        assertEquals(0xFFFFC17A, white.componentColors.quickVolumeThumbPressed);
+        assertEquals(0xFFF08A2A, white.componentColors.batteryFill);
+        assertEquals(0xFFFEF4E8, white.componentColors.batteryChargingBolt);
+        assertEquals(0xFF717B81, white.componentColors.inputFaceIdleTop);
+        assertEquals(0xFF566168, white.componentColors.inputFaceIdleBottom);
+        assertEquals(0xFF7C868C, white.componentColors.inputFaceActiveTop);
+        assertEquals(0xFF626C72, white.componentColors.inputFaceActiveBottom);
+        assertEquals(0x22404A52, white.componentColors.inputDepthOuter);
+        assertEquals(0xFFFBFAF8, white.componentColors.keyboard.keycapFaceTop);
+        assertEquals(0xFFF5F4F1, white.componentColors.keyboard.keycapFaceBottom);
+        assertEquals(0xFFE8DDD8, rosewood.cncColors.surface(
+                ThemeCncColors.SHALLOW_INSET).roleColor);
+        assertEquals(0xFFF4ECE8, rosewood.cncColors.surface(
+                ThemeCncColors.CONTROL).roleColor);
+        assertEquals(0xFFE9DDD7, rosewood.cncColors.surface(
+                ThemeCncColors.FIELD).roleColor);
+        assertEquals(0xFFD5C7C0, rosewood.cncColors.surface(
+                ThemeCncColors.INPUT_FRAME).roleColor);
+        assertEquals(0xFF76574D, rosewood.componentColors.batteryShell);
+        assertEquals(0xFFC65D7B, rosewood.componentColors.batteryFill);
+        assertEquals(0xFFFBF5F1, rosewood.componentColors.batteryChargingBolt);
+        assertEquals(0xFF806F69, rosewood.componentColors.inputFaceIdleTop);
+        assertEquals(0xFF66544E, rosewood.componentColors.inputFaceIdleBottom);
+        assertEquals(rosewood.componentColors.inputFaceIdleTop,
+                rosewood.componentColors.inputFaceActiveTop);
+        assertEquals(rosewood.componentColors.inputFaceIdleBottom,
+                rosewood.componentColors.inputFaceActiveBottom);
+        assertEquals(0x2256443F, rosewood.componentColors.inputDepthOuter);
+        assertEquals(0xFFECE8E1, celadon.cncColors.surface(
+                ThemeCncColors.FLUSH).roleColor);
+        assertEquals(0xFFF7F4EE, celadon.cncColors.surface(
+                ThemeCncColors.RAISED).roleColor);
+        assertEquals(0xFFD1D1C7, celadon.cncColors.surface(
+                ThemeCncColors.INSET).roleColor);
+        assertEquals(0xFFE6E2DA, celadon.cncColors.surface(
+                ThemeCncColors.CONTROL).roleColor);
+        assertEquals(0xFFE1DED7, celadon.cncColors.surface(
+                ThemeCncColors.FIELD).roleColor);
+        assertEquals(0xFF68716C, celadon.componentColors.batteryShell);
+        assertEquals(0xFF6F947F, celadon.componentColors.batteryFill);
+        assertEquals(0xFFF7F4EE, celadon.componentColors.batteryChargingBolt);
+        assertEquals(0xFF71847A, celadon.componentColors.inputFaceIdleTop);
+        assertEquals(0xFF586A61, celadon.componentColors.inputFaceIdleBottom);
+        assertEquals(celadon.componentColors.inputFaceIdleTop,
+                celadon.componentColors.inputFaceActiveTop);
+        assertEquals(celadon.componentColors.inputFaceIdleBottom,
+                celadon.componentColors.inputFaceActiveBottom);
+        assertEquals(0x22545F5A, celadon.componentColors.inputDepthOuter);
+        assertEquals(0xFF557B67, celadon.componentColors.keyboard.lockedText);
+        assertEquals(0xE04EA1FF, blue.componentColors.dockIndicator);
+        assertEquals(0xE0F08A2A, white.componentColors.dockIndicator);
+        assertEquals(0xFF18212B, blue.componentColors.flatSurfaceFill);
+        assertEquals(0xFFE4E6E7, white.componentColors.flatSurfaceFill);
+        assertEquals(0x445F7C9A, blue.componentColors.structuralDivider);
+        assertEquals(0x287B8792, white.componentColors.structuralDivider);
+        assertEquals(0xFFD9E8F8, blue.componentColors.quickActionIconIdle);
+        assertEquals(0xFF536274, white.componentColors.quickActionIconIdle);
+        assertEquals(0xFF070A10, blue.componentColors.fullscreenBackground);
+        assertEquals(0xFFD4DCE3, white.componentColors.fullscreenBackground);
+        assertEquals(0xCC70B7FF, blue.componentColors.touchPointCore);
+        assertEquals(0xCCF08A2A, white.componentColors.touchPointCore);
+        assertEquals(0xAA70B7FF, blue.componentColors.canvasPressedEdge);
+        assertEquals(0xC8F08A2A, white.componentColors.canvasPressedEdge);
+        assertEquals(0xFF5FD18A, blue.componentColors.statusLampSuccess);
+        assertEquals(0xFF5FD18A, amber.componentColors.statusLampSuccess);
+        assertEquals(0xFF5FD18A, white.componentColors.statusLampSuccess);
+        assertEquals(0xFFFF6B6B, blue.componentColors.statusLampError);
+        assertEquals(0xFFFF6B6B, amber.componentColors.statusLampError);
+        assertEquals(0xFFFF6B6B, white.componentColors.statusLampError);
+        assertEquals(0xFFE6EDF3, blue.componentColors.keyboard.lockedText);
+        assertEquals(0xFFE77F1F, white.componentColors.keyboard.lockedText);
+        assertEquals(0xFF15243A, blue.componentColors.gridPreview(
+                ThemeComponentColors.GRID_TOUCHPAD));
+        assertEquals(0xFFD6DEE6, white.componentColors.gridPreview(
+                ThemeComponentColors.GRID_TOUCHPAD));
+        assertEquals(0xCC1D5A3B, blue.componentColors.gridSelected(
+                ThemeComponentColors.GRID_QUICK_ACTIONS));
+        assertEquals(0xFFE7E1D9, white.componentColors.gridSelected(
+                ThemeComponentColors.GRID_QUICK_ACTIONS));
+        assertFalse(blue.semanticStates.error.foreground
+                == blue.semanticStates.recording.foreground);
+        assertFalse(white.semanticStates.error.foreground
+                == white.semanticStates.recording.foreground);
+        assertEquals(blue.semanticStates.success.foreground,
+                amber.semanticStates.success.foreground);
+        assertEquals(blue.semanticStates.warning.foreground,
+                amber.semanticStates.warning.foreground);
+        assertEquals(blue.semanticStates.error.foreground,
+                amber.semanticStates.error.foreground);
+        assertEquals(blue.semanticStates.recording.foreground,
+                amber.semanticStates.recording.foreground);
+        assertEquals(blue.semanticStates.success.foreground,
+                nocturne.semanticStates.success.foreground);
+        assertEquals(blue.semanticStates.warning.foreground,
+                nocturne.semanticStates.warning.foreground);
+        assertEquals(blue.semanticStates.error.foreground,
+                nocturne.semanticStates.error.foreground);
+        assertEquals(blue.semanticStates.recording.foreground,
+                nocturne.semanticStates.recording.foreground);
+        assertFalse(amber.palette.accent == amber.semanticStates.error.foreground);
+        assertFalse(amber.palette.accent == amber.semanticStates.recording.foreground);
+        assertFalse(nocturne.palette.accent == nocturne.semanticStates.error.foreground);
+        assertFalse(nocturne.palette.accent == nocturne.semanticStates.recording.foreground);
+        assertEquals(0xFF3F8A66, rosewood.semanticStates.success.foreground);
+        assertEquals(0xFFB4772E, rosewood.semanticStates.warning.foreground);
+        assertEquals(0xFFC8493E, rosewood.semanticStates.error.foreground);
+        assertEquals(0xFFD43D4B, rosewood.semanticStates.recording.foreground);
+        assertFalse(rosewood.palette.accent == rosewood.semanticStates.error.foreground);
+        assertFalse(rosewood.palette.accent == rosewood.semanticStates.recording.foreground);
+        assertFalse(rosewood.semanticStates.error.foreground
+                == rosewood.semanticStates.recording.foreground);
+        assertEquals(rosewood.semanticStates.success.foreground,
+                celadon.semanticStates.success.foreground);
+        assertEquals(rosewood.semanticStates.warning.foreground,
+                celadon.semanticStates.warning.foreground);
+        assertEquals(rosewood.semanticStates.error.foreground,
+                celadon.semanticStates.error.foreground);
+        assertEquals(rosewood.semanticStates.recording.foreground,
+                celadon.semanticStates.recording.foreground);
+        assertFalse(celadon.palette.accent == celadon.semanticStates.error.foreground);
+        assertFalse(celadon.palette.accent == celadon.semanticStates.recording.foreground);
+        assertFalse(celadon.semanticStates.error.foreground
+                == celadon.semanticStates.recording.foreground);
+
+        android.content.SharedPreferences preferences =
+                target.getSharedPreferences("heimdall_ui", Context.MODE_PRIVATE);
+        boolean hadTheme = preferences.contains("theme");
+        String previousTheme = preferences.getString("theme", null);
+        try {
+            assertTrue(preferences.edit().putString("theme", ThemeRegistry.LEGACY_PEARL)
+                    .commit());
+            assertEquals(ThemeRegistry.ID_FREYA_WHITE, HeimdallUi.theme(target));
+            assertEquals(ThemeRegistry.LEGACY_PEARL,
+                    preferences.getString("theme", null));
+
+            assertTrue(preferences.edit().putString("theme", "future.unknown").commit());
+            assertEquals(ThemeRegistry.ID_HEIMDALL_BLUE, HeimdallUi.theme(target));
+            assertEquals("future.unknown", preferences.getString("theme", null));
+
+            HeimdallUi.setTheme(target, ThemeRegistry.LEGACY_PEARL);
+            assertEquals(ThemeRegistry.ID_FREYA_WHITE,
+                    preferences.getString("theme", null));
+
+            HeimdallUi.setTheme(target, ThemeRegistry.ID_FREYA_ROSEWOOD);
+            assertEquals(ThemeRegistry.ID_FREYA_ROSEWOOD,
+                    preferences.getString("theme", null));
+
+            HeimdallUi.setTheme(target, ThemeRegistry.ID_HEIMDALL_AMBER);
+            assertEquals(ThemeRegistry.ID_HEIMDALL_AMBER,
+                    preferences.getString("theme", null));
+
+            HeimdallUi.setTheme(target, ThemeRegistry.ID_HEIMDALL_NOCTURNE);
+            assertEquals(ThemeRegistry.ID_HEIMDALL_NOCTURNE,
+                    preferences.getString("theme", null));
+
+            HeimdallUi.setTheme(target, ThemeRegistry.ID_FREYA_CELADON);
+            assertEquals(ThemeRegistry.ID_FREYA_CELADON,
+                    preferences.getString("theme", null));
+        } finally {
+            HeimdallUi.clearActiveProfileTheme();
+            android.content.SharedPreferences.Editor restore = preferences.edit();
+            if (hadTheme) {
+                restore.putString("theme", previousTheme);
+            } else {
+                restore.remove("theme");
+            }
+            assertTrue(restore.commit());
+        }
+    }
+
+    public void testProfileThemeBindingContract() throws Exception {
+        JSONObject legacyJson = new JSONObject();
+        legacyJson.put("name", "Legacy theme");
+        legacyJson.put("mode", "generic");
+        GameProfile legacy = GameProfile.fromJson(legacyJson);
+        assertEquals("", legacy.normalizedThemeId());
+        assertFalse(legacy.toJson().has("themeId"));
+        assertEquals(ThemeRegistry.ID_FREYA_WHITE,
+                legacy.effectiveThemeId(ThemeRegistry.LEGACY_PEARL));
+
+        legacy.setThemeId(ThemeRegistry.ID_FREYA_CELADON);
+        JSONObject saved = legacy.toJson();
+        assertEquals(ThemeRegistry.ID_FREYA_CELADON, saved.getString("themeId"));
+        assertEquals(ThemeRegistry.ID_FREYA_CELADON,
+                GameProfile.fromJson(saved).normalizedThemeId());
+
+        legacy.setThemeId(ThemeRegistry.LEGACY_PEARL);
+        assertEquals(ThemeRegistry.ID_FREYA_WHITE, legacy.normalizedThemeId());
+        legacy.setThemeId("future.unknown");
+        assertEquals("", legacy.normalizedThemeId());
+
+        android.content.SharedPreferences preferences =
+                target.getSharedPreferences("heimdall_ui", Context.MODE_PRIVATE);
+        boolean hadTheme = preferences.contains("theme");
+        String previousTheme = preferences.getString("theme", null);
+        try {
+            HeimdallUi.clearActiveProfileTheme();
+            assertTrue(preferences.edit().putString("theme",
+                    ThemeRegistry.ID_HEIMDALL_BLUE).commit());
+            assertEquals(ThemeRegistry.ID_HEIMDALL_BLUE, HeimdallUi.globalTheme(target));
+            assertEquals(ThemeRegistry.ID_HEIMDALL_BLUE, HeimdallUi.theme(target));
+
+            HeimdallUi.setActiveProfileTheme(ThemeRegistry.ID_FREYA_CELADON);
+            assertEquals(ThemeRegistry.ID_FREYA_CELADON, HeimdallUi.theme(target));
+            assertEquals(ThemeRegistry.ID_HEIMDALL_BLUE, HeimdallUi.globalTheme(target));
+            assertEquals(ThemeRegistry.ID_HEIMDALL_BLUE,
+                    preferences.getString("theme", null));
+
+            HeimdallUi.clearActiveProfileTheme();
+            assertEquals(ThemeRegistry.ID_HEIMDALL_BLUE, HeimdallUi.theme(target));
+        } finally {
+            HeimdallUi.clearActiveProfileTheme();
+            android.content.SharedPreferences.Editor restore = preferences.edit();
+            if (hadTheme) {
+                restore.putString("theme", previousTheme);
+            } else {
+                restore.remove("theme");
+            }
+            assertTrue(restore.commit());
+        }
     }
 
     public void testInteractiveMapBrowserSettingsContract() throws Exception {
@@ -334,6 +784,247 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
                 HeimdallActionCatalog.normalizeQuickAction("arbitrary_intent"));
     }
 
+    public void testWidgetLayoutIdentityContract() throws Exception {
+        WidgetLayout layout = WidgetLayout.defaultLayout();
+        layout.sanitize();
+        assertEquals(WidgetLayout.CURRENT_SCHEMA_VERSION, layout.schemaVersion);
+        assertEquals(12, layout.columns);
+        assertEquals(8, layout.rows);
+        assertEquals(WidgetLayout.CURRENT_SCHEMA_VERSION,
+                layout.toJson().getInt("schemaVersion"));
+
+        WidgetLayout.Item source = layout.items.get(0);
+        assertTrue(source.itemId.trim().length() > 0);
+        assertEquals(source.itemId, source.copy().itemId);
+        assertFalse(source.itemId.equals(new WidgetLayout.Item(
+                source.type, source.x, source.y, source.w, source.h).itemId));
+
+        WidgetLayout restored = WidgetLayout.fromJson(layout.toJson());
+        assertEquals(source.itemId, restored.items.get(0).itemId);
+        assertEquals(source, layout.findItemById(source.itemId));
+
+        JSONObject legacyJson = layout.toJson();
+        legacyJson.remove("schemaVersion");
+        JSONArray legacyItems = legacyJson.getJSONArray("items");
+        for (int i = 0; i < legacyItems.length(); i++) {
+            legacyItems.getJSONObject(i).remove("itemId");
+        }
+        WidgetLayout legacyFirst = WidgetLayout.fromJson(legacyJson);
+        WidgetLayout legacySecond = WidgetLayout.fromJson(legacyJson);
+        assertEquals(WidgetLayout.CURRENT_SCHEMA_VERSION, legacyFirst.schemaVersion);
+        assertEquals(legacyFirst.items.get(0).itemId, legacySecond.items.get(0).itemId);
+        assertFalse(legacyFirst.items.get(0).itemId.equals(legacyFirst.items.get(1).itemId));
+
+        JSONObject sixByEightJson = new JSONObject();
+        sixByEightJson.put("preset", WidgetLayout.PRESET_CUSTOM);
+        sixByEightJson.put("columns", 6);
+        sixByEightJson.put("rows", 8);
+        JSONArray sixByEightItems = new JSONArray();
+        JSONObject legacyMagnifier = new JSONObject();
+        legacyMagnifier.put("type", WidgetLayout.TYPE_MAGNIFIER);
+        legacyMagnifier.put("x", 1);
+        legacyMagnifier.put("y", 2);
+        legacyMagnifier.put("w", 3);
+        legacyMagnifier.put("h", 4);
+        legacyMagnifier.put("magnifierShape", WidgetLayout.MAGNIFIER_SHAPE_CIRCLE);
+        sixByEightItems.put(legacyMagnifier);
+        sixByEightJson.put("items", sixByEightItems);
+        WidgetLayout migrated = WidgetLayout.fromJson(sixByEightJson);
+        WidgetLayout.Item migratedMagnifier = migrated.items.get(0);
+        assertEquals(12, migrated.columns);
+        assertEquals(8, migrated.rows);
+        assertEquals(2, migratedMagnifier.x);
+        assertEquals(2, migratedMagnifier.y);
+        assertEquals(6, migratedMagnifier.w);
+        assertEquals(4, migratedMagnifier.h);
+        assertEquals(WidgetLayout.MAGNIFIER_SHAPE_CIRCLE,
+                migratedMagnifier.magnifierShape);
+
+        WidgetLayout equivalentPreset = WidgetLayout.defaultLayout();
+        assertTrue(layout.hasSameContent(equivalentPreset));
+        assertTrue(equivalentPreset.adoptItemIdsFromEquivalent(layout));
+        assertEquals(layout.items.get(0).itemId, equivalentPreset.items.get(0).itemId);
+        equivalentPreset.items.get(0).x += 1;
+        assertFalse(layout.hasSameContent(equivalentPreset));
+
+        JSONObject duplicateIdJson = layout.toJson();
+        JSONArray duplicateItems = duplicateIdJson.getJSONArray("items");
+        duplicateItems.getJSONObject(1).put("itemId",
+                duplicateItems.getJSONObject(0).getString("itemId"));
+        WidgetLayout repaired = WidgetLayout.fromJson(duplicateIdJson);
+        assertFalse(repaired.items.get(0).itemId.equals(repaired.items.get(1).itemId));
+    }
+
+    public void testTranslationWidgetModelContract() throws Exception {
+        WidgetLayout layout = new WidgetLayout();
+        layout.items.clear();
+        WidgetLayout.Item first = new WidgetLayout.Item(
+                WidgetLayout.TYPE_TRANSLATION, 0, 0, 6, 3);
+        first.translationConfig.regionLeft = -1f;
+        first.translationConfig.regionRight = 2f;
+        first.translationConfig.ocrScript = TranslationConfig.SCRIPT_KOREAN;
+        first.translationConfig.targetLanguage = TranslationConfig.LANGUAGE_ENGLISH;
+        layout.items.add(first);
+        layout.items.add(new WidgetLayout.Item(
+                WidgetLayout.TYPE_TRANSLATION, 6, 0, 6, 3));
+        layout.sanitize();
+        assertEquals(1, layout.items.size());
+        assertEquals(WidgetLayout.TYPE_TRANSLATION, layout.items.get(0).type);
+        assertEquals(0f, layout.items.get(0).safeTranslation().regionLeft);
+        assertEquals(1f, layout.items.get(0).safeTranslation().regionRight);
+
+        WidgetLayout restored = WidgetLayout.fromJson(layout.toJson());
+        assertEquals(TranslationConfig.SCRIPT_KOREAN,
+                restored.items.get(0).safeTranslation().ocrScript);
+        assertEquals(TranslationConfig.LANGUAGE_ENGLISH,
+                restored.items.get(0).safeTranslation().targetLanguage);
+
+        TranslationTextStabilizer stabilizer = new TranslationTextStabilizer();
+        assertEquals(null, stabilizer.accept("  Hello\n world "));
+        assertTrue(stabilizer.isAwaitingConfirmation());
+        assertEquals("Hello world", stabilizer.accept("Hello   world"));
+        assertFalse(stabilizer.isAwaitingConfirmation());
+        stabilizer.markTranslated("Hello world");
+        assertEquals(null, stabilizer.accept("Hello world"));
+        assertFalse(stabilizer.isAwaitingConfirmation());
+        assertTrue(TranslationTextStabilizer.isSimilar("Subtitle!", "Subtitle!", 0.90f));
+        assertEquals(null, stabilizer.accept("Hello there"));
+        assertTrue(stabilizer.isAwaitingConfirmation());
+        assertEquals("Hello there", stabilizer.accept("Hello there"));
+
+        TranslationTextStabilizer punctuationJitter = new TranslationTextStabilizer();
+        assertEquals(null, punctuationJitter.accept("\u300c\u884c\u3053\u3046\u3002\u300d"));
+        assertEquals("\u884c\u3053\u3046", punctuationJitter.accept("\u884c\u3053\u3046"));
+
+        TranslationTextStabilizer characterJitter = new TranslationTextStabilizer();
+        assertEquals(null, characterJitter.accept("\u5f7c\u306f\u3053\u3053\u306b\u3044\u308b"));
+        assertEquals("\u5f7c\u306f\u3053\u3053\u306b\u3044\u308d",
+                characterJitter.accept("\u5f7c\u306f\u3053\u3053\u306b\u3044\u308d"));
+
+        TranslationTextStabilizer growingSubtitle = new TranslationTextStabilizer();
+        assertEquals(null, growingSubtitle.accept("The"));
+        assertEquals(null, growingSubtitle.accept("The hero"));
+        assertTrue(growingSubtitle.isAwaitingConfirmation());
+        assertEquals("The hero", growingSubtitle.accept("The hero"));
+
+        assertEquals("Speaker\nDialogue line",
+                TranslationTextStabilizer.normalize(
+                        "  Speaker  \r\n\r\n Dialogue   line "));
+        assertEquals("Speaker Dialogue line",
+                TranslationApiClient.prepareSourceText("Speaker\nDialogue line"));
+
+        assertTrue(TranslationTextStabilizer.isTranslationDuplicate(
+                "\u30c7\u30a3\u30b1\n\u304a\u30fc\u3044 \u30d5\u30ea\u30c3\u30c8!",
+                "\u30c7\u30a3\u30b1\n\u304a\u30fc\u3044\u3001\u30d5\u30ea\u30c3\u30c8！"));
+        assertTrue(TranslationTextStabilizer.isTranslationDuplicate(
+                "Name\nDialogue line", "Dialogue line\nName"));
+        assertFalse(TranslationTextStabilizer.isTranslationDuplicate(
+                "Open the door", "Return to the village"));
+        TranslationRuntimeController.Snapshot runtimeSnapshot =
+                new TranslationRuntimeController.Snapshot(
+                        "  Same subtitle  ", "  Same translation  ");
+        assertEquals("Same subtitle", runtimeSnapshot.sourceText);
+        assertEquals("Same translation", runtimeSnapshot.translatedText);
+        TranslationTextStabilizer resumedStabilizer = new TranslationTextStabilizer();
+        resumedStabilizer.markTranslated(runtimeSnapshot.sourceText);
+        assertEquals(null, resumedStabilizer.accept("Same subtitle"));
+        assertEquals(null, resumedStabilizer.accept("Same subtitle"));
+        assertFalse(TranslationRuntimeController.shouldSurfaceOcrError(1));
+        assertFalse(TranslationRuntimeController.shouldSurfaceOcrError(2));
+        assertTrue(TranslationRuntimeController.shouldSurfaceOcrError(3));
+        assertFalse(TranslationRuntimeController.shouldReplaceActiveRequest(
+                "Noisy OCR", "Current subtitle", false));
+        assertFalse(TranslationRuntimeController.shouldReplaceActiveRequest(
+                "Current subtitle!", "Current subtitle", true));
+        assertTrue(TranslationRuntimeController.shouldReplaceActiveRequest(
+                "Next subtitle", "Current subtitle", true));
+        assertEquals(1800L, HeimdallInteraction.EDIT_LONG_PRESS_TIMEOUT_MS);
+
+        TranslationProviderConfig provider = new TranslationProviderConfig();
+        provider.region = TranslationProviderConfig.REGION_CHINA;
+        assertEquals(TranslationProviderConfig.SILICONFLOW_CHINA_BASE_URL,
+                provider.resolvedBaseUrl());
+        assertEquals(TranslationProviderConfig.SILICONFLOW_CHINA_MODEL,
+                provider.resolvedModel());
+        provider.region = TranslationProviderConfig.REGION_GLOBAL;
+        assertEquals(TranslationProviderConfig.SILICONFLOW_GLOBAL_BASE_URL,
+                provider.resolvedBaseUrl());
+        assertEquals(TranslationProviderConfig.SILICONFLOW_GLOBAL_MODEL,
+                provider.resolvedModel());
+
+        GameProfile profile = new GameProfile("Translation", "General", "", 1,
+                Collections.singletonList(new Macro("M1", ProfileStore.steps("wait:80ms"))));
+        profile.widgetLayout = layout;
+        String profileJson = profile.toJson().toString();
+        assertTrue(profileJson.contains("profileId"));
+        assertFalse(profileJson.contains("apiKey"));
+        assertFalse(profileJson.contains("Hunyuan-MT-7B"));
+
+        JSONObject duplicate = profile.toJson();
+        JSONArray profiles = new JSONArray();
+        profiles.put(duplicate);
+        profiles.put(new JSONObject(duplicate.toString()));
+        List<GameProfile> imported = ProfileStore.profilesFromJson(profiles.toString());
+        assertFalse(imported.get(0).safeProfileId().equals(imported.get(1).safeProfileId()));
+    }
+
+    public void testHardwareMonitorModelContract() throws Exception {
+        WidgetLayout layout = new WidgetLayout();
+        layout.items.clear();
+        layout.items.add(new WidgetLayout.Item(
+                WidgetLayout.TYPE_HARDWARE_MONITOR, 0, 0, 4, 2));
+        layout.items.add(new WidgetLayout.Item(
+                WidgetLayout.TYPE_HARDWARE_MONITOR, 4, 0, 4, 2));
+        layout.sanitize();
+        assertEquals(1, layout.items.size());
+        assertEquals(WidgetLayout.TYPE_HARDWARE_MONITOR, layout.items.get(0).type);
+        WidgetLayout restored = WidgetLayout.fromJson(layout.toJson());
+        assertEquals(WidgetLayout.TYPE_HARDWARE_MONITOR, restored.items.get(0).type);
+
+        assertEquals(Float.valueOf(58.125f),
+                HardwareMonitorSampler.convertMilliCelsius("58125"));
+        assertNull(HardwareMonitorSampler.convertMilliCelsius("battery"));
+        assertNull(HardwareMonitorSampler.convertMilliCelsius("200000"));
+
+        File thermalRoot = new File(target.getCacheDir(),
+                "hardware-monitor-contract-" + System.nanoTime());
+        File batteryZone = new File(thermalRoot, "thermal_zone1");
+        File cpuZone = new File(thermalRoot, "thermal_zone48");
+        assertTrue(batteryZone.mkdirs());
+        assertTrue(cpuZone.mkdirs());
+        File batteryType = new File(batteryZone, "type");
+        File batteryTemp = new File(batteryZone, "temp");
+        File cpuType = new File(cpuZone, "type");
+        File cpuTemp = new File(cpuZone, "temp");
+        writeFile(batteryType, "battery\n".getBytes(StandardCharsets.US_ASCII));
+        writeFile(batteryTemp, "31000\n".getBytes(StandardCharsets.US_ASCII));
+        writeFile(cpuType, "cpu-0-1\n".getBytes(StandardCharsets.US_ASCII));
+        writeFile(cpuTemp, "58125\n".getBytes(StandardCharsets.US_ASCII));
+        assertEquals(cpuTemp.getCanonicalPath(),
+                HardwareMonitorSampler.findCpuTemperatureFile(thermalRoot).getCanonicalPath());
+        assertEquals(Float.valueOf(58.125f),
+                HardwareMonitorSampler.readTemperatureCelsius(cpuTemp));
+
+        File duplicateZone = new File(thermalRoot, "thermal_zone49");
+        assertTrue(duplicateZone.mkdirs());
+        File duplicateType = new File(duplicateZone, "type");
+        File duplicateTemp = new File(duplicateZone, "temp");
+        writeFile(duplicateType, "cpu-0-1\n".getBytes(StandardCharsets.US_ASCII));
+        writeFile(duplicateTemp, "59000\n".getBytes(StandardCharsets.US_ASCII));
+        assertNull(HardwareMonitorSampler.findCpuTemperatureFile(thermalRoot));
+
+        assertTrue(duplicateTemp.delete());
+        assertTrue(duplicateType.delete());
+        assertTrue(duplicateZone.delete());
+        assertTrue(cpuTemp.delete());
+        assertTrue(cpuType.delete());
+        assertTrue(cpuZone.delete());
+        assertTrue(batteryTemp.delete());
+        assertTrue(batteryType.delete());
+        assertTrue(batteryZone.delete());
+        assertTrue(thermalRoot.delete());
+    }
+
     public void testProfileIconDecodePolicy() {
         Rect landscape = ProfileIconView.centeredSquareBounds(4096, 512);
         assertEquals(512, landscape.width());
@@ -381,8 +1072,34 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
         assertEquals(2000, CanvasImageLoader.runtimeDecodeMaxSide(250, 200, 4f));
         assertEquals(2048, CanvasImageLoader.runtimeDecodeMaxSide(600, 400, 2f));
         assertEquals(2048, CanvasImageLoader.runtimeDecodeMaxSide(250, 200, 8f));
+        assertEquals(2048, CanvasImageLoader.runtimeDecodeMaxSide(250, 200, 24f));
         assertEquals(1200, CanvasImageLoader.runtimeDecodeMaxSide(
                 600, 400, Float.NaN));
+    }
+
+    public void testCanvasExtremeAspectFillPolicy() throws Exception {
+        assertEquals(Float.valueOf(1f), Float.valueOf(
+                CanvasCompositionMath.coverZoom(1200, 100, 1200, 100)));
+        assertEquals(Float.valueOf(12f), Float.valueOf(
+                CanvasCompositionMath.coverZoom(1200, 100, 1000, 1000)));
+        assertEquals(Float.valueOf(24f), Float.valueOf(
+                CanvasCompositionMath.coverZoom(1200, 100, 100, 200)));
+        assertEquals(Float.valueOf(CanvasConfig.MAX_GESTURE_ZOOM), Float.valueOf(
+                CanvasCompositionMath.gestureMaximumZoom(1200, 100, 1200, 100)));
+        assertEquals(Float.valueOf(24f), Float.valueOf(
+                CanvasCompositionMath.gestureMaximumZoom(1200, 100, 1000, 1000)));
+        assertEquals(Float.valueOf(48f), Float.valueOf(
+                CanvasCompositionMath.gestureMaximumZoom(1200, 100, 100, 200)));
+
+        CanvasConfig extremeFill = new CanvasConfig();
+        extremeFill.zoom = 24f;
+        CanvasConfig restored = CanvasConfig.fromJson(extremeFill.toJson());
+        assertEquals(Float.valueOf(24f), Float.valueOf(restored.zoom));
+
+        extremeFill.zoom = Float.MAX_VALUE;
+        extremeFill.normalize();
+        assertEquals(Float.valueOf(CanvasConfig.MAX_COMPOSITION_ZOOM),
+                Float.valueOf(extremeFill.zoom));
     }
 
     public void testAdvancedControlsStateContract() {
@@ -732,17 +1449,172 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
     }
 
     public void testGameContextUserServiceLifetimeContract() throws Exception {
-        assertEquals("game_context_v12",
+        assertEquals("game_context_v15",
                 ShizukuGameContextController.SERVICE_PROCESS_SUFFIX);
-        assertEquals("heimdall_game_context_v12",
+        assertEquals("heimdall_game_context_v15",
                 ShizukuGameContextController.SERVICE_TAG);
-        assertEquals(11, ShizukuGameContextController.SERVICE_VERSION);
+        assertEquals(14, ShizukuGameContextController.SERVICE_VERSION);
         assertEquals("heimdall_native_controller_v13",
                 ShizukuNativeController.SERVICE_TAG);
         assertEquals(13, ShizukuNativeController.SERVICE_VERSION);
         assertTrue(ShizukuUserServiceLifecycle.isDestroyTransaction(16_777_115));
         assertFalse(ShizukuUserServiceLifecycle.isDestroyTransaction(
                 IBinder.FIRST_CALL_TRANSACTION));
+    }
+
+    public void testGameNativeCurrentStateGameContextContract() throws Exception {
+        String steamLaunch = "1789021668.833 18060 14959 I app.gamenative: "
+                + "I: ID: STEAM_1656780";
+        String customLaunch = "1789022020.037 17056 20312 I app.gamenative: "
+                + "I: ID: CUSTOM_GAME_674942539";
+        String gogLaunch = "1789031683.064 17056 9565 I app.gamenative: "
+                + "I: ID: GOG_1420716694";
+        String epicLaunch = "1789033029.732 17056 16151 I app.gamenative: "
+                + "I: ID: EPIC_175";
+        String steamExit = "1789021899.472 18060 18060 I Exit    : "
+                + "I: Exiting, getting feedback for appId: STEAM_1656780";
+        String gogExit = "1789032062.706 17056 17056 I Exit    : "
+                + "I: Exiting, getting feedback for appId: GOG_1420716694";
+        String epicExit = "1789033181.789 17056 17056 I Exit    : "
+                + "I: Exiting, getting feedback for appId: EPIC_175";
+        String steamLabel = "1789021669.283 18060 14959 I XServerScreen: "
+                + "I: Initiated CPU pinning for: Hero's Hour.exe";
+        String customLabel = "1789022020.086 17056 20312 I XServerScreen: "
+                + "I: Initiated CPU pinning for: A:\\sora_1st.exe";
+        String gogLabel = "1789031683.107 17056 9565 I XServerScreen: "
+                + "I: Initiated CPU pinning for: ddtrilogy.exe";
+        String epicLabel = "1789033029.796 17056 16151 I XServerScreen: "
+                + "I: Initiated CPU pinning for: AstroDuel2_EOS.exe";
+
+        assertEquals("STEAM_1656780", GameNativeGameContext.extractLaunchId(steamLaunch));
+        assertEquals("CUSTOM_GAME_674942539",
+                GameNativeGameContext.extractLaunchId(customLaunch));
+        assertEquals("GOG_1420716694", GameNativeGameContext.extractLaunchId(gogLaunch));
+        assertEquals("EPIC_175", GameNativeGameContext.extractLaunchId(epicLaunch));
+        assertEquals("STEAM_1656780", GameNativeGameContext.extractExitId(steamExit));
+        assertEquals("GOG_1420716694", GameNativeGameContext.extractExitId(gogExit));
+        assertEquals("EPIC_175", GameNativeGameContext.extractExitId(epicExit));
+        assertEquals("Hero's Hour", GameNativeGameContext.extractGameLabel(steamLabel));
+        assertEquals("sora_1st", GameNativeGameContext.extractGameLabel(customLabel));
+        assertEquals("ddtrilogy", GameNativeGameContext.extractGameLabel(gogLabel));
+        assertEquals("AstroDuel2_EOS", GameNativeGameContext.extractGameLabel(epicLabel));
+        assertEquals("", GameNativeGameContext.extractLaunchId(
+                steamLaunch.replace("app.gamenative:", "OtherTag:")));
+        assertEquals("", GameNativeGameContext.extractLaunchId(
+                steamLaunch.replace("STEAM_1656780", "STEAM_bad")));
+        assertEquals("", GameNativeGameContext.extractLaunchId(
+                gogLaunch.replace("GOG_1420716694", "AMAZON_1420716694")));
+        assertEquals("", GameNativeGameContext.extractLaunchId(
+                epicLaunch.replace("EPIC_175", "EPIC_0")));
+        assertEquals("", GameNativeGameContext.extractExitId(
+                steamExit.replace("Exit    :", "app.gamenative:")));
+
+        assertTrue(GameNativeGameContext.supportsPackage("app.gamenative"));
+        assertFalse(GameNativeGameContext.supportsPackage("gamehub.lite"));
+        assertTrue(ShizukuGameContextController.isSupportedPackage("app.gamenative"));
+        assertEquals("app.gamenative", ShizukuGameContextUserService.detectorLogTag(
+                GameNativeGameContext.PACKAGE_NAME));
+        assertFalse(ShizukuGameContextUserService.shouldClearForPackage(
+                GameNativeGameContext.PACKAGE_NAME,
+                AetherSx2GameContext.ACTIVITY_MAIN, 2000L, 1500L));
+
+        assertTrue(GameNativeGameContext.isBaselineSameUidCommand(
+                GameNativeGameContext.PACKAGE_NAME, "app.gamenative"));
+        assertTrue(GameNativeGameContext.isBaselineSameUidCommand(
+                GameNativeGameContext.PACKAGE_NAME,
+                "logcat -v threadtime *:E -T 09-10 12:45:10.045"));
+        assertFalse(GameNativeGameContext.isBaselineSameUidCommand(
+                GameNativeGameContext.PACKAGE_NAME,
+                "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Hero's Hour"
+                        + "\\Hero's Hour.exe"));
+        assertFalse(GameNativeGameContext.isBaselineSameUidCommand(
+                GameNativeGameContext.PACKAGE_NAME, "A:\\sora_1st.exe"));
+
+        GameContextSnapshot steam = GameNativeGameContext.snapshot(
+                GameNativeGameContext.STATE_ACTIVE, 18060, "STEAM_1656780",
+                "Hero's Hour", 100L);
+        GameContextSnapshot steamRepeat = GameNativeGameContext.snapshot(
+                GameNativeGameContext.STATE_ACTIVE, 17056, "STEAM_1656780",
+                "Hero's Hour", 200L);
+        GameContextSnapshot custom = GameNativeGameContext.snapshot(
+                GameNativeGameContext.STATE_ACTIVE, 17056, "CUSTOM_GAME_674942539",
+                "sora_1st", 300L);
+        GameContextSnapshot sameNumericCustom = GameNativeGameContext.snapshot(
+                GameNativeGameContext.STATE_ACTIVE, 17056, "CUSTOM_GAME_1656780",
+                "Local game", 400L);
+        GameContextSnapshot gog = GameNativeGameContext.snapshot(
+                GameNativeGameContext.STATE_ACTIVE, 17056, "GOG_1420716694",
+                "ddtrilogy", 450L);
+        GameContextSnapshot sameNumericGog = GameNativeGameContext.snapshot(
+                GameNativeGameContext.STATE_ACTIVE, 17056, "GOG_1656780",
+                "", 475L);
+        GameContextSnapshot epic = GameNativeGameContext.snapshot(
+                GameNativeGameContext.STATE_ACTIVE, 17056, "EPIC_175",
+                "AstroDuel2_EOS", 480L);
+        GameContextSnapshot sameNumericEpic = GameNativeGameContext.snapshot(
+                GameNativeGameContext.STATE_ACTIVE, 17056, "EPIC_1656780",
+                "", 490L);
+        GameContextSnapshot none = GameNativeGameContext.snapshot(
+                GameNativeGameContext.STATE_NONE, 17056, "", "", 500L);
+        assertEquals(GameContextSnapshot.State.ACTIVE, steam.state);
+        assertEquals(GameContextBinding.KIND_PC_GAME, steam.kind);
+        assertEquals("Hero's Hour", steam.label);
+        assertEquals(steam.identityKey, steamRepeat.identityKey);
+        assertFalse(steam.identityKey.equals(custom.identityKey));
+        assertFalse(steam.identityKey.equals(sameNumericCustom.identityKey));
+        assertFalse(steam.identityKey.equals(sameNumericGog.identityKey));
+        assertFalse(custom.identityKey.equals(gog.identityKey));
+        assertEquals("GOG game", sameNumericGog.label);
+        assertFalse(steam.identityKey.equals(sameNumericEpic.identityKey));
+        assertFalse(gog.identityKey.equals(epic.identityKey));
+        assertEquals("Epic game", sameNumericEpic.label);
+        assertEquals(GameContextSnapshot.State.NONE, none.state);
+        assertEquals(GameContextSnapshot.State.UNKNOWN,
+                GameNativeGameContext.snapshot(GameNativeGameContext.STATE_ACTIVE,
+                        17056, "STEAM_bad", "Bad", 600L).state);
+
+        GameProfile steamProfile = new GameProfile("Hero's Hour", "generic",
+                GameNativeGameContext.PACKAGE_NAME, Collections.emptyList());
+        GameProfile customProfile = new GameProfile("Trails", "generic",
+                GameNativeGameContext.PACKAGE_NAME, Collections.emptyList());
+        GameProfile gogProfile = new GameProfile("Double Dragon", "generic",
+                GameNativeGameContext.PACKAGE_NAME, Collections.emptyList());
+        GameProfile epicProfile = new GameProfile("Astro Duel 2", "generic",
+                GameNativeGameContext.PACKAGE_NAME, Collections.emptyList());
+        steamProfile.gameContextBinding = bindingFrom(steam);
+        customProfile.gameContextBinding = bindingFrom(custom);
+        gogProfile.gameContextBinding = bindingFrom(gog);
+        epicProfile.gameContextBinding = bindingFrom(epic);
+        List<GameProfile> profiles = Arrays.asList(
+                steamProfile, customProfile, gogProfile, epicProfile);
+        ForegroundAppTracker.Snapshot foreground = new ForegroundAppTracker.Snapshot(
+                GameNativeGameContext.PACKAGE_NAME,
+                GameNativeGameContext.PACKAGE_NAME + ".MainActivityAliasAlt", "", 0, 300L);
+        assertEquals(1, ProfileAutoSwitchResolver.resolve(
+                profiles, 0, foreground, custom));
+        assertEquals(2, ProfileAutoSwitchResolver.resolve(
+                profiles, 0, foreground, gog));
+        assertEquals(3, ProfileAutoSwitchResolver.resolve(
+                profiles, 0, foreground, epic));
+
+        JSONObject serialized = customProfile.toJson();
+        assertFalse(serialized.toString().contains("674942539"));
+        assertFalse(serialized.toString().contains("A:\\"));
+        assertEquals(GameContextBinding.KIND_PC_GAME,
+                GameProfile.fromJson(serialized).safeGameContextBinding().kind);
+        JSONObject serializedGog = gogProfile.toJson();
+        assertFalse(serializedGog.toString().contains("1420716694"));
+        assertFalse(serializedGog.toString().contains("GOG_"));
+        JSONObject serializedEpic = epicProfile.toJson();
+        assertFalse(serializedEpic.toString().contains("EPIC_175"));
+        assertFalse(serializedEpic.toString().contains("EPIC_"));
+
+        GameProfile duplicate = new GameProfile("Trails alternate", "generic",
+                GameNativeGameContext.PACKAGE_NAME, Collections.emptyList());
+        duplicate.gameContextBinding = bindingFrom(custom);
+        assertEquals(ProfileAutoSwitchResolver.NO_MATCH,
+                ProfileAutoSwitchResolver.resolve(
+                        Arrays.asList(customProfile, duplicate), -1, foreground, custom));
     }
 
     public void testPpssppPositiveLaunchGameContextContract() throws Exception {
@@ -1326,6 +2198,7 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
         macro.iconKey = "user:" + macroSource.getName();
         GameProfile profile = new GameProfile("中文 Profile", "通用", "",
                 Collections.singletonList(macro));
+        profile.setThemeId(ThemeRegistry.ID_FREYA_CELADON);
         profile.protectThorMappingDuringEnhancedTouch = false;
         profile.touchpadSettings.mode = TouchpadSettings.MODE_VIRTUAL_MOUSE;
         profile.touchpadSettings.virtualMouseSensitivity = 1.35f;
@@ -1378,6 +2251,7 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
 
         GameProfile restored = installed.profiles.get(0);
         assertEquals("中文 Profile", restored.name);
+        assertEquals(ThemeRegistry.ID_FREYA_CELADON, restored.normalizedThemeId());
         assertFalse(restored.protectThorMappingDuringEnhancedTouch);
         assertEquals(TouchpadSettings.MODE_VIRTUAL_MOUSE,
                 restored.touchpadSettings.mode);
@@ -1455,6 +2329,7 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
         assertNotNull(result.prepared);
         assertTrue(result.prepared.legacyJson);
         assertEquals("旧版 Profile", result.prepared.profiles.get(0).name);
+        assertEquals("", result.prepared.profiles.get(0).normalizedThemeId());
         assertTrue(result.prepared.profiles.get(0)
                 .protectThorMappingDuringEnhancedTouch);
         TouchpadSettings restoredTouchpad = result.prepared.profiles.get(0).touchpadSettings;

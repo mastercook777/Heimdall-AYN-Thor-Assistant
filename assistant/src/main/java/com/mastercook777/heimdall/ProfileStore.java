@@ -8,7 +8,10 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
+import java.util.UUID;
 
 public final class ProfileStore {
     private static final String PREFS = "thor_assistant_profiles";
@@ -36,14 +39,17 @@ public final class ProfileStore {
         try {
             JSONArray array = new JSONArray(raw);
             List<GameProfile> result = new ArrayList<>();
+            boolean needsIdentityMigration = false;
             TouchpadSettings legacyTouchpadSettings = TouchpadSettings.load(context);
             for (int i = 0; i < array.length(); i++) {
                 JSONObject object = array.getJSONObject(i);
+                needsIdentityMigration |= !object.has("profileId")
+                        || object.optString("profileId", "").trim().length() == 0;
                 result.add(GameProfile.fromJson(object,
                         object.has("touchpadSettings") ? null : legacyTouchpadSettings));
             }
             if (!result.isEmpty()) {
-                if (sanitizeProfiles(result)) {
+                if (sanitizeProfiles(result) || needsIdentityMigration) {
                     int selectedIndex = prefs.getInt(KEY_SELECTED, 0);
                     if (ProfileSnapshotStore.createRawSnapshot(context, raw, selectedIndex,
                             ProfileSnapshotStore.REASON_SANITIZE)) {
@@ -65,6 +71,7 @@ public final class ProfileStore {
     }
 
     public static void saveProfiles(Context context, List<GameProfile> profiles) {
+        ensureUniqueProfileIds(profiles);
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                 .edit()
                 .putString(KEY_PROFILES, profilesToJson(profiles))
@@ -168,6 +175,7 @@ public final class ProfileStore {
             profiles.add(defaultProfile());
             changed = true;
         }
+        changed |= ensureUniqueProfileIds(profiles);
         for (GameProfile profile : profiles) {
             if (profile.touchpadSettings == null) {
                 profile.touchpadSettings = new TouchpadSettings();
@@ -177,7 +185,9 @@ public final class ProfileStore {
                 profile.widgetLayout = WidgetLayout.defaultLayout();
                 changed = true;
             }
+            int widgetCountBeforeSanitize = profile.widgetLayout.items.size();
             profile.widgetLayout.sanitize();
+            if (profile.widgetLayout.items.size() != widgetCountBeforeSanitize) changed = true;
             int widgetMacroCount = requiredMacroCount(profile.widgetLayout);
             int desiredCount = Math.max(1, Math.min(24, profile.macroCount));
             desiredCount = Math.max(desiredCount, widgetMacroCount);
@@ -207,6 +217,23 @@ public final class ProfileStore {
                     macro.steps.add(new MacroStep(MacroStep.TYPE_WAIT, "80ms"));
                     changed = true;
                 }
+            }
+        }
+        return changed;
+    }
+
+    private static boolean ensureUniqueProfileIds(List<GameProfile> profiles) {
+        boolean changed = false;
+        Set<String> profileIds = new HashSet<>();
+        for (GameProfile profile : profiles) {
+            String before = profile.profileId;
+            String profileId = profile.safeProfileId();
+            if (before == null || !profileId.equals(before.trim())) changed = true;
+            if (!profileIds.add(profileId)) {
+                do {
+                    profile.profileId = UUID.randomUUID().toString();
+                } while (!profileIds.add(profile.profileId));
+                changed = true;
             }
         }
         return changed;
