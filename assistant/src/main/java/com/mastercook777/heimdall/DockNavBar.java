@@ -63,9 +63,7 @@ final class DockNavBar extends FrameLayout {
         indicatorRect.set(centerX - indicatorWidth / 2f, bottom - indicatorHeight,
                 centerX + indicatorWidth / 2f, bottom);
         indicatorPaint.setShader(null);
-        indicatorPaint.setColor(HeimdallUi.isPearl(getContext())
-                ? 0xE0F08A2A
-                : 0xE04EA1FF);
+        indicatorPaint.setColor(HeimdallUi.componentColors(getContext()).dockIndicator);
         canvas.drawRoundRect(indicatorRect, indicatorHeight / 2f, indicatorHeight / 2f,
                 indicatorPaint);
     }

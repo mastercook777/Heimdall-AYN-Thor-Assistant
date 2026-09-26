@@ -31,7 +31,14 @@ final class CanvasImageView extends ImageView implements CanvasCompositionSurfac
                     public boolean onScale(ScaleGestureDetector detector) {
                         float current = currentScale();
                         float minimum = Math.max(0.0001f, fitScale * CanvasConfig.MIN_ZOOM);
-                        float maximum = Math.max(minimum, fitScale * CanvasConfig.MAX_ZOOM);
+                        Drawable drawable = getDrawable();
+                        float maximumZoom = drawable == null
+                                ? CanvasConfig.MAX_GESTURE_ZOOM
+                                : CanvasCompositionMath.gestureMaximumZoom(
+                                        getWidth(), getHeight(),
+                                        drawable.getIntrinsicWidth(),
+                                        drawable.getIntrinsicHeight());
+                        float maximum = Math.max(minimum, fitScale * maximumZoom);
                         float target = clamp(current * detector.getScaleFactor(), minimum, maximum);
                         float factor = target / Math.max(0.0001f, current);
                         compositionMatrix.postScale(factor, factor,
@@ -95,10 +102,9 @@ final class CanvasImageView extends ImageView implements CanvasCompositionSurfac
         if (!isReady(drawable)) {
             return;
         }
-        float fillScale = Math.max(getWidth() / (float) drawable.getIntrinsicWidth(),
-                getHeight() / (float) drawable.getIntrinsicHeight());
-        setCenteredZoom(clamp(fillScale / Math.max(0.0001f, fitScale),
-                CanvasConfig.MIN_ZOOM, CanvasConfig.MAX_ZOOM));
+        setCenteredZoom(CanvasCompositionMath.coverZoom(
+                getWidth(), getHeight(),
+                drawable.getIntrinsicWidth(), drawable.getIntrinsicHeight()));
     }
 
     @Override
@@ -157,8 +163,7 @@ final class CanvasImageView extends ImageView implements CanvasCompositionSurfac
             fillImage();
             return;
         }
-        float scale = fitScale * clamp(composition.zoom,
-                CanvasConfig.MIN_ZOOM, CanvasConfig.MAX_ZOOM);
+        float scale = fitScale * CanvasConfig.normalizeZoom(composition.zoom);
         float tx = getWidth() * 0.5f
                 - composition.focusX * drawable.getIntrinsicWidth() * scale;
         float ty = getHeight() * 0.5f
@@ -178,7 +183,7 @@ final class CanvasImageView extends ImageView implements CanvasCompositionSurfac
         }
         composition.focusX = 0.5f;
         composition.focusY = 0.5f;
-        composition.zoom = clamp(zoom, CanvasConfig.MIN_ZOOM, CanvasConfig.MAX_ZOOM);
+        composition.zoom = CanvasConfig.normalizeZoom(zoom);
         applyStoredComposition();
     }
 
@@ -222,8 +227,7 @@ final class CanvasImageView extends ImageView implements CanvasCompositionSurfac
         inverse.mapPoints(center);
         composition.focusX = clamp(center[0] / drawable.getIntrinsicWidth(), 0f, 1f);
         composition.focusY = clamp(center[1] / drawable.getIntrinsicHeight(), 0f, 1f);
-        composition.zoom = clamp(currentScale() / fitScale,
-                CanvasConfig.MIN_ZOOM, CanvasConfig.MAX_ZOOM);
+        composition.zoom = CanvasConfig.normalizeZoom(currentScale() / fitScale);
     }
 
     private float currentScale() {

@@ -55,9 +55,8 @@ final class DockNavButton extends Button {
             return;
         }
         icon = icon.mutate();
-        icon.setTint(HeimdallUi.isPearl(getContext())
-                ? (selected ? 0xFF2D3C4E : 0xCC657386)
-                : (selected ? 0xFFFFFFFF : 0xD0D8E6F2));
+        ThemeComponentColors colors = HeimdallUi.componentColors(getContext());
+        icon.setTint(selected ? colors.dockIconSelected : colors.dockIconIdle);
         navIcon = icon;
         invalidate();
     }
@@ -120,11 +119,10 @@ final class DockNavButton extends Button {
         float start = Math.max(dp(2), (width - groupWidth) / 2f);
         int iconTop = Math.round((height - navIconSize) / 2f - dp(1));
         if (navIcon != null) {
-            navIcon.setTint(HeimdallUi.isPearl(getContext())
-                    ? (navPressedVisual ? 0xFFF08A2A
-                            : (navSelected ? 0xFF2D3C4E : 0xCC657386))
-                    : (navPressedVisual ? HeimdallUi.accent(getContext())
-                            : (navSelected ? 0xFFFFFFFF : 0xD0D8E6F2)));
+            ThemeComponentColors colors = HeimdallUi.componentColors(getContext());
+            navIcon.setTint(navPressedVisual
+                    ? HeimdallUi.accent(getContext())
+                    : (navSelected ? colors.dockIconSelected : colors.dockIconIdle));
             int iconLeft = Math.round(start);
             navIcon.setBounds(iconLeft, iconTop, iconLeft + navIconSize, iconTop + navIconSize);
             navIcon.draw(canvas);

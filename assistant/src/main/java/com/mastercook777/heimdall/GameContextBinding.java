@@ -7,6 +7,7 @@ public final class GameContextBinding {
     static final int VERSION = 1;
     static final String KIND_SAF_DOCUMENT = "saf_document";
     static final String KIND_EMULATOR_TITLE_ID = "emulator_title_id";
+    static final String KIND_PC_GAME = "pc_game";
 
     public int version = VERSION;
     public String kind = "";
@@ -17,6 +18,7 @@ public final class GameContextBinding {
         return VERSION == version
                 && (KIND_SAF_DOCUMENT.equals(kind)
                 || KIND_EMULATOR_TITLE_ID.equals(kind)
+                || KIND_PC_GAME.equals(kind)
                 || RetroArchGameContext.KIND_CONTENT.equals(kind)
                 || RetroArchGameContext.KIND_PLATFORM.equals(kind))
                 && identityKey != null

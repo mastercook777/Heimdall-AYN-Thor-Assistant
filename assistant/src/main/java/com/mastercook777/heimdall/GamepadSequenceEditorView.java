@@ -181,7 +181,7 @@ final class GamepadSequenceEditorView extends LinearLayout {
         LinearLayout currentRow = row();
         currentRow.setGravity(Gravity.CENTER_VERTICAL);
         currentRow.setPadding(dp(8), dp(3), dp(4), dp(3));
-        currentRow.setBackground(HeimdallUi.isPearl(context)
+        currentRow.setBackground(HeimdallUi.isFreyaFamily(context)
                 ? HeimdallUi.cncShallowInset(context, 9)
                 : HeimdallUi.insetPanel(context, 9));
         LayoutParams currentParams = new LayoutParams(MATCH_PARENT, dp(48));
@@ -226,7 +226,7 @@ final class GamepadSequenceEditorView extends LinearLayout {
 
         sequenceList = column();
         sequenceList.setPadding(dp(8), dp(3), dp(8), dp(3));
-        sequenceList.setBackground(HeimdallUi.isPearl(context)
+        sequenceList.setBackground(HeimdallUi.isFreyaFamily(context)
                 ? HeimdallUi.cncShallowInset(context, 9)
                 : HeimdallUi.insetPanel(context, 9));
         content.addView(sequenceList, new LayoutParams(MATCH_PARENT, WRAP_CONTENT));
@@ -518,16 +518,15 @@ final class GamepadSequenceEditorView extends LinearLayout {
         ImageButton button = new ImageButton(getContext());
         button.setImageResource(iconRes);
         button.setColorFilter(danger
-                ? (HeimdallUi.isPearl(getContext())
-                        ? 0xFFB34A4F : HeimdallUi.COLOR_DANGER)
+                ? HeimdallUi.semanticColor(getContext(), HeimdallUi.SEMANTIC_ERROR)
                 : HeimdallUi.textColor(getContext()));
         button.setContentDescription(description);
         button.setScaleType(ImageButton.ScaleType.CENTER_INSIDE);
         button.setMinimumWidth(dp(48));
         button.setMinimumHeight(dp(48));
         button.setPadding(dp(10), dp(8), dp(10), dp(8));
-        button.setBackground(HeimdallUi.isPearl(getContext())
-                ? HeimdallUi.pearlMenuControl(getContext(), 8, false, false)
+        button.setBackground(HeimdallUi.isFreyaFamily(getContext())
+                ? HeimdallUi.cncMenuControl(getContext(), 8, false, false)
                 : HeimdallUi.surfacePanel(getContext(), 8));
         button.setOnClickListener(view -> action.run());
         return button;

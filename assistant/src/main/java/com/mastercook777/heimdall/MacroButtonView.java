@@ -18,7 +18,6 @@ final class MacroButtonView extends Button {
             new PathInterpolator(0.2f, 0f, 0f, 1f);
     private static final long PRESS_IN_MS = 70L;
     private static final long PRESS_OUT_MS = 110L;
-    static final long EDIT_LONG_PRESS_TIMEOUT_MS = 1800L;
 
     private final Paint macroLabelPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint macroPressPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -136,7 +135,8 @@ final class MacroButtonView extends Button {
             boolean handled = super.onTouchEvent(event);
             if (handled && macroLongPressAction != null && event.getPointerCount() == 1) {
                 macroLongPressPending = true;
-                postDelayed(triggerMacroLongPress, EDIT_LONG_PRESS_TIMEOUT_MS);
+                postDelayed(triggerMacroLongPress,
+                        HeimdallInteraction.EDIT_LONG_PRESS_TIMEOUT_MS);
             }
             return handled;
         } else if (action == MotionEvent.ACTION_POINTER_DOWN) {
@@ -210,16 +210,15 @@ final class MacroButtonView extends Button {
             macroPressPaint.setStyle(Paint.Style.STROKE);
             RectF outerGlow = new RectF(dp(1), dp(1), width - dp(1), height - dp(1));
             macroPressPaint.setStrokeWidth(dp(3) / 2f);
-            macroPressPaint.setColor(HeimdallUi.isPearl(getContext())
-                    ? 0xC8F08A2A : 0xEE70B7FF);
+            ThemeComponentColors colors = HeimdallUi.componentColors(getContext());
+            macroPressPaint.setColor(colors.macroPressedOuter);
             canvas.drawRoundRect(outerGlow, dp(10), dp(10), macroPressPaint);
 
             float innerInset = dp(5) / 2f;
             RectF innerGlow = new RectF(innerInset, innerInset,
                     width - innerInset, height - innerInset);
             macroPressPaint.setStrokeWidth(dp(9) / 2f);
-            macroPressPaint.setColor(HeimdallUi.isPearl(getContext())
-                    ? 0x38F08A2A : 0x554EA1FF);
+            macroPressPaint.setColor(colors.macroPressedInner);
             canvas.drawRoundRect(innerGlow, dp(17) / 2f, dp(17) / 2f,
                     macroPressPaint);
         }

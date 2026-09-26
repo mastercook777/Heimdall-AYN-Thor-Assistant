@@ -95,8 +95,12 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Date;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
 
 public class AssistantActivity extends Activity {
     private static final PathInterpolator UI_EASE_OUT =
@@ -134,7 +138,6 @@ public class AssistantActivity extends Activity {
     private static final int REQUEST_DIAGNOSTIC_EXPORT = 2112;
     private static final int MAGNIFIER_REGION_START_MAX_ATTEMPTS = 12;
     private static final long MAGNIFIER_REGION_START_RETRY_MS = 150L;
-    private static final long QUICK_ACTION_EDIT_LONG_PRESS_TIMEOUT_MS = 1800L;
     private static final int BG = HeimdallUi.COLOR_BG;
     private static final int PANEL = HeimdallUi.COLOR_SURFACE;
     private static final int PANEL_ALT = HeimdallUi.COLOR_SURFACE_RAISED;
@@ -161,6 +164,7 @@ public class AssistantActivity extends Activity {
     private static final int SETTINGS_APPEARANCE = 6;
     private static final int SETTINGS_DIAGNOSTICS = 7;
     private static final int SETTINGS_GETTING_STARTED = 8;
+    private static final int SETTINGS_TRANSLATION = 9;
     private static final String STATE_ACTIVE_SCREEN = "heimdall.active_screen";
     private static final String STATE_SETTINGS_SECTION = "heimdall.settings_section";
     private static final String STATE_SETTINGS_SCROLL_Y = "heimdall.settings_scroll_y";
@@ -169,6 +173,7 @@ public class AssistantActivity extends Activity {
     private static final String STATE_MACRO_MAPPING_PROTECTION_DRAFT =
             "heimdall.macro_mapping_protection_draft";
     private static final String STATE_MAGNIFIER_DRAFT = "heimdall.magnifier_draft";
+    private static final String STATE_TRANSLATION_DRAFT = "heimdall.translation_draft";
     private static final String STATE_THEME_DRAFT = "heimdall.theme_draft";
     private static final String STATE_COMPATIBILITY_DRAFT = "heimdall.compatibility_draft";
     private static final String STATE_TOUCHPAD_ADVANCED = "heimdall.touchpad_advanced";
@@ -243,6 +248,10 @@ public class AssistantActivity extends Activity {
     private Button settingsBindPlatformButton;
     private CheckBox settingsProfileDefaultInput;
     private WidgetLayout.Item settingsMagnifierDraft;
+    private WidgetLayout.Item translationEditorDraft;
+    private TranslationProviderConfig settingsTranslationProviderDraft;
+    private Runnable translationEditorRefresh;
+    private boolean translationRegionQuickEntry;
     private String settingsThemeDraft;
     private Boolean settingsPerformanceCompatibilityDraft;
     private boolean showTouchpadAdvancedSettings;
@@ -407,6 +416,12 @@ public class AssistantActivity extends Activity {
     private final List<QuickActionButtonView> quickRecordButtons = new ArrayList<>();
     private final List<UpperScreenMagnifierView> magnifierViews = new ArrayList<>();
     private final List<CanvasWidgetView> canvasViews = new ArrayList<>();
+    private final List<TranslationWidgetView> translationViews = new ArrayList<>();
+    private final List<HardwareMonitorWidgetView> hardwareMonitorViews = new ArrayList<>();
+    private final Set<String> pausedTranslationSessions = new HashSet<>();
+    private final Map<String, TranslationRuntimeController.Snapshot>
+            translationRuntimeStates = new HashMap<>();
+    private final Set<String> translationRuntimeResetSessions = new HashSet<>();
     private String pendingRecordingProfileName;
     private WidgetLayout.Item pendingMagnifierProjectionItem;
     private WidgetLayout.Item pendingMagnifierRegionAfterProjectionItem;
@@ -417,6 +432,7 @@ public class AssistantActivity extends Activity {
     private boolean magnifierRegionCaptureInProgress;
     private boolean pendingMagnifierRegionUsesDraft;
     private boolean magnifierWasFrozenBeforeRegionCapture;
+    private boolean translationRegionCaptureInProgress;
     private GameProfile pendingCanvasImportProfile;
     private WidgetLayout.Item pendingCanvasImportItem;
     private int pendingCanvasImportFrameWidth = 1;
@@ -441,14 +457,23 @@ public class AssistantActivity extends Activity {
         @Override
         public void onReceive(Context context, Intent intent) {
             if (CoordinateCaptureActivity.ACTION_REGION_PREVIEW.equals(intent.getAction())) {
+                if (isTranslationRegionIntent(intent)) return;
                 handleMagnifierRegionPreview(intent);
                 return;
             }
             if (CoordinateCaptureActivity.ACTION_REGION_CANCELLED.equals(intent.getAction())) {
+                if (isTranslationRegionIntent(intent)) {
+                    cancelTranslationRegionCapture();
+                    return;
+                }
                 cancelMagnifierRegionCapture();
                 return;
             }
             if (CoordinateCaptureActivity.ACTION_REGION_CAPTURED.equals(intent.getAction())) {
+                if (isTranslationRegionIntent(intent)) {
+                    handleTranslationRegionCaptured(intent);
+                    return;
+                }
                 handleMagnifierRegionCaptured(intent);
                 return;
             }
@@ -516,6 +541,7 @@ public class AssistantActivity extends Activity {
         FirstSetupState.initialize(this, hadStoredProfiles);
         selectedProfileIndex = ProfileStore.loadSelectedIndex(this, profiles.size());
         selectedProfile = profiles.get(selectedProfileIndex);
+        applySelectedProfileTheme();
         touchpadSettings = selectedProfile.safeTouchpadSettings();
         restoreUiInstanceState(savedInstanceState);
         registerCaptureReceiver();
@@ -561,6 +587,7 @@ public class AssistantActivity extends Activity {
                     settingsMacroMappingProtectionDraft);
         }
         putJsonState(outState, STATE_MAGNIFIER_DRAFT, settingsMagnifierDraft);
+        putJsonState(outState, STATE_TRANSLATION_DRAFT, translationEditorDraft);
         if (settingsThemeDraft != null) {
             outState.putString(STATE_THEME_DRAFT, settingsThemeDraft);
         }
@@ -622,6 +649,11 @@ public class AssistantActivity extends Activity {
             if (magnifierJson != null) {
                 settingsMagnifierDraft = WidgetLayout.Item.fromJson(
                         new JSONObject(magnifierJson));
+            }
+            String translationJson = state.getString(STATE_TRANSLATION_DRAFT);
+            if (translationJson != null) {
+                translationEditorDraft = WidgetLayout.Item.fromJson(
+                        new JSONObject(translationJson));
             }
             String bindingJson = state.getString(STATE_PROFILE_CONTEXT_BINDING_DRAFT);
             if (bindingJson != null) {
@@ -709,7 +741,9 @@ public class AssistantActivity extends Activity {
         closingAnimatedPanels.clear();
         endGamepadRecordingSession(activeGamepadRecordingSession);
         releaseMagnifierViews();
+        releaseTranslationViews();
         releaseCanvasViews();
+        releaseHardwareMonitorViews();
         cancelPendingCanvasImport();
         cancelPendingProfileBundleWork();
         stopMagnifierProjection();
@@ -768,6 +802,8 @@ public class AssistantActivity extends Activity {
         requestUpperDisplayFocusHandoffForStartedLifecycle();
         if (!DebugPerformanceDiagnostics.isStaticUi()) {
             resumeMagnifierViews();
+            resumeTranslationViews();
+            resumeHardwareMonitorViews();
         }
         updateCanvasPlayback();
         if (activeMapWebView != null) {
@@ -788,7 +824,9 @@ public class AssistantActivity extends Activity {
         if (!magnifierRegionCaptureInProgress) {
             pauseMagnifierViews();
         }
+        pauseTranslationViews();
         pauseCanvasPlayback();
+        pauseHardwareMonitorViews();
         resetRightStickIfNeeded();
         parkVirtualMouseDispatcher();
         parkKeyboardInputSession();
@@ -1895,7 +1933,7 @@ public class AssistantActivity extends Activity {
         header.addView(profileContext, new LinearLayout.LayoutParams(0, -1, 1));
 
         profileIconView = new ProfileIconView(this);
-        profileIconView.setElevation(HeimdallUi.isPearl(this) ? 0f : dp(3));
+        profileIconView.setElevation(HeimdallUi.isFreyaFamily(this) ? 0f : dp(3));
         profileIconView.setOnClickListener(v -> showProfileQuickPicker());
         LinearLayout.LayoutParams iconParams = new LinearLayout.LayoutParams(dp(36), dp(36));
         iconParams.setMargins(0, 0, dp(10), 0);
@@ -1909,9 +1947,8 @@ public class AssistantActivity extends Activity {
         profileContext.addView(profileTitle, new LinearLayout.LayoutParams(0, -1, 1));
 
         ImageView headerBrandMark = new ImageView(this);
-        headerBrandMark.setImageResource(HeimdallUi.isPearl(this)
-                ? R.drawable.ic_heimdall_header_mark_freya
-                : R.drawable.ic_heimdall_header_mark_blue);
+        headerBrandMark.setImageResource(
+                HeimdallUi.themeDefinition(this).materials.headerBrandMarkRes);
         headerBrandMark.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
         headerBrandMark.setClickable(false);
         headerBrandMark.setFocusable(false);
@@ -1989,9 +2026,8 @@ public class AssistantActivity extends Activity {
             settingsSlot.addView(settingsButton, new FrameLayout.LayoutParams(-1, -1));
 
             View settingsDivider = new View(this);
-            settingsDivider.setBackgroundColor(HeimdallUi.isPearl(this)
-                    ? 0x40657386
-                    : 0x405F7C9A);
+            settingsDivider.setBackgroundColor(
+                    HeimdallUi.componentColors(this).dockSettingsDivider);
             FrameLayout.LayoutParams dividerParams = new FrameLayout.LayoutParams(dp(1), -1);
             dividerParams.gravity = Gravity.LEFT;
             dividerParams.setMargins(0, dp(10), 0, dp(10));
@@ -2020,7 +2056,9 @@ public class AssistantActivity extends Activity {
 
     private View createMainContent() {
         releaseMagnifierViews();
+        releaseTranslationViews();
         releaseCanvasViews();
+        releaseHardwareMonitorViews();
         if (activeScreen != SCREEN_MAIN) {
             parkKeyboardInputSession();
         }
@@ -2062,9 +2100,8 @@ public class AssistantActivity extends Activity {
         View interactionShield = new View(this);
         interactionShield.setClickable(true);
         interactionShield.setFocusable(false);
-        interactionShield.setBackgroundColor(HeimdallUi.isPearl(this)
-                ? 0x12000000
-                : 0x24000000);
+        interactionShield.setBackgroundColor(
+                HeimdallUi.componentColors(this).gridDraftShield);
         interactionShield.setContentDescription(
                 getString(R.string.grid_draft_preview_accessibility));
         interactionShield.setOnClickListener(v ->
@@ -2082,9 +2119,7 @@ public class AssistantActivity extends Activity {
         status.setOrientation(LinearLayout.VERTICAL);
         status.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
         status.setPadding(dp(6), 0, dp(8), 0);
-        int warningColor = HeimdallUi.isPearl(this)
-                ? 0xFF96500E
-                : HeimdallUi.COLOR_WARNING;
+        int warningColor = HeimdallUi.componentColors(this).gridDraftWarning;
         TextView title = text(getString(R.string.grid_draft_title),
                 HeimdallUi.TYPE_LABEL, warningColor, true);
         title.setSingleLine(true);
@@ -2113,7 +2148,7 @@ public class AssistantActivity extends Activity {
             HeimdallUi.applyPrimaryActionButton(this, button);
         }
         int color = destructive
-                ? (HeimdallUi.isPearl(this) ? 0xFFB34A4F : DANGER)
+                ? HeimdallUi.semanticColor(this, HeimdallUi.SEMANTIC_ERROR)
                 : HeimdallUi.textColor(this);
         button.setTextColor(color);
         setLeftIcon(button, iconRes, color, dp(16));
@@ -2259,7 +2294,67 @@ public class AssistantActivity extends Activity {
             }
             return view;
         }
+        if (WidgetLayout.TYPE_TRANSLATION.equals(type)) {
+            GameProfile translationProfile = selectedProfile;
+            String translationSessionKey = translationSessionKey(translationProfile, item);
+            TranslationWidgetView view = new TranslationWidgetView(this, translationProfile, item,
+                    pausedTranslationSessions.contains(translationSessionKey),
+                    translationRuntimeStates.get(translationSessionKey),
+                    new TranslationWidgetView.Listener() {
+                        @Override
+                        public void onEditRequested(WidgetLayout.Item requestedItem) {
+                            showTranslationEditor(requestedItem);
+                        }
+
+                        @Override
+                        public void onRegionRequested(WidgetLayout.Item requestedItem) {
+                            startQuickTranslationRegionCapture(requestedItem);
+                        }
+
+                        @Override
+                        public void onRunningChanged(WidgetLayout.Item requestedItem,
+                                boolean running) {
+                            String key = translationSessionKey(translationProfile, requestedItem);
+                            if (running) {
+                                pausedTranslationSessions.remove(key);
+                            } else {
+                                pausedTranslationSessions.add(key);
+                            }
+                        }
+
+                        @Override
+                        public void onRuntimeSnapshot(WidgetLayout.Item requestedItem,
+                                TranslationRuntimeController.Snapshot snapshot) {
+                            String key = translationSessionKey(translationProfile, requestedItem);
+                            if (translationRuntimeResetSessions.remove(key)
+                                    || snapshot == null || snapshot.isEmpty()) {
+                                translationRuntimeStates.remove(key);
+                            } else {
+                                translationRuntimeStates.put(key, snapshot);
+                            }
+                        }
+                    });
+            translationViews.add(view);
+            if (activityResumed && activeScreen == SCREEN_MAIN && !hasUnsavedWidgetLayout()) {
+                view.resume();
+            }
+            return view;
+        }
+        if (WidgetLayout.TYPE_HARDWARE_MONITOR.equals(type)) {
+            HardwareMonitorWidgetView view = new HardwareMonitorWidgetView(this);
+            hardwareMonitorViews.add(view);
+            if (activityResumed && activeScreen == SCREEN_MAIN && !hasUnsavedWidgetLayout()) {
+                view.resume();
+            }
+            return view;
+        }
         return null;
+    }
+
+    private static String translationSessionKey(GameProfile profile, WidgetLayout.Item item) {
+        String profileId = profile == null ? "" : profile.safeProfileId();
+        String itemId = item == null || item.itemId == null ? "" : item.itemId;
+        return profileId + ":" + itemId;
     }
 
     private View createMacroWidget(WidgetLayout.Item item) {
@@ -2388,7 +2483,7 @@ public class AssistantActivity extends Activity {
 
             ImageView volumeIcon = new ImageView(this);
             volumeIcon.setImageResource(R.drawable.ic_volume_up);
-            volumeIcon.setColorFilter(HeimdallUi.isPearl(this) ? 0xFF536274 : 0xFFBFD0E2);
+            volumeIcon.setColorFilter(HeimdallUi.componentColors(this).quickVolumeIcon);
             volumeIcon.setContentDescription(getString(R.string.quick_action_media_volume));
             volumeRow.addView(volumeIcon, new LinearLayout.LayoutParams(dp(24), dp(24)));
 
@@ -2454,10 +2549,9 @@ public class AssistantActivity extends Activity {
         LinearLayout shell = new LinearLayout(this);
         shell.setOrientation(LinearLayout.VERTICAL);
         shell.setPadding(dp(12), dp(8), dp(12), dp(8));
-        shell.setBackground(HeimdallUi.isPearl(this)
+        shell.setBackground(HeimdallUi.isFreyaFamily(this)
                 ? HeimdallUi.cncRaised(this, 14, false, false)
-                : HeimdallUi.glass(this, 0xFA0B111B, 0xFF070A10,
-                        0x886A829C, 0x44344150, 14, 2));
+                : HeimdallUi.glassSurface(this, ThemeGlassColors.OVERLAY, 14, 2));
 
         LinearLayout header = new LinearLayout(this);
         header.setOrientation(LinearLayout.HORIZONTAL);
@@ -2509,7 +2603,7 @@ public class AssistantActivity extends Activity {
 
         View footerDivider = new View(this);
         footerDivider.setBackgroundColor(
-                HeimdallUi.isPearl(this) ? 0x287B8792 : 0x445F7C9A);
+                HeimdallUi.componentColors(this).structuralDivider);
         shell.addView(footerDivider, new LinearLayout.LayoutParams(-1, dp(1)));
 
         LinearLayout actions = new LinearLayout(this);
@@ -2549,10 +2643,9 @@ public class AssistantActivity extends Activity {
         LinearLayout shell = new LinearLayout(this);
         shell.setOrientation(LinearLayout.VERTICAL);
         shell.setPadding(dp(12), dp(10), dp(12), dp(10));
-        shell.setBackground(HeimdallUi.isPearl(this)
+        shell.setBackground(HeimdallUi.isFreyaFamily(this)
                 ? HeimdallUi.cncRaised(this, 12, false, false)
-                : HeimdallUi.glass(this, 0xF00B111B, 0xFA070A10,
-                        0x884EA1FF, 0x44344150, 12, 1));
+                : HeimdallUi.glassSurface(this, ThemeGlassColors.PICKER, 12, 1));
         LinearLayout header = new LinearLayout(this);
         header.setGravity(Gravity.CENTER_VERTICAL);
         shell.addView(header, new LinearLayout.LayoutParams(-1, dp(44)));
@@ -3046,6 +3139,110 @@ public class AssistantActivity extends Activity {
         resumeMagnifierViews();
     }
 
+    private boolean isTranslationRegionIntent(Intent intent) {
+        return CoordinateCaptureActivity.REGION_PURPOSE_TRANSLATION.equals(
+                intent.getStringExtra(CoordinateCaptureActivity.EXTRA_REGION_PURPOSE));
+    }
+
+    private void startTranslationRegionCapture() {
+        startTranslationRegionCapture(false);
+    }
+
+    private void startQuickTranslationRegionCapture(WidgetLayout.Item item) {
+        WidgetLayout.Item profileItem = resolveTranslationProfileItem(item);
+        if (profileItem == null) {
+            showErrorAction(getString(R.string.translation_widget_unavailable));
+            return;
+        }
+        translationEditorDraft = profileItem.copy();
+        startTranslationRegionCapture(true);
+    }
+
+    private void startTranslationRegionCapture(boolean quickEntry) {
+        WidgetLayout.Item draft = translationEditorDraft;
+        if (draft == null || captureInProgress) return;
+        Display targetDisplay = findCaptureDisplay();
+        if (targetDisplay == null) {
+            showErrorAction(getString(R.string.error_upper_screen_not_found));
+            return;
+        }
+        translationRegionQuickEntry = quickEntry;
+        translationRegionCaptureInProgress = true;
+        captureInProgress = true;
+        Intent intent = CoordinateCaptureActivity.createIntent(
+                this, CoordinateCaptureActivity.MODE_REGION);
+        intent.putExtra(CoordinateCaptureActivity.EXTRA_REGION_PURPOSE,
+                CoordinateCaptureActivity.REGION_PURPOSE_TRANSLATION);
+        intent.putExtra(CoordinateCaptureActivity.EXTRA_REGION_COMMIT_DIRECT, quickEntry);
+        intent.putExtra(CoordinateCaptureActivity.EXTRA_LOCK_ASPECT, false);
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                | Intent.FLAG_ACTIVITY_CLEAR_TASK
+                | Intent.FLAG_ACTIVITY_NO_ANIMATION);
+        ActivityOptions options = ActivityOptions.makeBasic();
+        options.setLaunchDisplayId(targetDisplay.getDisplayId());
+        try {
+            startActivity(intent, options.toBundle());
+        } catch (Throwable error) {
+            cancelTranslationRegionCapture();
+            showErrorAction(getString(R.string.error_translation_region_start));
+        }
+    }
+
+    private void handleTranslationRegionCaptured(Intent intent) {
+        WidgetLayout.Item draft = translationEditorDraft;
+        if (draft == null) {
+            finishTranslationRegionCapture();
+            return;
+        }
+        TranslationConfig config = draft.safeTranslation();
+        config.regionLeft = intent.getFloatExtra(
+                CoordinateCaptureActivity.EXTRA_REGION_LEFT, config.regionLeft);
+        config.regionTop = intent.getFloatExtra(
+                CoordinateCaptureActivity.EXTRA_REGION_TOP, config.regionTop);
+        config.regionRight = intent.getFloatExtra(
+                CoordinateCaptureActivity.EXTRA_REGION_RIGHT, config.regionRight);
+        config.regionBottom = intent.getFloatExtra(
+                CoordinateCaptureActivity.EXTRA_REGION_BOTTOM, config.regionBottom);
+        config.sanitize();
+        boolean quickEntry = translationRegionQuickEntry;
+        if (quickEntry) {
+            WidgetLayout.Item profileItem = resolveTranslationProfileItem(draft);
+            if (profileItem == null) {
+                translationEditorDraft = null;
+                finishTranslationRegionCapture();
+                showErrorAction(getString(R.string.translation_widget_unavailable));
+                return;
+            }
+            TranslationConfig saved = config.copy();
+            profileItem.translationConfig = saved.copy();
+            mirrorTranslationIntoDraft(profileItem, saved);
+            invalidateTranslationRuntime(profileItem);
+            ProfileStore.saveProfiles(this, profiles);
+            translationEditorDraft = null;
+            finishTranslationRegionCapture();
+            rebuildContent();
+            showAction(getString(R.string.translation_region_saved));
+            return;
+        }
+        finishTranslationRegionCapture();
+        if (translationEditorRefresh != null) {
+            translationEditorRefresh.run();
+        }
+        showAction(getString(R.string.translation_region_draft_updated));
+    }
+
+    private void cancelTranslationRegionCapture() {
+        boolean quickEntry = translationRegionQuickEntry;
+        finishTranslationRegionCapture();
+        if (quickEntry) translationEditorDraft = null;
+    }
+
+    private void finishTranslationRegionCapture() {
+        translationRegionCaptureInProgress = false;
+        captureInProgress = false;
+        translationRegionQuickEntry = false;
+    }
+
     private void resumeMagnifierViews() {
         for (UpperScreenMagnifierView view : magnifierViews) {
             view.resume();
@@ -3063,6 +3260,33 @@ public class AssistantActivity extends Activity {
             view.release();
         }
         magnifierViews.clear();
+    }
+
+    private void resumeTranslationViews() {
+        for (TranslationWidgetView view : translationViews) view.resume();
+    }
+
+    private void pauseTranslationViews() {
+        for (TranslationWidgetView view : translationViews) view.pause();
+    }
+
+    private void releaseTranslationViews() {
+        for (TranslationWidgetView view : translationViews) view.release();
+        translationViews.clear();
+    }
+
+    private void resumeHardwareMonitorViews() {
+        if (activeScreen != SCREEN_MAIN || hasUnsavedWidgetLayout()) return;
+        for (HardwareMonitorWidgetView view : hardwareMonitorViews) view.resume();
+    }
+
+    private void pauseHardwareMonitorViews() {
+        for (HardwareMonitorWidgetView view : hardwareMonitorViews) view.pause();
+    }
+
+    private void releaseHardwareMonitorViews() {
+        for (HardwareMonitorWidgetView view : hardwareMonitorViews) view.release();
+        hardwareMonitorViews.clear();
     }
 
     private void releaseCanvasViews() {
@@ -3321,10 +3545,10 @@ public class AssistantActivity extends Activity {
         LinearLayout shell = new LinearLayout(this);
         shell.setOrientation(LinearLayout.VERTICAL);
         shell.setPadding(dp(14), dp(12), dp(14), dp(12));
-        shell.setBackground(HeimdallUi.isPearl(this)
+        shell.setBackground(HeimdallUi.isFreyaFamily(this)
                 ? HeimdallUi.cncFlush(this, HeimdallUi.RADIUS_PANEL)
-                : HeimdallUi.glass(this, 0xFA0B111B, 0xFF070A10,
-                        0x886A829C, 0x44344150, HeimdallUi.RADIUS_PANEL, 2));
+                : HeimdallUi.glassSurface(this, ThemeGlassColors.OVERLAY,
+                        HeimdallUi.RADIUS_PANEL, 2));
         TextView title = text(getString(R.string.canvas_options),
                 HeimdallUi.TYPE_EDITOR_TITLE, TEXT, true);
         shell.addView(title, new LinearLayout.LayoutParams(-1, dp(38)));
@@ -3446,12 +3670,9 @@ public class AssistantActivity extends Activity {
         boolean requestedFromEquivalentDraft = draftWidgetLayout != null
                 && draftWidgetLayout.items.contains(requestedItem);
         if (profileItem == null && requestedFromEquivalentDraft) {
-            int itemIndex = draftWidgetLayout.items.indexOf(requestedItem);
-            if (itemIndex >= 0 && itemIndex < profileLayout.items.size()) {
-                WidgetLayout.Item candidate = profileLayout.items.get(itemIndex);
-                if (WidgetLayout.TYPE_CANVAS.equals(candidate.type)) {
-                    profileItem = candidate;
-                }
+            WidgetLayout.Item candidate = profileLayout.findItemById(requestedItem.itemId);
+            if (candidate != null && WidgetLayout.TYPE_CANVAS.equals(candidate.type)) {
+                profileItem = candidate;
             }
         }
         if (profileItem == null || !WidgetLayout.TYPE_CANVAS.equals(profileItem.type)) {
@@ -3481,12 +3702,8 @@ public class AssistantActivity extends Activity {
         if (draftWidgetLayout == null || !draftWidgetLayout.items.contains(requestedItem)) {
             return null;
         }
-        int itemIndex = draftWidgetLayout.items.indexOf(requestedItem);
-        if (itemIndex < 0 || itemIndex >= profileLayout.items.size()) {
-            return null;
-        }
-        WidgetLayout.Item candidate = profileLayout.items.get(itemIndex);
-        return expectedType.equals(candidate.type) ? candidate : null;
+        WidgetLayout.Item candidate = profileLayout.findItemById(requestedItem.itemId);
+        return candidate != null && expectedType.equals(candidate.type) ? candidate : null;
     }
 
     private WidgetLayout.Item equivalentDraftWidgetItem(
@@ -3494,13 +3711,8 @@ public class AssistantActivity extends Activity {
         if (selectedProfile == null || profileItem == null || draftWidgetLayout == null) {
             return null;
         }
-        WidgetLayout profileLayout = selectedProfile.safeWidgetLayout();
-        int itemIndex = profileLayout.items.indexOf(profileItem);
-        if (itemIndex < 0 || itemIndex >= draftWidgetLayout.items.size()) {
-            return null;
-        }
-        WidgetLayout.Item candidate = draftWidgetLayout.items.get(itemIndex);
-        return expectedType.equals(candidate.type) ? candidate : null;
+        WidgetLayout.Item candidate = draftWidgetLayout.findItemById(profileItem.itemId);
+        return candidate != null && expectedType.equals(candidate.type) ? candidate : null;
     }
 
     private void mirrorQuickActionsIntoEquivalentDraft(
@@ -3519,6 +3731,36 @@ public class AssistantActivity extends Activity {
         if (draftItem != null) {
             draftItem.keyboardPad = saved.copy();
         }
+    }
+
+    private WidgetLayout.Item resolveTranslationProfileItem(
+            WidgetLayout.Item requestedItem) {
+        if (selectedProfile == null || requestedItem == null
+                || !WidgetLayout.TYPE_TRANSLATION.equals(requestedItem.type)) {
+            return null;
+        }
+        WidgetLayout profileLayout = selectedProfile.safeWidgetLayout();
+        if (profileLayout.items.contains(requestedItem)) {
+            return requestedItem;
+        }
+        WidgetLayout.Item candidate = profileLayout.findItemById(requestedItem.itemId);
+        return candidate != null && WidgetLayout.TYPE_TRANSLATION.equals(candidate.type)
+                ? candidate : null;
+    }
+
+    private void mirrorTranslationIntoDraft(
+            WidgetLayout.Item profileItem, TranslationConfig saved) {
+        WidgetLayout.Item draftItem = equivalentDraftWidgetItem(
+                profileItem, WidgetLayout.TYPE_TRANSLATION);
+        if (draftItem != null) {
+            draftItem.translationConfig = saved.copy();
+        }
+    }
+
+    private void invalidateTranslationRuntime(WidgetLayout.Item profileItem) {
+        String runtimeKey = translationSessionKey(selectedProfile, profileItem);
+        translationRuntimeStates.remove(runtimeKey);
+        translationRuntimeResetSessions.add(runtimeKey);
     }
 
     private void cancelPendingCanvasImport() {
@@ -3609,7 +3851,10 @@ public class AssistantActivity extends Activity {
         draftWidgetLayout = null;
         settingsTouchpadDraft = null;
         settingsMagnifierDraft = null;
+        translationEditorDraft = null;
+        settingsTranslationProviderDraft = null;
         settingsGameContextBindingDraft = null;
+        settingsThemeDraft = null;
         settingsMacroMappingProtectionInput = null;
         settingsMacroMappingProtectionDraft = null;
         viewingGuideInline = null;
@@ -3625,10 +3870,21 @@ public class AssistantActivity extends Activity {
         activeLocalMapIndex = 0;
         selectedProfileIndex = index;
         selectedProfile = profiles.get(index);
+        applySelectedProfileTheme();
         touchpadSettings = selectedProfile.safeTouchpadSettings();
         closeVirtualMouseDispatcherIfUnused();
         ProfileStore.saveSelectedIndex(this, selectedProfileIndex);
         rebuildContent();
+    }
+
+    private void applySelectedProfileTheme() {
+        if (selectedProfile == null) {
+            HeimdallUi.clearActiveProfileTheme();
+            ThemeJoystickLighting.syncIfEnabled(this);
+            return;
+        }
+        HeimdallUi.setActiveProfileTheme(selectedProfile.normalizedThemeId());
+        ThemeJoystickLighting.syncIfEnabled(this);
     }
 
     private void maybeAutoSwitchProfile(ForegroundAppTracker.Snapshot snapshot) {
@@ -3699,12 +3955,11 @@ public class AssistantActivity extends Activity {
         if (draftWidgetLayout == null || selectedProfile == null) {
             return false;
         }
-        try {
-            return !draftWidgetLayout.toJson().toString().equals(
-                    selectedProfile.safeWidgetLayout().toJson().toString());
-        } catch (JSONException ignored) {
-            return true;
+        WidgetLayout savedLayout = selectedProfile.safeWidgetLayout();
+        if (draftWidgetLayout.adoptItemIdsFromEquivalent(savedLayout)) {
+            return false;
         }
+        return true;
     }
 
     private void renderSelectedProfile() {
@@ -3813,9 +4068,10 @@ public class AssistantActivity extends Activity {
     private void styleMacroButton(Button button, int priority, boolean focused, int index,
                                   MacroIconRepository.MacroIconOption icon) {
         HeimdallUi.applyMacroButton(this, button, priority, focused, index);
-        int color = HeimdallUi.isPearl(this)
-                ? (focused ? 0xFF9B4C12 : (priority == HeimdallUi.MACRO_UTILITY ? 0xCC697687 : 0xFF344457))
-                : (focused ? 0xFFFFFFFF : (priority == HeimdallUi.MACRO_UTILITY ? 0xCCB8C5D4 : 0xFFE6EDF3));
+        ThemeComponentColors colors = HeimdallUi.componentColors(this);
+        int color = focused ? colors.macroIconFocused
+                : (priority == HeimdallUi.MACRO_UTILITY
+                        ? colors.macroIconUtility : colors.macroIconDefault);
         installMacroIcon(button, icon, color, priority);
     }
 
@@ -3911,10 +4167,9 @@ public class AssistantActivity extends Activity {
         int count = Math.min(selectedProfile.macroCount, selectedProfile.macros.size());
         LinearLayout shell = new LinearLayout(this);
         shell.setOrientation(LinearLayout.VERTICAL);
-        shell.setBackground(HeimdallUi.isPearl(this)
+        shell.setBackground(HeimdallUi.isFreyaFamily(this)
                 ? HeimdallUi.cncFlush(this, 14)
-                : HeimdallUi.glass(this, 0xFA0B111B, 0xFF070A10,
-                        0x886A829C, 0x44344150, 14, 2));
+                : HeimdallUi.glassSurface(this, ThemeGlassColors.OVERLAY, 14, 2));
 
         LinearLayout header = new LinearLayout(this);
         header.setOrientation(LinearLayout.VERTICAL);
@@ -3934,7 +4189,7 @@ public class AssistantActivity extends Activity {
         header.addView(subtitle, new LinearLayout.LayoutParams(-1, dp(22)));
 
         View headerDivider = new View(this);
-        headerDivider.setBackgroundColor(HeimdallUi.isPearl(this) ? 0x287B8792 : 0x445F7C9A);
+        headerDivider.setBackgroundColor(HeimdallUi.componentColors(this).structuralDivider);
         shell.addView(headerDivider, new LinearLayout.LayoutParams(-1, dp(1)));
 
         ScrollView scroll = new ScrollView(this);
@@ -3988,7 +4243,7 @@ public class AssistantActivity extends Activity {
         }
 
         View footerDivider = new View(this);
-        footerDivider.setBackgroundColor(HeimdallUi.isPearl(this) ? 0x287B8792 : 0x445F7C9A);
+        footerDivider.setBackgroundColor(HeimdallUi.componentColors(this).structuralDivider);
         shell.addView(footerDivider, new LinearLayout.LayoutParams(-1, dp(1)));
         LinearLayout actions = new LinearLayout(this);
         actions.setOrientation(LinearLayout.HORIZONTAL);
@@ -4012,10 +4267,10 @@ public class AssistantActivity extends Activity {
         card.setOrientation(LinearLayout.HORIZONTAL);
         card.setGravity(Gravity.CENTER_VERTICAL);
         card.setPadding(dp(8), dp(5), dp(10), dp(5));
-        card.setBackground(HeimdallUi.isPearl(this)
-                ? HeimdallUi.pearlMenuControl(this, HeimdallUi.RADIUS_CARD, false, false)
-                : HeimdallUi.glass(this, 0xB20F1622, 0xC9090E16,
-                        0x665F7C9A, 0x33344150, HeimdallUi.RADIUS_CARD, 1));
+        card.setBackground(HeimdallUi.isFreyaFamily(this)
+                ? HeimdallUi.cncMenuControl(this, HeimdallUi.RADIUS_CARD, false, false)
+                : HeimdallUi.glassSurface(this, ThemeGlassColors.CONTROL,
+                        HeimdallUi.RADIUS_CARD, 1));
         card.setClickable(true);
         card.setFocusable(true);
         card.setOnClickListener(view -> editAction.run());
@@ -4089,10 +4344,9 @@ public class AssistantActivity extends Activity {
 
         LinearLayout shell = new LinearLayout(this);
         shell.setOrientation(LinearLayout.VERTICAL);
-        shell.setBackground(HeimdallUi.isPearl(this)
+        shell.setBackground(HeimdallUi.isFreyaFamily(this)
                 ? HeimdallUi.cncFlush(this, 14)
-                : HeimdallUi.glass(this, 0xFA0B111B, 0xFF070A10,
-                        0x886A829C, 0x44344150, 14, 2));
+                : HeimdallUi.glassSurface(this, ThemeGlassColors.OVERLAY, 14, 2));
 
         LinearLayout header = new LinearLayout(this);
         header.setOrientation(LinearLayout.VERTICAL);
@@ -4108,8 +4362,7 @@ public class AssistantActivity extends Activity {
                 11, MUTED, false), new LinearLayout.LayoutParams(-1, dp(24)));
 
         View headerDivider = new View(this);
-        headerDivider.setBackgroundColor(HeimdallUi.isPearl(this)
-                ? 0x287B8792 : 0x445F7C9A);
+        headerDivider.setBackgroundColor(HeimdallUi.componentColors(this).structuralDivider);
         shell.addView(headerDivider, new LinearLayout.LayoutParams(-1, dp(1)));
 
         ScrollView scroll = new ScrollView(this);
@@ -4152,8 +4405,7 @@ public class AssistantActivity extends Activity {
         }
 
         View footerDivider = new View(this);
-        footerDivider.setBackgroundColor(HeimdallUi.isPearl(this)
-                ? 0x287B8792 : 0x445F7C9A);
+        footerDivider.setBackgroundColor(HeimdallUi.componentColors(this).structuralDivider);
         shell.addView(footerDivider, new LinearLayout.LayoutParams(-1, dp(1)));
         LinearLayout actions = new LinearLayout(this);
         actions.setOrientation(LinearLayout.HORIZONTAL);
@@ -4222,10 +4474,9 @@ public class AssistantActivity extends Activity {
         LinearLayout panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL);
         panel.setPadding(dp(14), dp(10), dp(14), dp(10));
-        panel.setBackground(HeimdallUi.isPearl(this)
+        panel.setBackground(HeimdallUi.isFreyaFamily(this)
                 ? HeimdallUi.surfacePanel(this, HeimdallUi.RADIUS_PANEL)
-                : HeimdallUi.glass(this, 0xFA0B111B, 0xFF070A10,
-                        0x886A829C, 0x44344150, 14, 2));
+                : HeimdallUi.glassSurface(this, ThemeGlassColors.OVERLAY, 14, 2));
 
         TextView title = text(getString(R.string.profile_quick_switch_title),
                 HeimdallUi.TYPE_PAGE_TITLE, TEXT, true);
@@ -4235,7 +4486,7 @@ public class AssistantActivity extends Activity {
         current.setOrientation(LinearLayout.HORIZONTAL);
         current.setGravity(Gravity.CENTER_VERTICAL);
         current.setPadding(dp(8), dp(4), dp(6), dp(4));
-        current.setBackground(HeimdallUi.isPearl(this)
+        current.setBackground(HeimdallUi.isFreyaFamily(this)
                 ? HeimdallUi.cncControl(this, HeimdallUi.RADIUS_CARD, false, false)
                 : HeimdallUi.insetPanel(this, HeimdallUi.RADIUS_CARD));
         LinearLayout.LayoutParams currentParams = new LinearLayout.LayoutParams(-1, dp(48));
@@ -4304,13 +4555,11 @@ public class AssistantActivity extends Activity {
             row.setOrientation(LinearLayout.HORIZONTAL);
             row.setGravity(Gravity.CENTER_VERTICAL);
             row.setPadding(dp(8), dp(4), dp(8), dp(4));
-            row.setBackground(HeimdallUi.isPearl(this)
-                    ? HeimdallUi.pearlMenuControl(this, HeimdallUi.RADIUS_CARD, selected, false)
-                    : HeimdallUi.glass(this,
-                            selected ? 0xB2111A26 : 0xA6101722,
-                            selected ? 0xD0080D14 : 0xC9080C12,
-                            selected ? 0xAA70B7FF : 0x665F7C9A,
-                            selected ? 0x55445A72 : 0x33344150,
+            row.setBackground(HeimdallUi.isFreyaFamily(this)
+                    ? HeimdallUi.cncMenuControl(this, HeimdallUi.RADIUS_CARD, selected, false)
+                    : HeimdallUi.glassSurface(this, selected
+                                    ? ThemeGlassColors.PROFILE_LIST_SELECTED
+                                    : ThemeGlassColors.LIST_CONTROL,
                             HeimdallUi.RADIUS_CARD, 1));
             row.setOnClickListener(view -> {
                 if (holder[0] != null) {
@@ -4635,6 +4884,9 @@ public class AssistantActivity extends Activity {
         if (activeSettingsSection != section && activeSettingsSection == SETTINGS_MAGNIFIER) {
             settingsMagnifierDraft = null;
         }
+        if (activeSettingsSection != section && activeSettingsSection == SETTINGS_TRANSLATION) {
+            settingsTranslationProviderDraft = null;
+        }
         if (activeSettingsSection != section && activeSettingsSection == SETTINGS_MACRO) {
             settingsMacroMappingProtectionInput = null;
             settingsMacroMappingProtectionDraft = null;
@@ -4645,6 +4897,9 @@ public class AssistantActivity extends Activity {
         }
         if (section == SETTINGS_MAGNIFIER) {
             ensureSettingsMagnifierDraft();
+        }
+        if (section == SETTINGS_TRANSLATION) {
+            ensureSettingsTranslationProviderDraft();
         }
         if (section == SETTINGS_MACRO && settingsMacroMappingProtectionDraft == null) {
             settingsMacroMappingProtectionDraft =
@@ -4662,7 +4917,7 @@ public class AssistantActivity extends Activity {
         LinearLayout panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL);
         panel.setPadding(dp(6), dp(6), dp(6), dp(6));
-        panel.setBackground(HeimdallUi.isPearl(this)
+        panel.setBackground(HeimdallUi.isFreyaFamily(this)
                 ? HeimdallUi.cncFlush(this, HeimdallUi.RADIUS_PANEL)
                 : HeimdallUi.surfacePanel(this, HeimdallUi.RADIUS_PANEL));
 
@@ -4689,6 +4944,8 @@ public class AssistantActivity extends Activity {
                 R.drawable.ic_macro, SETTINGS_MACRO));
         nav.addView(settingsCategoryButton(getString(R.string.settings_category_magnifier),
                 R.drawable.ic_fullscreen, SETTINGS_MAGNIFIER));
+        nav.addView(settingsCategoryButton(getString(R.string.settings_category_translation),
+                R.drawable.ic_guide, SETTINGS_TRANSLATION));
         nav.addView(settingsCategoryButton(getString(R.string.settings_category_appearance),
                 R.drawable.ic_settings, SETTINGS_APPEARANCE));
         nav.addView(settingsCategoryButton(getString(R.string.settings_category_connection),
@@ -4705,8 +4962,7 @@ public class AssistantActivity extends Activity {
         rail.addView(exitSection, exitSectionParams);
 
         View exitDivider = new View(this);
-        exitDivider.setBackgroundColor(HeimdallUi.isPearl(this)
-                ? 0x287B8792 : 0x445F7C9A);
+        exitDivider.setBackgroundColor(HeimdallUi.componentColors(this).structuralDivider);
         LinearLayout.LayoutParams exitDividerParams = new LinearLayout.LayoutParams(-1, dp(1));
         exitDividerParams.setMargins(dp(10), 0, dp(10), 0);
         exitSection.addView(exitDivider, exitDividerParams);
@@ -4722,9 +4978,7 @@ public class AssistantActivity extends Activity {
         shell.addView(rightColumn, new LinearLayout.LayoutParams(0, -1, 1));
 
         FrameLayout contentFrame = new FrameLayout(this);
-        contentFrame.setBackground(HeimdallUi.isPearl(this)
-                ? HeimdallUi.cncFlush(this, 12)
-                : rounded(0xFF0B1018, HeimdallUi.border(this), 12));
+        contentFrame.setBackground(HeimdallUi.settingsContentPanel(this, 12));
         rightColumn.addView(contentFrame, new LinearLayout.LayoutParams(-1, 0, 1));
 
         ScrollView contentScroll = new ScrollView(this);
@@ -4732,7 +4986,7 @@ public class AssistantActivity extends Activity {
         contentScroll.setFillViewport(true);
         contentScroll.setClipToPadding(true);
         contentScroll.setBackgroundColor(Color.TRANSPARENT);
-        int contentFrameInset = HeimdallUi.isPearl(this) ? dp(2) : dp(1);
+        int contentFrameInset = HeimdallUi.isFreyaFamily(this) ? dp(2) : dp(1);
         FrameLayout.LayoutParams contentScrollParams = new FrameLayout.LayoutParams(-1, -1);
         contentScrollParams.setMargins(contentFrameInset, contentFrameInset,
                 contentFrameInset, contentFrameInset);
@@ -4796,7 +5050,7 @@ public class AssistantActivity extends Activity {
         button.setPadding(dp(14), 0, dp(8), 0);
         button.setCompoundDrawablePadding(dp(11));
 
-        boolean pearl = HeimdallUi.isPearl(this);
+        ThemeComponentColors colors = HeimdallUi.componentColors(this);
         ColorStateList iconColors = new ColorStateList(
                 new int[][]{
                         new int[]{-android.R.attr.state_enabled},
@@ -4804,9 +5058,9 @@ public class AssistantActivity extends Activity {
                         new int[]{}
                 },
                 new int[]{
-                        pearl ? 0x668A5964 : 0x66D27E82,
-                        pearl ? 0xFFA75159 : 0xFFEA7175,
-                        pearl ? 0xFF8A5964 : 0xFFD27E82
+                        colors.settingsExitIconDisabled,
+                        colors.settingsExitIconPressed,
+                        colors.settingsExitIconIdle
                 });
         setLeftIcon(button, R.drawable.ic_power, iconColors, dp(20));
         return button;
@@ -4819,10 +5073,11 @@ public class AssistantActivity extends Activity {
         shell.setFocusable(true);
         shell.setOnClickListener(v -> openSettingsSection(section));
         if (selected) {
-            shell.setBackground(HeimdallUi.isPearl(this)
-                    ? HeimdallUi.pearlMenuControl(this, HeimdallUi.RADIUS_BUTTON, false, false)
-                    : HeimdallUi.glass(this, 0xA9121A26, 0xB9080D14,
-                            0x5570B7FF, 0x22344150, HeimdallUi.RADIUS_BUTTON, 1));
+            shell.setBackground(HeimdallUi.isFreyaFamily(this)
+                    ? HeimdallUi.cncMenuControl(this, HeimdallUi.RADIUS_BUTTON, false, false)
+                    : HeimdallUi.glassSurface(this,
+                            ThemeGlassColors.SETTINGS_SECTION_SELECTED,
+                            HeimdallUi.RADIUS_BUTTON, 1));
         } else {
             shell.setBackgroundColor(Color.TRANSPARENT);
         }
@@ -4896,6 +5151,8 @@ public class AssistantActivity extends Activity {
             populateMacroSettingsContent(content);
         } else if (activeSettingsSection == SETTINGS_MAGNIFIER) {
             populateMagnifierSettingsContent(content);
+        } else if (activeSettingsSection == SETTINGS_TRANSLATION) {
+            populateTranslationSettingsContent(content);
         } else if (activeSettingsSection == SETTINGS_INPUT) {
             populateInputSettingsContent(content);
         } else if (activeSettingsSection == SETTINGS_APPEARANCE) {
@@ -4942,10 +5199,81 @@ public class AssistantActivity extends Activity {
             settingsThemeDraft = HeimdallUi.theme(this);
         }
         addSettingsLabel(content, getString(R.string.settings_theme));
-        LinearLayout row = settingsActionRow(content);
-        row.addView(themeChoiceButton("Heimdall Blue", HeimdallUi.THEME_DARK));
-        row.addView(themeChoiceButton("Freya White", HeimdallUi.THEME_PEARL));
+        LinearLayout row = null;
+        List<ThemeDefinition> themes = ThemeRegistry.selectableThemes();
+        for (int index = 0; index < themes.size(); index++) {
+            if (index % 2 == 0) {
+                row = settingsActionRow(content);
+            }
+            ThemeDefinition theme = themes.get(index);
+            row.addView(themeChoiceButton(getString(theme.displayNameRes), theme.id));
+        }
+        if (row != null && themes.size() % 2 != 0) {
+            View spacer = new View(this);
+            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, -1, 1);
+            params.setMargins(dp(3), dp(3), dp(3), dp(3));
+            row.addView(spacer, params);
+        }
         addSettingsHelp(content, getString(R.string.settings_theme_help));
+
+        CheckBox joystickLighting = new CheckBox(this);
+        joystickLighting.setText(getString(R.string.settings_match_joystick_lighting));
+        joystickLighting.setTextSize(12);
+        joystickLighting.setChecked(ThemeJoystickLighting.isEnabled(this));
+        styleCheckBox(joystickLighting);
+        content.addView(joystickLighting, new LinearLayout.LayoutParams(-1, dp(42)));
+        addSettingsHelp(content,
+                getString(R.string.settings_match_joystick_lighting_help));
+
+        LinearLayout brightnessLabelRow = new LinearLayout(this);
+        brightnessLabelRow.setOrientation(LinearLayout.HORIZONTAL);
+        brightnessLabelRow.setGravity(Gravity.CENTER_VERTICAL);
+        TextView brightnessTitle = text(
+                getString(R.string.settings_joystick_lighting_brightness), 12, MUTED, true);
+        brightnessLabelRow.addView(brightnessTitle,
+                new LinearLayout.LayoutParams(0, -1, 1));
+        TextView brightnessValue = text("", 12, MUTED, true);
+        brightnessValue.setGravity(Gravity.CENTER_VERTICAL | Gravity.END);
+        brightnessLabelRow.addView(brightnessValue,
+                new LinearLayout.LayoutParams(dp(72), -1));
+        content.addView(brightnessLabelRow, new LinearLayout.LayoutParams(-1, dp(28)));
+
+        SeekBar brightnessBar = new SeekBar(this);
+        brightnessBar.setMax((ThemeJoystickLighting.MAX_BRIGHTNESS_PERCENT
+                - ThemeJoystickLighting.MIN_BRIGHTNESS_PERCENT)
+                / ThemeJoystickLighting.BRIGHTNESS_STEP_PERCENT);
+        brightnessBar.setProgress((ThemeJoystickLighting.getBrightnessPercent(this)
+                - ThemeJoystickLighting.MIN_BRIGHTNESS_PERCENT)
+                / ThemeJoystickLighting.BRIGHTNESS_STEP_PERCENT);
+        styleSettingsSeekBar(brightnessBar);
+        brightnessBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                updateJoystickBrightnessLabel(seekBar, brightnessValue);
+            }
+
+            @Override
+            public void onStartTrackingTouch(SeekBar seekBar) {
+            }
+
+            @Override
+            public void onStopTrackingTouch(SeekBar seekBar) {
+                ThemeJoystickLighting.setBrightnessPercent(
+                        AssistantActivity.this, joystickBrightnessPercent(seekBar));
+            }
+        });
+        updateJoystickBrightnessLabel(brightnessBar, brightnessValue);
+        content.addView(brightnessBar, new LinearLayout.LayoutParams(-1, dp(42)));
+        addSettingsHelp(content,
+                getString(R.string.settings_joystick_lighting_brightness_help));
+
+        setJoystickBrightnessControlEnabled(brightnessBar, brightnessTitle,
+                brightnessValue, joystickLighting.isChecked());
+        joystickLighting.setOnCheckedChangeListener((button, checked) -> {
+            ThemeJoystickLighting.setEnabled(this, checked);
+            setJoystickBrightnessControlEnabled(
+                    brightnessBar, brightnessTitle, brightnessValue, checked);
+        });
 
         addSettingsLabel(content, getString(R.string.settings_language));
         LinearLayout languageRow = settingsActionRow(content);
@@ -5067,8 +5395,8 @@ public class AssistantActivity extends Activity {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
         card.setPadding(dp(10), dp(8), dp(10), dp(8));
-        card.setBackground(HeimdallUi.isPearl(this)
-                ? HeimdallUi.pearlMenuPanel(this, 10)
+        card.setBackground(HeimdallUi.isFreyaFamily(this)
+                ? HeimdallUi.cncMenuPanel(this, 10)
                 : HeimdallUi.fieldPanel(this, 10));
         LinearLayout.LayoutParams cardParams = new LinearLayout.LayoutParams(-1, -2);
         cardParams.setMargins(0, dp(5), 0, dp(7));
@@ -5857,6 +6185,136 @@ public class AssistantActivity extends Activity {
         return shapeChanged;
     }
 
+    private void populateTranslationSettingsContent(LinearLayout content) {
+        WidgetLayout.Item currentItem = selectedProfile.safeWidgetLayout().findItem(
+                WidgetLayout.TYPE_TRANSLATION);
+        if (currentItem == null) {
+            addSettingsInfoCard(content, getString(R.string.translation_missing_title),
+                    getString(R.string.translation_missing_help), HeimdallUi.SEMANTIC_WARNING);
+        }
+        TranslationProviderConfig provider = ensureSettingsTranslationProviderDraft();
+
+        addSettingsLabel(content, getString(R.string.translation_provider));
+        LinearLayout providerRow = settingsActionRow(content);
+        providerRow.addView(translationProviderButton("SiliconFlow",
+                TranslationProviderConfig.PROVIDER_SILICONFLOW));
+        providerRow.addView(translationProviderButton(
+                getString(R.string.translation_provider_custom),
+                TranslationProviderConfig.PROVIDER_CUSTOM));
+
+        if (TranslationProviderConfig.PROVIDER_SILICONFLOW.equals(provider.provider)) {
+            addSettingsLabel(content, getString(R.string.translation_region));
+            LinearLayout endpointRow = settingsActionRow(content);
+            endpointRow.addView(translationRegionButton(
+                    getString(R.string.translation_region_china),
+                    TranslationProviderConfig.REGION_CHINA));
+            endpointRow.addView(translationRegionButton(
+                    getString(R.string.translation_region_global),
+                    TranslationProviderConfig.REGION_GLOBAL));
+            addSettingsInfoCard(content, getString(R.string.translation_provider_details),
+                    provider.resolvedBaseUrl() + "\n" + provider.resolvedModel(),
+                    HeimdallUi.SEMANTIC_NEUTRAL);
+        } else {
+            addSettingsLabel(content, getString(R.string.translation_base_url));
+            EditText baseUrl = settingsEditText(provider.customBaseUrl);
+            baseUrl.setHint("https://example.com/v1");
+            watchTranslationText(baseUrl, value -> provider.customBaseUrl = value);
+            content.addView(baseUrl, translationInputParams());
+            addSettingsLabel(content, getString(R.string.translation_model));
+            EditText model = settingsEditText(provider.customModel);
+            watchTranslationText(model, value -> provider.customModel = value);
+            content.addView(model, translationInputParams());
+        }
+
+        addSettingsLabel(content, getString(R.string.translation_api_key));
+        EditText apiKey = settingsEditText(provider.apiKey);
+        apiKey.setInputType(android.text.InputType.TYPE_CLASS_TEXT
+                | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        apiKey.setHint("sk-...");
+        watchTranslationText(apiKey, value -> provider.apiKey = value);
+        content.addView(apiKey, translationInputParams());
+        LinearLayout testRow = settingsActionRow(content);
+        testRow.addView(editorButton(getString(R.string.translation_test_connection),
+                this::testTranslationConnection));
+        addSettingsHelp(content, getString(R.string.translation_settings_help));
+    }
+
+    private TranslationProviderConfig ensureSettingsTranslationProviderDraft() {
+        if (settingsTranslationProviderDraft == null) {
+            settingsTranslationProviderDraft = TranslationSettingsStore.load(this);
+        }
+        return settingsTranslationProviderDraft;
+    }
+
+    private Button translationProviderButton(String label, String providerId) {
+        Button button = editorButton(label, () -> {
+            ensureSettingsTranslationProviderDraft().provider = providerId;
+            refreshSettingsContent();
+        });
+        HeimdallUi.applyChoiceButton(this, button, providerId.equals(
+                ensureSettingsTranslationProviderDraft().provider));
+        return button;
+    }
+
+    private Button translationRegionButton(String label, String region) {
+        Button button = editorButton(label, () -> {
+            ensureSettingsTranslationProviderDraft().region = region;
+            refreshSettingsContent();
+        });
+        HeimdallUi.applyChoiceButton(this, button, region.equals(
+                ensureSettingsTranslationProviderDraft().region));
+        return button;
+    }
+
+    private LinearLayout.LayoutParams translationInputParams() {
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, dp(42));
+        params.setMargins(0, 0, 0, dp(6));
+        return params;
+    }
+
+    private interface TranslationTextConsumer { void accept(String value); }
+
+    private void watchTranslationText(EditText input, TranslationTextConsumer consumer) {
+        input.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+            @Override public void onTextChanged(CharSequence s, int start, int before, int count) {
+                consumer.accept(s == null ? "" : s.toString().trim());
+            }
+            @Override public void afterTextChanged(Editable editable) {}
+        });
+    }
+
+    private void testTranslationConnection() {
+        TranslationProviderConfig provider = ensureSettingsTranslationProviderDraft().copy();
+        if (!provider.isComplete()) {
+            showErrorAction(getString(R.string.translation_provider_incomplete));
+            return;
+        }
+        showAction(getString(R.string.translation_testing_connection));
+        TranslationApiClient client = new TranslationApiClient();
+        client.translate(provider, "Hello", TranslationConfig.LANGUAGE_CHINESE_SIMPLIFIED,
+                new TranslationApiClient.Callback() {
+                    @Override public void onSuccess(String translatedText) {
+                        client.shutdown();
+                        showAction(getString(R.string.translation_connection_success));
+                    }
+                    @Override public void onError(String message) {
+                        client.shutdown();
+                        showErrorAction(getString(R.string.translation_connection_failed, message));
+                    }
+                });
+    }
+
+    private boolean applySettingsTranslationDraft() {
+        TranslationProviderConfig provider = ensureSettingsTranslationProviderDraft();
+        if (!TranslationSettingsStore.save(this, provider)) {
+            showErrorAction(getString(R.string.translation_secure_save_failed));
+            return false;
+        }
+        settingsTranslationProviderDraft = null;
+        return true;
+    }
+
     private void applyProfileSettingsInputs() {
         if (settingsProfileNameInput == null || settingsProfilePackageInput == null
                 || settingsProfileDefaultInput == null) {
@@ -5870,6 +6328,9 @@ public class AssistantActivity extends Activity {
                 : settingsGameContextBindingDraft.copy();
         selectedProfile.defaultForPackage = settingsProfileDefaultInput.isChecked()
                 && selectedProfile.packageHint.length() > 0;
+        if (selectedProfile.normalizedThemeId().length() == 0) {
+            selectedProfile.setThemeId(HeimdallUi.theme(this));
+        }
         if (selectedProfile.defaultForPackage) {
             for (GameProfile profile : profiles) {
                 if (profile != selectedProfile
@@ -5966,6 +6427,37 @@ public class AssistantActivity extends Activity {
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, dp(24));
         params.setMargins(0, dp(2), 0, 0);
         content.addView(title, params);
+    }
+
+    private void styleSettingsSeekBar(SeekBar seekBar) {
+        int active = HeimdallUi.accent(this);
+        int track = HeimdallUi.componentColors(this).sliderTrack;
+        seekBar.setProgressTintList(ColorStateList.valueOf(active));
+        seekBar.setProgressBackgroundTintList(ColorStateList.valueOf(track));
+        seekBar.setThumbTintList(ColorStateList.valueOf(active));
+        seekBar.setSplitTrack(false);
+    }
+
+    private int joystickBrightnessPercent(SeekBar seekBar) {
+        return ThemeJoystickLighting.MIN_BRIGHTNESS_PERCENT
+                + seekBar.getProgress() * ThemeJoystickLighting.BRIGHTNESS_STEP_PERCENT;
+    }
+
+    private void updateJoystickBrightnessLabel(SeekBar seekBar, TextView valueLabel) {
+        int percent = joystickBrightnessPercent(seekBar);
+        String value = getString(R.string.settings_joystick_lighting_brightness_value, percent);
+        valueLabel.setText(value);
+        seekBar.setContentDescription(getString(
+                R.string.settings_joystick_lighting_brightness) + ", " + value);
+    }
+
+    private void setJoystickBrightnessControlEnabled(SeekBar seekBar,
+            TextView title, TextView value, boolean enabled) {
+        seekBar.setEnabled(enabled);
+        float alpha = enabled ? 1f : 0.45f;
+        seekBar.setAlpha(alpha);
+        title.setAlpha(alpha);
+        value.setAlpha(alpha);
     }
 
     private void addConnectionCapabilityOption(LinearLayout content, String title, String summary,
@@ -6071,10 +6563,9 @@ public class AssistantActivity extends Activity {
                                            Runnable onDismiss) {
         LinearLayout shell = new LinearLayout(this);
         shell.setOrientation(LinearLayout.VERTICAL);
-        shell.setBackground(HeimdallUi.isPearl(this)
+        shell.setBackground(HeimdallUi.isFreyaFamily(this)
                 ? HeimdallUi.cncFlush(this, 14)
-                : HeimdallUi.glass(this, 0xFA0B111B, 0xFF070A10,
-                        0x886A829C, 0x44344150, 14, 2));
+                : HeimdallUi.glassSurface(this, ThemeGlassColors.OVERLAY, 14, 2));
         shell.setPadding(dp(16), dp(14), dp(16), dp(12));
 
         TextView titleView = text(title, HeimdallUi.TYPE_EDITOR_TITLE, TEXT, true);
@@ -6088,7 +6579,7 @@ public class AssistantActivity extends Activity {
         shell.addView(messageView, messageParams);
 
         View divider = new View(this);
-        divider.setBackgroundColor(HeimdallUi.isPearl(this) ? 0x287B8792 : 0x445F7C9A);
+        divider.setBackgroundColor(HeimdallUi.componentColors(this).structuralDivider);
         shell.addView(divider, new LinearLayout.LayoutParams(-1, dp(1)));
 
         LinearLayout actions = new LinearLayout(this);
@@ -6129,10 +6620,9 @@ public class AssistantActivity extends Activity {
     private void showInformationPanel(String title, String message) {
         LinearLayout shell = new LinearLayout(this);
         shell.setOrientation(LinearLayout.VERTICAL);
-        shell.setBackground(HeimdallUi.isPearl(this)
+        shell.setBackground(HeimdallUi.isFreyaFamily(this)
                 ? HeimdallUi.cncFlush(this, 14)
-                : HeimdallUi.glass(this, 0xFA0B111B, 0xFF070A10,
-                        0x886A829C, 0x44344150, 14, 2));
+                : HeimdallUi.glassSurface(this, ThemeGlassColors.OVERLAY, 14, 2));
         shell.setPadding(dp(16), dp(14), dp(16), dp(12));
 
         TextView titleView = text(title, HeimdallUi.TYPE_EDITOR_TITLE, TEXT, true);
@@ -6147,7 +6637,7 @@ public class AssistantActivity extends Activity {
         shell.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
 
         View divider = new View(this);
-        divider.setBackgroundColor(HeimdallUi.isPearl(this) ? 0x287B8792 : 0x445F7C9A);
+        divider.setBackgroundColor(HeimdallUi.componentColors(this).structuralDivider);
         shell.addView(divider, new LinearLayout.LayoutParams(-1, dp(1)));
 
         final PanelOverlay[] overlayHolder = new PanelOverlay[1];
@@ -6237,6 +6727,9 @@ public class AssistantActivity extends Activity {
         if (activeSettingsSection == SETTINGS_MAGNIFIER) {
             return getString(R.string.settings_category_magnifier);
         }
+        if (activeSettingsSection == SETTINGS_TRANSLATION) {
+            return getString(R.string.settings_category_translation);
+        }
         if (activeSettingsSection == SETTINGS_INPUT) {
             return getString(R.string.settings_category_connection);
         }
@@ -6270,6 +6763,9 @@ public class AssistantActivity extends Activity {
                 return getString(R.string.settings_summary_magnifier_missing);
             }
             return getString(R.string.settings_summary_magnifier);
+        }
+        if (activeSettingsSection == SETTINGS_TRANSLATION) {
+            return getString(R.string.settings_summary_translation);
         }
         if (activeSettingsSection == SETTINGS_INPUT) {
             return getString(R.string.settings_summary_connection);
@@ -6316,8 +6812,13 @@ public class AssistantActivity extends Activity {
             showDebugAction(getString(R.string.settings_reset_magnifier_draft));
             refreshSettingsContent();
             return;
+        } else if (activeSettingsSection == SETTINGS_TRANSLATION) {
+            settingsTranslationProviderDraft = TranslationSettingsStore.load(this);
+            showDebugAction(getString(R.string.settings_reset_translation_draft));
+            refreshSettingsContent();
+            return;
         } else if (activeSettingsSection == SETTINGS_APPEARANCE) {
-            settingsThemeDraft = HeimdallUi.THEME_DARK;
+            settingsThemeDraft = HeimdallUi.THEME_HEIMDALL_BLUE;
             settingsPerformanceCompatibilityDraft = false;
             showDebugAction(getString(R.string.settings_reset_appearance_draft));
             refreshSettingsContent();
@@ -6367,12 +6868,24 @@ public class AssistantActivity extends Activity {
             magnifierShapeChanged = applySettingsMagnifierDraft();
             settingsMagnifierDraft = null;
         }
+        if (activeSettingsSection == SETTINGS_TRANSLATION) {
+            if (!applySettingsTranslationDraft()) return;
+            showDebugAction(getString(R.string.settings_section_saved,
+                    settingsSectionTitle()));
+            refreshSettingsContent();
+            return;
+        }
         if (activeSettingsSection == SETTINGS_PROFILE) {
             applyProfileSettingsInputs();
         }
         boolean themeChanged = activeSettingsSection == SETTINGS_APPEARANCE;
         if (themeChanged) {
+            selectedProfile.setThemeId(settingsThemeDraft);
+            settingsThemeDraft = selectedProfile.effectiveThemeId(
+                    HeimdallUi.globalTheme(this));
             HeimdallUi.setTheme(this, settingsThemeDraft);
+            HeimdallUi.setActiveProfileTheme(settingsThemeDraft);
+            ThemeJoystickLighting.syncIfEnabled(this);
             boolean compatibilityEnabled =
                     Boolean.TRUE.equals(settingsPerformanceCompatibilityDraft);
             ThorPerformanceCompatibility.setEnabled(this, compatibilityEnabled);
@@ -6416,28 +6929,74 @@ public class AssistantActivity extends Activity {
                 getString(R.string.grid_preset_macros),
                 getString(R.string.grid_preset_edit)
         };
-        new AlertDialog.Builder(this)
-                .setTitle(getString(R.string.grid_preset_title))
-                .setItems(labels, (dialog, which) -> {
-                    if (which == 1) {
-                        draftWidgetLayout = WidgetLayout.fpsLayout();
-                    } else if (which == 2) {
-                        draftWidgetLayout = WidgetLayout.macroFocusLayout();
-                    } else if (which == 3) {
-                        activeScreen = SCREEN_MAIN;
-                        editableWidgetLayout();
-                        showWidgetGridEditor();
-                        return;
-                    } else {
-                        draftWidgetLayout = WidgetLayout.defaultLayout();
-                    }
-                    activeScreen = SCREEN_MAIN;
-                    rebuildContent();
-                    showAction(getString(R.string.grid_preset_previewed,
-                            widgetLayoutPresetLabel(currentWidgetLayout().preset)));
-                })
-                .setNegativeButton(getString(R.string.common_cancel), null)
-                .show();
+        final AlertDialog[] holder = new AlertDialog[1];
+        LinearLayout shell = new LinearLayout(this);
+        shell.setOrientation(LinearLayout.VERTICAL);
+        shell.setPadding(dp(14), dp(12), dp(14), dp(12));
+        shell.setBackground(HeimdallUi.isFreyaFamily(this)
+                ? HeimdallUi.cncFlush(this, HeimdallUi.RADIUS_PANEL)
+                : HeimdallUi.glassSurface(this, ThemeGlassColors.OVERLAY,
+                        HeimdallUi.RADIUS_PANEL, HeimdallUi.STROKE_SELECTED));
+
+        TextView title = text(getString(R.string.grid_preset_title),
+                HeimdallUi.TYPE_EDITOR_TITLE, TEXT, true);
+        shell.addView(title, new LinearLayout.LayoutParams(-1, dp(40)));
+
+        for (int index = 0; index < labels.length; index++) {
+            final int presetIndex = index;
+            Button option = editorButton(labels[index], () -> {
+                dismissDialog(holder);
+                applyWidgetLayoutPreset(presetIndex);
+            });
+            option.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
+            LinearLayout.LayoutParams optionParams =
+                    new LinearLayout.LayoutParams(-1, dp(50));
+            optionParams.setMargins(0, dp(2), 0, dp(2));
+            shell.addView(option, optionParams);
+        }
+
+        View divider = new View(this);
+        divider.setBackgroundColor(HeimdallUi.componentColors(this).structuralDivider);
+        LinearLayout.LayoutParams dividerParams = new LinearLayout.LayoutParams(-1, dp(1));
+        dividerParams.setMargins(0, dp(6), 0, dp(4));
+        shell.addView(divider, dividerParams);
+
+        Button cancel = editorButton(getString(R.string.common_cancel),
+                () -> dismissDialog(holder));
+        shell.addView(cancel, new LinearLayout.LayoutParams(-1, dp(48)));
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setView(shell)
+                .create();
+        holder[0] = dialog;
+        dialog.setOnDismissListener(dismissed -> holder[0] = null);
+        dialog.show();
+        Window window = dialog.getWindow();
+        if (window != null) {
+            window.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+            window.getDecorView().setPadding(0, 0, 0, 0);
+            window.setLayout(settingsOverlayWidth(620),
+                    WindowManager.LayoutParams.WRAP_CONTENT);
+        }
+    }
+
+    private void applyWidgetLayoutPreset(int which) {
+        if (which == 1) {
+            draftWidgetLayout = WidgetLayout.fpsLayout();
+        } else if (which == 2) {
+            draftWidgetLayout = WidgetLayout.macroFocusLayout();
+        } else if (which == 3) {
+            activeScreen = SCREEN_MAIN;
+            editableWidgetLayout();
+            showWidgetGridEditor();
+            return;
+        } else {
+            draftWidgetLayout = WidgetLayout.defaultLayout();
+        }
+        activeScreen = SCREEN_MAIN;
+        rebuildContent();
+        showAction(getString(R.string.grid_preset_previewed,
+                widgetLayoutPresetLabel(currentWidgetLayout().preset)));
     }
 
     private String widgetLayoutPresetLabel(String preset) {
@@ -6529,10 +7088,9 @@ public class AssistantActivity extends Activity {
         controlTypes.setOrientation(LinearLayout.HORIZONTAL);
         controlTypes.setVisibility(View.GONE);
         controlTypes.setPadding(dp(4), dp(2), dp(4), dp(2));
-        controlTypes.setBackground(HeimdallUi.isPearl(this)
+        controlTypes.setBackground(HeimdallUi.isFreyaFamily(this)
                 ? HeimdallUi.cncShallowInset(this, 10)
-                : HeimdallUi.glass(this, 0xD30B121C, 0xE8070B11,
-                        0x665F7C9A, 0x22344150, 10, 1));
+                : HeimdallUi.glassSurface(this, ThemeGlassColors.FIELD, 10, 1));
         editor.addView(controlTypes, new LinearLayout.LayoutParams(-1, dp(48)));
 
         Button addMacro = editorButton(getString(R.string.grid_editor_control_type_macro), () -> {
@@ -6559,6 +7117,14 @@ public class AssistantActivity extends Activity {
                 () -> gridEditor.addWidget(WidgetLayout.TYPE_TOUCHPAD)));
         actions.addView(editorButton(getString(R.string.grid_editor_add_magnifier),
                 () -> gridEditor.addWidget(WidgetLayout.TYPE_MAGNIFIER)));
+        Button addTranslation = editorButton(
+                getString(R.string.grid_editor_add_translation),
+                () -> gridEditor.addWidget(WidgetLayout.TYPE_TRANSLATION));
+        addTranslation.setSingleLine(true);
+        addTranslation.setPadding(dp(2), 0, dp(2), 0);
+        actions.addView(addTranslation);
+        actions.addView(editorButton(getString(R.string.grid_editor_add_hardware_monitor),
+                () -> gridEditor.addWidget(WidgetLayout.TYPE_HARDWARE_MONITOR)));
         actions.addView(editorButton(getString(R.string.grid_editor_add_canvas),
                 () -> gridEditor.addWidget(WidgetLayout.TYPE_CANVAS)));
         actions.addView(editorButton(getString(R.string.grid_editor_add_quick_actions),
@@ -6587,6 +7153,7 @@ public class AssistantActivity extends Activity {
         });
         Window window = widgetGridDialog.getWindow();
         if (window != null) {
+            window.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
             window.addFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
                     | WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM);
         }
@@ -6683,7 +7250,7 @@ public class AssistantActivity extends Activity {
         macroGrids.clear();
 
         FrameLayout root = new FrameLayout(this);
-        root.setBackgroundColor(HeimdallUi.isPearl(this) ? 0xFFD4DCE3 : BG);
+        root.setBackgroundColor(HeimdallUi.componentColors(this).fullscreenBackground);
         applySystemGestureExclusion(root);
 
         if (activeMapViewerMode == MAP_VIEW_LOCAL) {
@@ -6705,7 +7272,7 @@ public class AssistantActivity extends Activity {
         activeLocalMapBitmap = bitmap;
         if (bitmap == null) {
             TextView error = text(getString(R.string.map_read_error),
-                    14, DANGER, false);
+                    14, HeimdallUi.semanticColor(this, HeimdallUi.SEMANTIC_ERROR), false);
             error.setGravity(Gravity.CENTER);
             root.addView(error, new FrameLayout.LayoutParams(-1, -1));
             LinearLayout errorToolbar = fullscreenMapToolbar(
@@ -6771,7 +7338,7 @@ public class AssistantActivity extends Activity {
             activeMapWebView = null;
             updateMapWebStatusError(R.string.map_embedded_browser_unavailable);
             TextView error = text(getString(R.string.map_embedded_browser_unavailable),
-                    14, DANGER, false);
+                    14, HeimdallUi.semanticColor(this, HeimdallUi.SEMANTIC_ERROR), false);
             error.setGravity(Gravity.CENTER);
             root.addView(error, new FrameLayout.LayoutParams(-1, -1));
             installFullscreenMapControls(root, toolbar, error, true);
@@ -6783,11 +7350,8 @@ public class AssistantActivity extends Activity {
         toolbar.setOrientation(LinearLayout.HORIZONTAL);
         toolbar.setGravity(Gravity.CENTER_VERTICAL);
         toolbar.setPadding(dp(8), dp(3), dp(4), dp(3));
-        toolbar.setBackground(HeimdallUi.isPearl(this)
-                ? HeimdallUi.cncFlush(this, HeimdallUi.RADIUS_PANEL)
-                : HeimdallUi.glass(this, 0xDD111824, 0xEE080C12,
-                        HeimdallUi.COLOR_SYSTEM_BORDER_TOP, HeimdallUi.COLOR_SYSTEM_BORDER_BOTTOM,
-                        HeimdallUi.RADIUS_PANEL, 2));
+        toolbar.setBackground(HeimdallUi.fullscreenToolbarPanel(
+                this, HeimdallUi.RADIUS_PANEL));
         TextView titleView = text(title, 13, TEXT, true);
         titleView.setSingleLine(true);
         toolbar.addView(titleView, new LinearLayout.LayoutParams(0, -1, 1));
@@ -6797,12 +7361,8 @@ public class AssistantActivity extends Activity {
     private LinearLayout interactiveMapToolbar() {
         LinearLayout toolbar = fullscreenMapToolbar("");
         toolbar.getChildAt(0).setVisibility(View.GONE);
-        if (HeimdallUi.isPearl(this)) {
-            toolbar.setBackground(HeimdallUi.glass(this,
-                    0xDDF6F5F3, 0xEEEEF0EF,
-                    0xAAFFFFFF, 0x669EABB8,
-                    HeimdallUi.RADIUS_PANEL, 2));
-        }
+        toolbar.setBackground(HeimdallUi.fullscreenInteractiveToolbarPanel(
+                this, HeimdallUi.RADIUS_PANEL));
         return toolbar;
     }
 
@@ -6886,10 +7446,8 @@ public class AssistantActivity extends Activity {
         button.setContentDescription(description);
         button.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
         button.setPadding(dp(10), dp(10), dp(10), dp(10));
-        button.setBackground(HeimdallUi.isPearl(this)
-                ? HeimdallUi.pearlMenuControl(this, HeimdallUi.RADIUS_BUTTON, false, false)
-                : HeimdallUi.glass(this, 0xB20F1622, 0xD0090E16,
-                        0x665F7C9A, 0x33344150, HeimdallUi.RADIUS_BUTTON, 1));
+        button.setBackground(HeimdallUi.fullscreenToolbarControl(
+                this, HeimdallUi.RADIUS_BUTTON));
         button.setOnClickListener(v -> {
             action.run();
             if (mapViewerFullscreen) {
@@ -6930,10 +7488,7 @@ public class AssistantActivity extends Activity {
 
         ImageButton reveal = compactMapIconButton(R.drawable.ic_toolbar_reveal,
                 getString(R.string.map_show_navigation), this::showFullscreenMapControls);
-        reveal.setBackground(HeimdallUi.isPearl(this)
-                ? HeimdallUi.pearlMenuControl(this, 8, false, false)
-                : HeimdallUi.glass(this, 0xA6111824, 0xC9080C12,
-                        HeimdallUi.COLOR_SYSTEM_BORDER_TOP, HeimdallUi.COLOR_SYSTEM_BORDER_BOTTOM, 8, 1));
+        reveal.setBackground(HeimdallUi.fullscreenRevealControl(this, 8));
         FrameLayout.LayoutParams revealParams = new FrameLayout.LayoutParams(dp(46), dp(24));
         revealParams.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
         revealParams.setMargins(0, dp(3), 0, 0);
@@ -7004,7 +7559,7 @@ public class AssistantActivity extends Activity {
     private View createMapPage() {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setBackground(HeimdallUi.isPearl(this)
+        root.setBackground(HeimdallUi.isFreyaFamily(this)
                 ? HeimdallUi.cncFlush(this, 12)
                 : HeimdallUi.surfacePanel(this, 12));
         root.setPadding(dp(8), dp(8), dp(8), dp(8));
@@ -7012,7 +7567,7 @@ public class AssistantActivity extends Activity {
         LinearLayout modes = new LinearLayout(this);
         modes.setOrientation(LinearLayout.HORIZONTAL);
         modes.setPadding(dp(3), dp(3), dp(3), dp(3));
-        modes.setBackground(HeimdallUi.isPearl(this)
+        modes.setBackground(HeimdallUi.isFreyaFamily(this)
                 ? new ColorDrawable(Color.TRANSPARENT)
                 : HeimdallUi.insetPanel(this, HeimdallUi.RADIUS_BUTTON));
         LinearLayout.LayoutParams modeParams = new LinearLayout.LayoutParams(-1, dp(46));
@@ -7084,8 +7639,8 @@ public class AssistantActivity extends Activity {
         if (maps.isEmpty()) {
             TextView empty = text(getString(R.string.map_empty), 13, MUTED, false);
             empty.setGravity(Gravity.CENTER);
-            empty.setBackground(HeimdallUi.isPearl(this)
-                    ? HeimdallUi.pearlMenuPanel(this, 10)
+            empty.setBackground(HeimdallUi.isFreyaFamily(this)
+                    ? HeimdallUi.cncMenuPanel(this, 10)
                     : HeimdallUi.insetPanel(this, 10));
             GridLayout.LayoutParams emptyParams = new GridLayout.LayoutParams(
                     GridLayout.spec(0), GridLayout.spec(0, 2, 1f));
@@ -7113,13 +7668,11 @@ public class AssistantActivity extends Activity {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
         card.setPadding(dp(4), dp(4), dp(4), dp(4));
-        card.setBackground(HeimdallUi.isPearl(this)
-                ? HeimdallUi.pearlMenuControl(this, HeimdallUi.RADIUS_CARD, selected, false)
-                : HeimdallUi.glass(this,
-                        selected ? 0xB2111A26 : 0xA6101722,
-                        selected ? 0xD0080D14 : 0xC9080C12,
-                        selected ? 0xBB70B7FF : 0x665F7C9A,
-                        selected ? 0x55445A72 : 0x33344150,
+        card.setBackground(HeimdallUi.isFreyaFamily(this)
+                ? HeimdallUi.cncMenuControl(this, HeimdallUi.RADIUS_CARD, selected, false)
+                : HeimdallUi.glassSurface(this, selected
+                                ? ThemeGlassColors.MAP_SELECTED
+                                : ThemeGlassColors.LIST_CONTROL,
                         HeimdallUi.RADIUS_CARD, selected ? 2 : 1));
 
         FrameLayout preview = new FrameLayout(this);
@@ -7143,12 +7696,12 @@ public class AssistantActivity extends Activity {
         if (selected) {
             ImageView check = new ImageView(this);
             check.setImageResource(R.drawable.ic_check);
-            check.setColorFilter(HeimdallUi.isPearl(this) ? 0xFF9B4C12 : 0xFFD7EEFF);
+            check.setColorFilter(HeimdallUi.componentColors(this).selectedCheckIcon);
             check.setPadding(dp(4), dp(4), dp(4), dp(4));
-            check.setBackground(HeimdallUi.isPearl(this)
-                    ? HeimdallUi.pearlMenuControl(this, HeimdallUi.RADIUS_SMALL, true, false)
-                    : HeimdallUi.glass(this, 0xD0121C29, 0xE0080D14,
-                            0xAA70B7FF, 0x55445A72, HeimdallUi.RADIUS_SMALL, 1));
+            check.setBackground(HeimdallUi.isFreyaFamily(this)
+                    ? HeimdallUi.cncMenuControl(this, HeimdallUi.RADIUS_SMALL, true, false)
+                    : HeimdallUi.glassSurface(this, ThemeGlassColors.MAP_BADGE,
+                            HeimdallUi.RADIUS_SMALL, 1));
             FrameLayout.LayoutParams checkParams = new FrameLayout.LayoutParams(dp(24), dp(24));
             checkParams.gravity = Gravity.TOP | Gravity.RIGHT;
             checkParams.setMargins(0, dp(6), dp(6), 0);
@@ -7179,7 +7732,8 @@ public class AssistantActivity extends Activity {
         setLeftIcon(button, iconRes,
                 enabled ? HeimdallUi.textColor(this) : HeimdallUi.mutedTextColor(this), dp(15));
         button.setEnabled(enabled);
-        button.setAlpha(enabled ? 1f : (HeimdallUi.isPearl(this) ? 0.55f : 0.45f));
+        button.setAlpha(enabled ? 1f
+                : HeimdallUi.componentColors(this).disabledControlAlpha);
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, -1, 1);
         params.setMargins(dp(3), dp(2), dp(3), dp(2));
         button.setLayoutParams(params);
@@ -7210,14 +7764,6 @@ public class AssistantActivity extends Activity {
                 : selectedProfile.interactiveMapUrl.trim();
         if (editingInteractiveMapInline || savedUrl.length() == 0) {
             addInteractiveMapEditor(panel);
-            if (savedUrl.length() == 0) {
-            TextView empty = text(getString(R.string.map_interactive_empty),
-                        13, MUTED, false);
-                empty.setGravity(Gravity.TOP | Gravity.LEFT);
-                empty.setPadding(dp(12), dp(12), dp(12), dp(12));
-                empty.setBackground(HeimdallUi.insetPanel(this, 10));
-                panel.addView(empty, new LinearLayout.LayoutParams(-1, dp(92)));
-            }
             return panel;
         }
 
@@ -7548,10 +8094,9 @@ public class AssistantActivity extends Activity {
         LinearLayout shell = new LinearLayout(this);
         shell.setOrientation(LinearLayout.VERTICAL);
         shell.setPadding(dp(16), dp(14), dp(16), dp(12));
-        shell.setBackground(HeimdallUi.isPearl(this)
+        shell.setBackground(HeimdallUi.isFreyaFamily(this)
                 ? HeimdallUi.cncFlush(this, 14)
-                : HeimdallUi.glass(this, 0xFA0B111B, 0xFF070A10,
-                        0x886A829C, 0x44344150, 14, 2));
+                : HeimdallUi.glassSurface(this, ThemeGlassColors.OVERLAY, 14, 2));
 
         TextView title = text(getString(R.string.map_rename_title),
                 HeimdallUi.TYPE_EDITOR_TITLE, TEXT, true);
@@ -7572,7 +8117,7 @@ public class AssistantActivity extends Activity {
         shell.addView(input, inputParams);
 
         View divider = new View(this);
-        divider.setBackgroundColor(HeimdallUi.isPearl(this) ? 0x287B8792 : 0x445F7C9A);
+        divider.setBackgroundColor(HeimdallUi.componentColors(this).structuralDivider);
         shell.addView(divider, new LinearLayout.LayoutParams(-1, dp(1)));
 
         final PanelOverlay[] overlayHolder = new PanelOverlay[1];
@@ -7764,7 +8309,7 @@ public class AssistantActivity extends Activity {
         panel.setOrientation(LinearLayout.VERTICAL);
         int pad = dp(8);
         panel.setPadding(pad, pad, pad, pad);
-        panel.setBackground(HeimdallUi.isPearl(this)
+        panel.setBackground(HeimdallUi.isFreyaFamily(this)
                 ? HeimdallUi.cncFlush(this, 12)
                 : HeimdallUi.surfacePanel(this, 12));
         scroller.addView(panel, new ScrollView.LayoutParams(-1, -2));
@@ -7784,8 +8329,8 @@ public class AssistantActivity extends Activity {
         if (selectedProfile.guides.isEmpty()) {
             TextView empty = text(getString(R.string.guide_empty), 13, MUTED, false);
             empty.setGravity(Gravity.CENTER);
-            empty.setBackground(HeimdallUi.isPearl(this)
-                    ? HeimdallUi.pearlMenuPanel(this, HeimdallUi.RADIUS_CARD)
+            empty.setBackground(HeimdallUi.isFreyaFamily(this)
+                    ? HeimdallUi.cncMenuPanel(this, HeimdallUi.RADIUS_CARD)
                     : HeimdallUi.insetPanel(this, HeimdallUi.RADIUS_CARD));
             panel.addView(empty, new LinearLayout.LayoutParams(-1, dp(96)));
         } else {
@@ -7855,15 +8400,15 @@ public class AssistantActivity extends Activity {
         panel.setOrientation(LinearLayout.VERTICAL);
         int pad = dp(8);
         panel.setPadding(pad, pad, pad, pad);
-        panel.setBackground(HeimdallUi.isPearl(this)
+        panel.setBackground(HeimdallUi.isFreyaFamily(this)
                 ? HeimdallUi.cncFlush(this, 12)
                 : HeimdallUi.surfacePanel(this, 12));
 
         LinearLayout editor = new LinearLayout(this);
         editor.setOrientation(LinearLayout.VERTICAL);
         editor.setPadding(dp(10), dp(8), dp(10), dp(8));
-        editor.setBackground(HeimdallUi.isPearl(this)
-                ? HeimdallUi.pearlMenuPanel(this, 10)
+        editor.setBackground(HeimdallUi.isFreyaFamily(this)
+                ? HeimdallUi.cncMenuPanel(this, 10)
                 : HeimdallUi.insetPanel(this, 10));
         panel.addView(editor, new LinearLayout.LayoutParams(-1, 0, 1));
 
@@ -8188,7 +8733,7 @@ public class AssistantActivity extends Activity {
         LinearLayout panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL);
         panel.setPadding(dp(8), dp(8), dp(8), dp(8));
-        panel.setBackground(HeimdallUi.isPearl(this)
+        panel.setBackground(HeimdallUi.isFreyaFamily(this)
                 ? HeimdallUi.cncFlush(this, 12)
                 : HeimdallUi.surfacePanel(this, 12));
 
@@ -8196,8 +8741,8 @@ public class AssistantActivity extends Activity {
             panel.addView(createGuideReaderToolbar(guide, false),
                     new LinearLayout.LayoutParams(-1, dp(48)));
             GuideTextReaderView reader = createGuideTextReaderView(guide);
-            reader.setBackground(HeimdallUi.isPearl(this)
-                    ? HeimdallUi.pearlMenuPanel(this, 8)
+            reader.setBackground(HeimdallUi.isFreyaFamily(this)
+                    ? HeimdallUi.cncMenuPanel(this, 8)
                     : HeimdallUi.rounded(this, HeimdallUi.COLOR_SURFACE_INSET, 0, 8, 0));
             LinearLayout.LayoutParams readerParams = new LinearLayout.LayoutParams(-1, 0, 1);
             readerParams.setMargins(0, dp(4), 0, 0);
@@ -8235,12 +8780,8 @@ public class AssistantActivity extends Activity {
         toolbar.setGravity(Gravity.CENTER_VERTICAL);
         toolbar.setPadding(dp(4), dp(3), dp(4), dp(3));
         if (fullscreen) {
-            toolbar.setBackground(HeimdallUi.isPearl(this)
-                    ? HeimdallUi.cncFlush(this, HeimdallUi.RADIUS_PANEL)
-                    : HeimdallUi.glass(this, 0xDD111824, 0xEE080C12,
-                            HeimdallUi.COLOR_SYSTEM_BORDER_TOP,
-                            HeimdallUi.COLOR_SYSTEM_BORDER_BOTTOM,
-                            HeimdallUi.RADIUS_PANEL, 2));
+            toolbar.setBackground(HeimdallUi.fullscreenToolbarPanel(
+                    this, HeimdallUi.RADIUS_PANEL));
         } else {
             toolbar.setBackgroundColor(Color.TRANSPARENT);
         }
@@ -8310,7 +8851,8 @@ public class AssistantActivity extends Activity {
             if (result.document == null) {
                 int message = result.failure == GuideTextLoader.Failure.TOO_LARGE
                         ? R.string.guide_text_too_large : R.string.guide_text_read_failed;
-                reader.showMessage(getString(message), DANGER);
+                reader.showMessage(getString(message),
+                        HeimdallUi.semanticColor(this, HeimdallUi.SEMANTIC_ERROR));
                 return;
             }
             cachedGuideTextEntry = guide;
@@ -8466,12 +9008,10 @@ public class AssistantActivity extends Activity {
     }
 
     private Drawable guideReaderOverlayPanel() {
-        if (HeimdallUi.isPearl(this)) {
+        if (HeimdallUi.isFreyaFamily(this)) {
             return HeimdallUi.cncFlush(this, 12);
         }
-        return HeimdallUi.glass(this, 0xFF111824, 0xFF080C12,
-                HeimdallUi.COLOR_SYSTEM_BORDER_TOP,
-                HeimdallUi.COLOR_SYSTEM_BORDER_BOTTOM, 12, 1);
+        return HeimdallUi.glassSurface(this, ThemeGlassColors.OPAQUE_CHROME, 12, 1);
     }
 
     private View guideBookmarkRow(PanelOverlay[] holder, GuideEntry guide,
@@ -8492,8 +9032,8 @@ public class AssistantActivity extends Activity {
         open.setTextSize(13);
         open.setTextColor(current ? HeimdallUi.textColor(this) : HeimdallUi.mutedTextColor(this));
         open.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
-        open.setBackground(HeimdallUi.isPearl(this)
-                ? HeimdallUi.pearlMenuControl(this, 8, false, !current)
+        open.setBackground(HeimdallUi.isFreyaFamily(this)
+                ? HeimdallUi.cncMenuControl(this, 8, false, !current)
                 : HeimdallUi.surfacePanel(this, 8));
         open.setMinHeight(0);
         open.setMinWidth(0);
@@ -8618,7 +9158,7 @@ public class AssistantActivity extends Activity {
         macroGrids.clear();
 
         FrameLayout root = new FrameLayout(this);
-        root.setBackgroundColor(HeimdallUi.isPearl(this) ? 0xFFD4DCE3 : BG);
+        root.setBackgroundColor(HeimdallUi.componentColors(this).fullscreenBackground);
         applySystemGestureExclusion(root);
         GuideEntry guide = viewingGuideInline;
         if (!isInlineTextGuide(guide)) {
@@ -8643,11 +9183,7 @@ public class AssistantActivity extends Activity {
 
         ImageButton reveal = compactMapIconButton(R.drawable.ic_toolbar_reveal,
                 getString(R.string.guide_show_toolbar), this::showFullscreenGuideControls);
-        reveal.setBackground(HeimdallUi.isPearl(this)
-                ? HeimdallUi.pearlMenuControl(this, 8, false, false)
-                : HeimdallUi.glass(this, 0xA6111824, 0xC9080C12,
-                        HeimdallUi.COLOR_SYSTEM_BORDER_TOP,
-                        HeimdallUi.COLOR_SYSTEM_BORDER_BOTTOM, 8, 1));
+        reveal.setBackground(HeimdallUi.fullscreenRevealControl(this, 8));
         FrameLayout.LayoutParams revealParams = new FrameLayout.LayoutParams(dp(46), dp(24));
         revealParams.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
         revealParams.setMargins(0, dp(3), 0, 0);
@@ -8746,7 +9282,7 @@ public class AssistantActivity extends Activity {
         image.setImageBitmap(bitmap);
         image.setScaleType(ImageView.ScaleType.FIT_CENTER);
         image.setAdjustViewBounds(true);
-        image.setBackground(rounded(HeimdallUi.isPearl(this) ? 0xFFD7DEE5 : 0xFF05070A,
+        image.setBackground(rounded(HeimdallUi.componentColors(this).mediaPreviewBackground,
                 HeimdallUi.border(this), 8));
         image.setPadding(dp(4), dp(4), dp(4), dp(4));
         parent.addView(image, blockParams(heightDp, 4, 8));
@@ -8994,10 +9530,9 @@ public class AssistantActivity extends Activity {
         }
         LinearLayout shell = new LinearLayout(this);
         shell.setOrientation(LinearLayout.VERTICAL);
-        shell.setBackground(HeimdallUi.isPearl(this)
+        shell.setBackground(HeimdallUi.isFreyaFamily(this)
                 ? HeimdallUi.cncFlush(this, 14)
-                : HeimdallUi.glass(this, 0xFA0B111B, 0xFF070A10,
-                        0x886A829C, 0x44344150, 14, 2));
+                : HeimdallUi.glassSurface(this, ThemeGlassColors.OVERLAY, 14, 2));
         shell.setPadding(dp(14), dp(12), dp(14), dp(10));
 
         TextView title = text(getString(R.string.profile_recent_app_picker_title),
@@ -9027,7 +9562,7 @@ public class AssistantActivity extends Activity {
         }
 
         View divider = new View(this);
-        divider.setBackgroundColor(HeimdallUi.isPearl(this) ? 0x287B8792 : 0x445F7C9A);
+        divider.setBackgroundColor(HeimdallUi.componentColors(this).structuralDivider);
         shell.addView(divider, new LinearLayout.LayoutParams(-1, dp(1)));
         LinearLayout actions = new LinearLayout(this);
         actions.setOrientation(LinearLayout.HORIZONTAL);
@@ -9331,8 +9866,10 @@ public class AssistantActivity extends Activity {
         draftWidgetLayout = null;
         settingsTouchpadDraft = null;
         settingsGameContextBindingDraft = null;
+        settingsThemeDraft = null;
         settingsMacroMappingProtectionInput = null;
         settingsMacroMappingProtectionDraft = null;
+        applySelectedProfileTheme();
         touchpadSettings = selectedProfile.safeTouchpadSettings();
         closeVirtualMouseDispatcherIfUnused();
         ProfileStore.saveSelectedIndex(this, selectedProfileIndex);
@@ -9769,7 +10306,7 @@ public class AssistantActivity extends Activity {
                 downX = event.getX();
                 downY = event.getY();
                 pending = true;
-                host.postDelayed(this, QUICK_ACTION_EDIT_LONG_PRESS_TIMEOUT_MS);
+                host.postDelayed(this, HeimdallInteraction.EDIT_LONG_PRESS_TIMEOUT_MS);
             } else if (action == MotionEvent.ACTION_POINTER_DOWN) {
                 cancelPending();
             } else if (action == MotionEvent.ACTION_MOVE) {
@@ -10046,13 +10583,13 @@ public class AssistantActivity extends Activity {
             float left = getPaddingLeft();
             float right = width - getPaddingRight();
             float centerY = height / 2f;
-            boolean pearl = HeimdallUi.isPearl(AssistantActivity.this);
+            boolean freya = HeimdallUi.isFreyaFamily(AssistantActivity.this);
             float trackHalf = dp(HeimdallUi.VOLUME_TRACK_HEIGHT) / 2f;
             float fraction = getMax() <= 0 ? 0f : getProgress() / (float) getMax();
             float thumbX = left + (right - left) * fraction;
 
             trackPaint.setStyle(Paint.Style.FILL);
-            if (pearl) {
+            if (freya) {
                 trackPaint.setColor(0x44526170);
                 canvas.drawRoundRect(left, centerY - trackHalf - dp(1), right,
                         centerY + trackHalf + dp(1), trackHalf + dp(1), trackHalf + dp(1), trackPaint);
@@ -10068,28 +10605,27 @@ public class AssistantActivity extends Activity {
             }
 
             float thumbRadius = dp(HeimdallUi.VOLUME_THUMB_SIZE) / 2f;
-            if (pearl) {
+            if (freya) {
                 trackPaint.setColor(0x55455260);
                 canvas.drawCircle(thumbX, centerY + dp(1), thumbRadius + dp(1), trackPaint);
             }
+            ThemeComponentColors colors = HeimdallUi.componentColors(AssistantActivity.this);
             if (isPressed()) {
-                trackPaint.setColor(pearl ? 0x44F08A2A : 0x4455B7E8);
+                trackPaint.setColor(HeimdallUi.withAlpha(
+                        HeimdallUi.volumeActive(AssistantActivity.this), 0x44));
                 canvas.drawCircle(thumbX, centerY, thumbRadius + dp(4), trackPaint);
             }
-            trackPaint.setColor(pearl
-                    ? (isPressed() ? 0xFFFFC17A : 0xFFF08A2A)
-                    : (isPressed() ? 0xFFBDEBFF : 0xFF8ACAF0));
+            trackPaint.setColor(isPressed()
+                    ? colors.quickVolumeThumbPressed : colors.quickVolumeThumbIdle);
             canvas.drawCircle(thumbX, centerY, thumbRadius, trackPaint);
             trackPaint.setStyle(Paint.Style.STROKE);
             trackPaint.setStrokeWidth(dp(1));
-            trackPaint.setColor(pearl ? 0xCCFFF4E8 : 0xCCEFF9FF);
+            trackPaint.setColor(colors.quickVolumeThumbEdge);
             canvas.drawCircle(thumbX, centerY, thumbRadius, trackPaint);
-            if (pearl) {
-                trackPaint.setStyle(Paint.Style.FILL);
-                trackPaint.setColor(0xAAFFF5E8);
-                canvas.drawCircle(thumbX - thumbRadius * 0.3f, centerY - thumbRadius * 0.3f,
-                        Math.max(1f, thumbRadius * 0.16f), trackPaint);
-            }
+            trackPaint.setStyle(Paint.Style.FILL);
+            trackPaint.setColor(colors.quickVolumeThumbHighlight);
+            canvas.drawCircle(thumbX - thumbRadius * 0.3f, centerY - thumbRadius * 0.3f,
+                    Math.max(1f, thumbRadius * 0.16f), trackPaint);
         }
     }
 
@@ -10237,25 +10773,28 @@ public class AssistantActivity extends Activity {
             super.invalidate();
         }
 
-        private int baseStateColor(boolean pearl) {
+        private int baseStateColor() {
             if (visualState == STATE_RECORDING_STOP) {
-                return pearl ? 0xFFE0525C : 0xFFFF6B7A;
+                return HeimdallUi.semanticColor(
+                        AssistantActivity.this, HeimdallUi.SEMANTIC_RECORDING);
             }
             if (visualState == STATE_MAGNIFIER_STOP) {
-                return pearl ? 0xFFE77F1F : 0xFF70B7FF;
+                return HeimdallUi.componentColors(
+                        AssistantActivity.this).quickActionMagnifierStop;
             }
-            return pearl ? 0xFF536274 : 0xFFD9E8F8;
+            return HeimdallUi.componentColors(AssistantActivity.this).quickActionIconIdle;
         }
 
-        private int resultColor(boolean pearl) {
+        private int resultColor() {
             if (transientResult == RESULT_SUCCESS) {
-                return HeimdallUi.COLOR_SUCCESS;
+                return HeimdallUi.semanticColor(
+                        AssistantActivity.this, HeimdallUi.SEMANTIC_SUCCESS);
             }
             if (transientResult == RESULT_ERROR) {
-                // Match the existing delete-control red in each theme.
-                return pearl ? 0xFFB34A4F : HeimdallUi.COLOR_DANGER;
+                return HeimdallUi.semanticColor(
+                        AssistantActivity.this, HeimdallUi.SEMANTIC_ERROR);
             }
-            return baseStateColor(pearl);
+            return baseStateColor();
         }
 
         private int blendColor(int from, int to, float progress) {
@@ -10268,8 +10807,7 @@ public class AssistantActivity extends Activity {
         }
 
         private void applyStateColor() {
-            boolean pearl = HeimdallUi.isPearl(AssistantActivity.this);
-            setColorFilter(blendColor(baseStateColor(pearl), resultColor(pearl),
+            setColorFilter(blendColor(baseStateColor(), resultColor(),
                     resultProgress * RESULT_TINT_OPACITY));
         }
 
@@ -10414,6 +10952,7 @@ public class AssistantActivity extends Activity {
         profile.romContextHint = "";
         profile.gameContextBinding = new GameContextBinding();
         profile.defaultForPackage = false;
+        profile.setThemeId(source.effectiveThemeId(HeimdallUi.globalTheme(this)));
         profile.iconUri = source.iconUri;
         for (GuideEntry guide : source.guides) {
             profile.guides.add(guide.copy());
@@ -10443,15 +10982,16 @@ public class AssistantActivity extends Activity {
         draftWidgetLayout = null;
         settingsTouchpadDraft = null;
         settingsGameContextBindingDraft = null;
+        settingsThemeDraft = null;
         settingsMacroMappingProtectionInput = null;
         settingsMacroMappingProtectionDraft = null;
+        applySelectedProfileTheme();
         touchpadSettings = selectedProfile.safeTouchpadSettings();
         closeVirtualMouseDispatcherIfUnused();
         ProfileStore.saveSelectedIndex(this, selectedProfileIndex);
         ProfileStore.saveProfiles(this, profiles);
         FirstSetupState.markProfileCreated(this);
-        renderProfiles();
-        renderSelectedProfile();
+        rebuildContent();
         showAction(getString(R.string.profile_copied, profile.name));
     }
 
@@ -10467,6 +11007,7 @@ public class AssistantActivity extends Activity {
         profile.macroColumns = 4;
         profile.macroRows = 0;
         profile.rightHandPriority = true;
+        profile.setThemeId(HeimdallUi.theme(this));
         profile.normalizeLayout();
         profiles.add(profile);
         selectedProfileIndex = profiles.size() - 1;
@@ -10474,15 +11015,16 @@ public class AssistantActivity extends Activity {
         draftWidgetLayout = null;
         settingsTouchpadDraft = null;
         settingsGameContextBindingDraft = null;
+        settingsThemeDraft = null;
         settingsMacroMappingProtectionInput = null;
         settingsMacroMappingProtectionDraft = null;
+        applySelectedProfileTheme();
         touchpadSettings = selectedProfile.safeTouchpadSettings();
         closeVirtualMouseDispatcherIfUnused();
         ProfileStore.saveSelectedIndex(this, selectedProfileIndex);
         ProfileStore.saveProfiles(this, profiles);
         FirstSetupState.markProfileCreated(this);
-        renderProfiles();
-        renderSelectedProfile();
+        rebuildContent();
         showAction(getString(R.string.profile_created));
     }
 
@@ -10509,20 +11051,201 @@ public class AssistantActivity extends Activity {
         draftWidgetLayout = null;
         settingsTouchpadDraft = null;
         settingsGameContextBindingDraft = null;
+        settingsThemeDraft = null;
         settingsMacroMappingProtectionInput = null;
         settingsMacroMappingProtectionDraft = null;
+        applySelectedProfileTheme();
         touchpadSettings = selectedProfile.safeTouchpadSettings();
         closeVirtualMouseDispatcherIfUnused();
         ProfileStore.saveSelectedIndex(this, selectedProfileIndex);
         ProfileStore.saveProfiles(this, profiles);
-        renderProfiles();
-        renderSelectedProfile();
+        rebuildContent();
         showAction(getString(R.string.profile_deleted_recoverable, removedName));
     }
 
     private String nonEmpty(String value, String fallback) {
         String trimmed = value == null ? "" : value.trim();
         return trimmed.length() == 0 ? fallback : trimmed;
+    }
+
+    private void showTranslationEditor(WidgetLayout.Item item) {
+        WidgetLayout.Item profileItem = resolveTranslationProfileItem(item);
+        if (profileItem == null) {
+            showErrorAction(getString(R.string.translation_widget_unavailable));
+            return;
+        }
+        WidgetLayout.Item draftItem = translationEditorDraft != null
+                && profileItem.itemId.equals(translationEditorDraft.itemId)
+                ? translationEditorDraft : profileItem.copy();
+        translationEditorDraft = draftItem;
+        TranslationConfig draft = draftItem.safeTranslation();
+        final PanelOverlay[] holder = new PanelOverlay[1];
+
+        LinearLayout shell = new LinearLayout(this);
+        shell.setOrientation(LinearLayout.VERTICAL);
+        shell.setPadding(dp(14), dp(10), dp(14), dp(10));
+        shell.setBackground(HeimdallUi.isFreyaFamily(this)
+                ? HeimdallUi.cncFlush(this, 14)
+                : HeimdallUi.glassSurface(this, ThemeGlassColors.OVERLAY, 14, 2));
+
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        shell.addView(header, new LinearLayout.LayoutParams(-1, dp(48)));
+        TextView title = text(getString(R.string.translation_editor_title),
+                HeimdallUi.TYPE_EDITOR_TITLE, TEXT, true);
+        header.addView(title, new LinearLayout.LayoutParams(0, -1, 1));
+        Button close = gridCloseButton(() -> {
+            if (holder[0] != null) dismissPanelAnimated(holder[0]);
+        });
+        close.setContentDescription(getString(R.string.common_close));
+        header.addView(close, new LinearLayout.LayoutParams(dp(42), dp(38)));
+
+        View headerDivider = new View(this);
+        headerDivider.setBackgroundColor(HeimdallUi.componentColors(this).structuralDivider);
+        shell.addView(headerDivider, new LinearLayout.LayoutParams(-1, dp(1)));
+
+        TextView help = text(getString(R.string.translation_editor_help),
+                HeimdallUi.TYPE_META, MUTED, false);
+        help.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
+        shell.addView(help, new LinearLayout.LayoutParams(-1, dp(36)));
+
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(true);
+        LinearLayout body = new LinearLayout(this);
+        body.setOrientation(LinearLayout.VERTICAL);
+        body.setPadding(dp(2), dp(2), dp(2), dp(8));
+        scroll.addView(body, new ScrollView.LayoutParams(-1, -2));
+        shell.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+
+        addSettingsLabel(body, getString(R.string.translation_source_region));
+        TextView regionSummary = text("", HeimdallUi.TYPE_HELP, MUTED, false);
+        regionSummary.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
+        regionSummary.setPadding(dp(10), dp(6), dp(10), dp(6));
+        regionSummary.setBackground(HeimdallUi.fieldPanel(this, 8));
+        body.addView(regionSummary, new LinearLayout.LayoutParams(-1, dp(46)));
+        Button selectRegion = editorButton(getString(R.string.translation_select_region),
+                this::startTranslationRegionCapture);
+        LinearLayout.LayoutParams regionActionParams = new LinearLayout.LayoutParams(-1, dp(46));
+        regionActionParams.setMargins(0, dp(5), 0, dp(8));
+        body.addView(selectRegion, regionActionParams);
+
+        addSettingsLabel(body, getString(R.string.translation_ocr_script));
+        LinearLayout scriptRow = settingsActionRow(body);
+        Button latin = editorButton("Latin", () -> {
+            draft.ocrScript = TranslationConfig.SCRIPT_LATIN;
+            if (translationEditorRefresh != null) translationEditorRefresh.run();
+        });
+        Button japanese = editorButton("\u65e5\u672c\u8a9e", () -> {
+            draft.ocrScript = TranslationConfig.SCRIPT_JAPANESE;
+            if (translationEditorRefresh != null) translationEditorRefresh.run();
+        });
+        Button chinese = editorButton("\u4e2d\u6587", () -> {
+            draft.ocrScript = TranslationConfig.SCRIPT_CHINESE;
+            if (translationEditorRefresh != null) translationEditorRefresh.run();
+        });
+        Button korean = editorButton("\ud55c\uad6d\uc5b4", () -> {
+            draft.ocrScript = TranslationConfig.SCRIPT_KOREAN;
+            if (translationEditorRefresh != null) translationEditorRefresh.run();
+        });
+        scriptRow.addView(latin);
+        scriptRow.addView(japanese);
+        scriptRow.addView(chinese);
+        scriptRow.addView(korean);
+
+        addSettingsLabel(body, getString(R.string.translation_target_language));
+        LinearLayout targetRowOne = settingsActionRow(body);
+        Button simplified = editorButton("\u7b80\u4f53\u4e2d\u6587", () -> {
+            draft.targetLanguage = TranslationConfig.LANGUAGE_CHINESE_SIMPLIFIED;
+            if (translationEditorRefresh != null) translationEditorRefresh.run();
+        });
+        Button traditional = editorButton("\u7e41\u9ad4\u4e2d\u6587", () -> {
+            draft.targetLanguage = TranslationConfig.LANGUAGE_CHINESE_TRADITIONAL;
+            if (translationEditorRefresh != null) translationEditorRefresh.run();
+        });
+        targetRowOne.addView(simplified);
+        targetRowOne.addView(traditional);
+        LinearLayout targetRowTwo = settingsActionRow(body);
+        Button english = editorButton("English", () -> {
+            draft.targetLanguage = TranslationConfig.LANGUAGE_ENGLISH;
+            if (translationEditorRefresh != null) translationEditorRefresh.run();
+        });
+        Button targetJapanese = editorButton("\u65e5\u672c\u8a9e", () -> {
+            draft.targetLanguage = TranslationConfig.LANGUAGE_JAPANESE;
+            if (translationEditorRefresh != null) translationEditorRefresh.run();
+        });
+        Button targetKorean = editorButton("\ud55c\uad6d\uc5b4", () -> {
+            draft.targetLanguage = TranslationConfig.LANGUAGE_KOREAN;
+            if (translationEditorRefresh != null) translationEditorRefresh.run();
+        });
+        targetRowTwo.addView(english);
+        targetRowTwo.addView(targetJapanese);
+        targetRowTwo.addView(targetKorean);
+
+        translationEditorRefresh = () -> {
+            regionSummary.setText(getString(R.string.translation_region_summary,
+                    Math.round(draft.regionLeft * 100f),
+                    Math.round(draft.regionTop * 100f),
+                    Math.round(draft.regionRight * 100f),
+                    Math.round(draft.regionBottom * 100f)));
+            HeimdallUi.applyChoiceButton(this, latin,
+                    TranslationConfig.SCRIPT_LATIN.equals(draft.ocrScript));
+            HeimdallUi.applyChoiceButton(this, japanese,
+                    TranslationConfig.SCRIPT_JAPANESE.equals(draft.ocrScript));
+            HeimdallUi.applyChoiceButton(this, chinese,
+                    TranslationConfig.SCRIPT_CHINESE.equals(draft.ocrScript));
+            HeimdallUi.applyChoiceButton(this, korean,
+                    TranslationConfig.SCRIPT_KOREAN.equals(draft.ocrScript));
+            HeimdallUi.applyChoiceButton(this, simplified,
+                    TranslationConfig.LANGUAGE_CHINESE_SIMPLIFIED.equals(
+                            draft.targetLanguage));
+            HeimdallUi.applyChoiceButton(this, traditional,
+                    TranslationConfig.LANGUAGE_CHINESE_TRADITIONAL.equals(
+                            draft.targetLanguage));
+            HeimdallUi.applyChoiceButton(this, english,
+                    TranslationConfig.LANGUAGE_ENGLISH.equals(draft.targetLanguage));
+            HeimdallUi.applyChoiceButton(this, targetJapanese,
+                    TranslationConfig.LANGUAGE_JAPANESE.equals(draft.targetLanguage));
+            HeimdallUi.applyChoiceButton(this, targetKorean,
+                    TranslationConfig.LANGUAGE_KOREAN.equals(draft.targetLanguage));
+        };
+        translationEditorRefresh.run();
+
+        View footerDivider = new View(this);
+        footerDivider.setBackgroundColor(HeimdallUi.componentColors(this).structuralDivider);
+        shell.addView(footerDivider, new LinearLayout.LayoutParams(-1, dp(1)));
+        LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        actions.setPadding(0, dp(5), 0, 0);
+        shell.addView(actions, new LinearLayout.LayoutParams(-1, dp(58)));
+        actions.addView(editorButton(getString(R.string.common_cancel), () -> {
+            if (holder[0] != null) dismissPanelAnimated(holder[0]);
+        }));
+        Button save = editorButton(getString(R.string.common_save), () -> {
+            TranslationConfig saved = draft.copy();
+            profileItem.translationConfig = saved.copy();
+            item.translationConfig = saved.copy();
+            mirrorTranslationIntoDraft(profileItem, saved);
+            invalidateTranslationRuntime(profileItem);
+            ProfileStore.saveProfiles(this, profiles);
+            showAction(getString(R.string.translation_editor_saved));
+            if (holder[0] != null) {
+                dismissPanelAnimated(holder[0], this::rebuildContent);
+            } else {
+                rebuildContent();
+            }
+        });
+        HeimdallUi.applyPrimaryActionButton(this, save);
+        actions.addView(save);
+
+        DisplayMetrics metrics = getResources().getDisplayMetrics();
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
+                Math.min(dp(700), metrics.widthPixels - dp(40)),
+                Math.min(dp(760), metrics.heightPixels - dp(72)), Gravity.CENTER);
+        holder[0] = showPanelOverlay(shell, params, () -> {
+            if (translationEditorDraft == draftItem) translationEditorDraft = null;
+            translationEditorRefresh = null;
+        });
     }
 
     private void showKeyboardPadEditor(WidgetLayout.Item item) {
@@ -10547,10 +11270,9 @@ public class AssistantActivity extends Activity {
         LinearLayout shell = new LinearLayout(this);
         shell.setOrientation(LinearLayout.VERTICAL);
         shell.setPadding(dp(12), dp(8), dp(12), dp(8));
-        shell.setBackground(HeimdallUi.isPearl(this)
+        shell.setBackground(HeimdallUi.isFreyaFamily(this)
                 ? HeimdallUi.cncFlush(this, 14)
-                : HeimdallUi.glass(this, 0xFA0B111B, 0xFF070A10,
-                        0x886A829C, 0x44344150, 14, 2));
+                : HeimdallUi.glassSurface(this, ThemeGlassColors.OVERLAY, 14, 2));
 
         LinearLayout header = new LinearLayout(this);
         header.setOrientation(LinearLayout.HORIZONTAL);
@@ -10566,7 +11288,7 @@ public class AssistantActivity extends Activity {
         header.addView(close, new LinearLayout.LayoutParams(dp(42), dp(38)));
 
         View divider = new View(this);
-        divider.setBackgroundColor(HeimdallUi.isPearl(this) ? 0x287B8792 : 0x445F7C9A);
+        divider.setBackgroundColor(HeimdallUi.componentColors(this).structuralDivider);
         shell.addView(divider, new LinearLayout.LayoutParams(-1, dp(1)));
 
         TextView help = text(getString(R.string.keyboard_pad_editor_help),
@@ -10671,7 +11393,7 @@ public class AssistantActivity extends Activity {
         shell.addView(preview, previewParams);
 
         View footerDivider = new View(this);
-        footerDivider.setBackgroundColor(HeimdallUi.isPearl(this) ? 0x287B8792 : 0x445F7C9A);
+        footerDivider.setBackgroundColor(HeimdallUi.componentColors(this).structuralDivider);
         shell.addView(footerDivider, new LinearLayout.LayoutParams(-1, dp(1)));
 
         LinearLayout actions = new LinearLayout(this);
@@ -10724,10 +11446,9 @@ public class AssistantActivity extends Activity {
         LinearLayout shell = new LinearLayout(this);
         shell.setOrientation(LinearLayout.VERTICAL);
         shell.setPadding(dp(14), dp(10), dp(14), dp(10));
-        shell.setBackground(HeimdallUi.isPearl(this)
+        shell.setBackground(HeimdallUi.isFreyaFamily(this)
                 ? HeimdallUi.cncRaised(this, 14, false, false)
-                : HeimdallUi.glass(this, 0xFA0B111B, 0xFF070A10,
-                        0x886A829C, 0x44344150, 14, 2));
+                : HeimdallUi.glassSurface(this, ThemeGlassColors.OVERLAY, 14, 2));
 
         LinearLayout header = new LinearLayout(this);
         header.setOrientation(LinearLayout.HORIZONTAL);
@@ -10873,7 +11594,7 @@ public class AssistantActivity extends Activity {
         body.addView(displayHelp, new LinearLayout.LayoutParams(-1, dp(44)));
 
         View footerDivider = new View(this);
-        footerDivider.setBackgroundColor(HeimdallUi.isPearl(this) ? 0x287B8792 : 0x445F7C9A);
+        footerDivider.setBackgroundColor(HeimdallUi.componentColors(this).structuralDivider);
         shell.addView(footerDivider, new LinearLayout.LayoutParams(-1, dp(1)));
 
         LinearLayout actions = new LinearLayout(this);
@@ -10925,10 +11646,9 @@ public class AssistantActivity extends Activity {
         LinearLayout shell = new LinearLayout(this);
         shell.setOrientation(LinearLayout.VERTICAL);
         shell.setPadding(dp(12), dp(10), dp(12), dp(10));
-        shell.setBackground(HeimdallUi.isPearl(this)
+        shell.setBackground(HeimdallUi.isFreyaFamily(this)
                 ? HeimdallUi.cncRaised(this, 12, false, false)
-                : HeimdallUi.glass(this, 0xF00B111B, 0xFA070A10,
-                        0x884EA1FF, 0x44344150, 12, 1));
+                : HeimdallUi.glassSurface(this, ThemeGlassColors.PICKER, 12, 1));
         LinearLayout header = new LinearLayout(this);
         header.setOrientation(LinearLayout.HORIZONTAL);
         header.setGravity(Gravity.CENTER_VERTICAL);
@@ -10990,10 +11710,9 @@ public class AssistantActivity extends Activity {
         LinearLayout shell = new LinearLayout(this);
         shell.setOrientation(LinearLayout.VERTICAL);
         shell.setPadding(dp(12), dp(10), dp(12), dp(10));
-        shell.setBackground(HeimdallUi.isPearl(this)
+        shell.setBackground(HeimdallUi.isFreyaFamily(this)
                 ? HeimdallUi.cncRaised(this, 12, false, false)
-                : HeimdallUi.glass(this, 0xF00B111B, 0xFA070A10,
-                        0x884EA1FF, 0x44344150, 12, 1));
+                : HeimdallUi.glassSurface(this, ThemeGlassColors.PICKER, 12, 1));
         LinearLayout header = new LinearLayout(this);
         header.setOrientation(LinearLayout.HORIZONTAL);
         header.setGravity(Gravity.CENTER_VERTICAL);
@@ -11065,13 +11784,11 @@ public class AssistantActivity extends Activity {
     private View keyboardPadIconPickerCell(MacroIconRepository.MacroIconOption option,
             boolean selected, Runnable action) {
         FrameLayout frame = new FrameLayout(this);
-        frame.setBackground(HeimdallUi.isPearl(this)
+        frame.setBackground(HeimdallUi.isFreyaFamily(this)
                 ? HeimdallUi.cncRaised(this, 10, selected, false)
-                : HeimdallUi.glass(this,
-                        selected ? 0xE0182636 : 0xC00E1620,
-                        selected ? 0xED09121D : 0xD0070B11,
-                        selected ? 0xCC70B7FF : 0x665F7184,
-                        selected ? 0x664EA1FF : 0x22344150,
+                : HeimdallUi.glassSurface(this, selected
+                                ? ThemeGlassColors.KEYBOARD_ICON_SELECTED
+                                : ThemeGlassColors.ICON_CELL,
                         10, selected ? 2 : 1));
         frame.setPadding(dp(8), dp(7), dp(8), dp(7));
         frame.setClickable(true);
@@ -11107,10 +11824,10 @@ public class AssistantActivity extends Activity {
         if (selected) {
             TextView check = text("\u2713", 12, TEXT, true);
             check.setGravity(Gravity.CENTER);
-            check.setBackground(HeimdallUi.isPearl(this)
+            check.setBackground(HeimdallUi.isFreyaFamily(this)
                     ? HeimdallUi.cncRaised(this, 8, true, false)
-                    : HeimdallUi.glass(this, 0xD0142740, 0xE609111D,
-                            0xCC70B7FF, 0x664EA1FF, 8, 1));
+                    : HeimdallUi.glassSurface(this, ThemeGlassColors.SELECTED_BADGE,
+                            8, 1));
             FrameLayout.LayoutParams checkParams = new FrameLayout.LayoutParams(
                     dp(20), dp(20), Gravity.TOP | Gravity.RIGHT);
             frame.addView(check, checkParams);
@@ -11139,10 +11856,9 @@ public class AssistantActivity extends Activity {
 
         LinearLayout editorShell = new LinearLayout(this);
         editorShell.setOrientation(LinearLayout.VERTICAL);
-        editorShell.setBackground(HeimdallUi.isPearl(this)
+        editorShell.setBackground(HeimdallUi.isFreyaFamily(this)
                 ? HeimdallUi.cncFlush(this, 14)
-                : HeimdallUi.glass(this, 0xFA0B111B, 0xFF070A10,
-                        0x886A829C, 0x44344150, 14, 2));
+                : HeimdallUi.glassSurface(this, ThemeGlassColors.OVERLAY, 14, 2));
 
         LinearLayout editorHeader = new LinearLayout(this);
         editorHeader.setOrientation(LinearLayout.HORIZONTAL);
@@ -11165,7 +11881,7 @@ public class AssistantActivity extends Activity {
         heading.addView(editorSubtitle, new LinearLayout.LayoutParams(-1, dp(20)));
 
         View headerDivider = new View(this);
-        headerDivider.setBackgroundColor(HeimdallUi.isPearl(this) ? 0x287B8792 : 0x445F7C9A);
+        headerDivider.setBackgroundColor(HeimdallUi.componentColors(this).structuralDivider);
         editorShell.addView(headerDivider, new LinearLayout.LayoutParams(-1, dp(1)));
 
         LinearLayout editorBody = new LinearLayout(this);
@@ -11242,7 +11958,7 @@ public class AssistantActivity extends Activity {
         ImageView iconPreview = new ImageView(this);
         iconPreview.setScaleType(ImageView.ScaleType.FIT_CENTER);
         iconPreview.setPadding(dp(14), dp(14), dp(14), dp(14));
-        iconPreview.setBackground(HeimdallUi.isPearl(this)
+        iconPreview.setBackground(HeimdallUi.isFreyaFamily(this)
                 ? HeimdallUi.cncShallowInset(this, 10)
                 : HeimdallUi.insetPanel(this, 10));
         updateMacroIconPreview(iconPreview, macro, draftIconKey[0]);
@@ -11263,7 +11979,7 @@ public class AssistantActivity extends Activity {
         iconActions.addView(defaultIconButton, new LinearLayout.LayoutParams(-1, 0, 1));
 
         View columnDivider = new View(this);
-        columnDivider.setBackgroundColor(HeimdallUi.isPearl(this) ? 0x287B8792 : 0x33445A72);
+        columnDivider.setBackgroundColor(HeimdallUi.componentColors(this).structuralDivider);
         LinearLayout.LayoutParams columnDividerParams = new LinearLayout.LayoutParams(dp(1), -1);
         columnDividerParams.setMargins(dp(2), dp(2), dp(12), dp(2));
         editorBody.addView(columnDivider, columnDividerParams);
@@ -11279,7 +11995,7 @@ public class AssistantActivity extends Activity {
         ScrollView stepScroll = new ScrollView(this);
         stepScroll.setFillViewport(false);
         stepScroll.setScrollbarFadingEnabled(false);
-        stepScroll.setBackground(HeimdallUi.isPearl(this)
+        stepScroll.setBackground(HeimdallUi.isFreyaFamily(this)
                 ? HeimdallUi.cncShallowInset(this, 10)
                 : HeimdallUi.insetPanel(this, 10));
         LinearLayout stepsList = new LinearLayout(this);
@@ -11354,7 +12070,7 @@ public class AssistantActivity extends Activity {
 
         final PanelOverlay[] overlayHolder = new PanelOverlay[1];
         View footerDivider = new View(this);
-        footerDivider.setBackgroundColor(HeimdallUi.isPearl(this) ? 0x287B8792 : 0x445F7C9A);
+        footerDivider.setBackgroundColor(HeimdallUi.componentColors(this).structuralDivider);
         editorShell.addView(footerDivider, new LinearLayout.LayoutParams(-1, dp(1)));
 
         LinearLayout actionRow = new LinearLayout(this);
@@ -11514,7 +12230,7 @@ public class AssistantActivity extends Activity {
         FrameLayout scrim = new FrameLayout(this);
         scrim.setClickable(true);
         scrim.setFocusable(false);
-        scrim.setBackgroundColor(HeimdallUi.isPearl(this) ? 0x8A3A4048 : 0xB8000000);
+        scrim.setBackgroundColor(HeimdallUi.componentColors(this).overlayScrim);
         scrim.setAlpha(0f);
         scrim.setVisibility(View.INVISIBLE);
         applySystemGestureExclusion(scrim);
@@ -11687,10 +12403,9 @@ public class AssistantActivity extends Activity {
         LinearLayout pickerShell = new LinearLayout(this);
         pickerShell.setOrientation(LinearLayout.VERTICAL);
         pickerShell.setPadding(dp(14), dp(12), dp(14), dp(12));
-        pickerShell.setBackground(HeimdallUi.isPearl(this)
+        pickerShell.setBackground(HeimdallUi.isFreyaFamily(this)
                 ? HeimdallUi.cncRaised(this, 12, false, false)
-                : HeimdallUi.glass(this, 0xF00B111B, 0xFA070A10,
-                        0x884EA1FF, 0x44344150, 12, 1));
+                : HeimdallUi.glassSurface(this, ThemeGlassColors.PICKER, 12, 1));
 
         TextView title = text(getString(R.string.macro_icon_picker_title),
                 HeimdallUi.TYPE_PAGE_TITLE, TEXT, true);
@@ -11756,7 +12471,7 @@ public class AssistantActivity extends Activity {
         }
 
         View footerDivider = new View(this);
-        footerDivider.setBackgroundColor(HeimdallUi.isPearl(this) ? 0x287B8792 : 0x445F7C9A);
+        footerDivider.setBackgroundColor(HeimdallUi.componentColors(this).structuralDivider);
         pickerShell.addView(footerDivider, new LinearLayout.LayoutParams(-1, dp(1)));
 
         LinearLayout actions = new LinearLayout(this);
@@ -11852,13 +12567,11 @@ public class AssistantActivity extends Activity {
                 ? MacroIconRepository.defaultOption(this).key : selectedKey;
         boolean selected = sameIconKey(option.key, effectiveSelectedKey);
         FrameLayout frame = new FrameLayout(this);
-        frame.setBackground(HeimdallUi.isPearl(this)
+        frame.setBackground(HeimdallUi.isFreyaFamily(this)
                 ? HeimdallUi.cncRaised(this, 10, selected, false)
-                : HeimdallUi.glass(this,
-                        selected ? 0xC3111A28 : 0xB00E1624,
-                        selected ? 0xD7080D16 : 0xC2070A10,
-                        selected ? 0xCC62C6FF : 0x665F7C9A,
-                        selected ? 0x884EA1FF : 0x22344150,
+                : HeimdallUi.glassSurface(this, selected
+                                ? ThemeGlassColors.MACRO_ICON_SELECTED
+                                : ThemeGlassColors.ICON_CELL,
                         10, selected ? 2 : 1));
         frame.setPadding(dp(6), dp(6), dp(6), dp(6));
         frame.setOnClickListener(v -> action.run());
@@ -11895,13 +12608,13 @@ public class AssistantActivity extends Activity {
             delete.setAllCaps(false);
             delete.setText(getString(R.string.common_delete));
             delete.setTextSize(11);
-            delete.setTextColor(HeimdallUi.isPearl(this) ? 0xFFB34A4F : DANGER);
+            delete.setTextColor(HeimdallUi.semanticColor(this, HeimdallUi.SEMANTIC_ERROR));
             delete.setGravity(Gravity.CENTER);
             delete.setMinWidth(0);
             delete.setMinHeight(0);
             delete.setPadding(0, 0, 0, 0);
-            delete.setBackground(HeimdallUi.isPearl(this)
-                    ? HeimdallUi.pearlMenuControl(this, 8, false, false)
+            delete.setBackground(HeimdallUi.isFreyaFamily(this)
+                    ? HeimdallUi.cncMenuControl(this, 8, false, false)
                     : rounded(DANGER_BG, DANGER, 8));
             delete.setContentDescription(getString(
                     R.string.macro_icon_delete_accessibility, option.displayName));
@@ -11915,10 +12628,10 @@ public class AssistantActivity extends Activity {
         if (selected) {
             TextView check = text("\u2713", 12, TEXT, true);
             check.setGravity(Gravity.CENTER);
-            check.setBackground(HeimdallUi.isPearl(this)
+            check.setBackground(HeimdallUi.isFreyaFamily(this)
                     ? HeimdallUi.cncRaised(this, 8, true, false)
-                    : HeimdallUi.glass(this, 0xD0142740, 0xE609111D,
-                            0xCC70B7FF, 0x664EA1FF, 8, 1));
+                    : HeimdallUi.glassSurface(this, ThemeGlassColors.SELECTED_BADGE,
+                            8, 1));
             FrameLayout.LayoutParams checkParams = new FrameLayout.LayoutParams(dp(20), dp(20),
                     Gravity.TOP | Gravity.RIGHT);
             frame.addView(check, checkParams);
@@ -12117,10 +12830,9 @@ public class AssistantActivity extends Activity {
 
         LinearLayout shell = new LinearLayout(this);
         shell.setOrientation(LinearLayout.VERTICAL);
-        shell.setBackground(HeimdallUi.isPearl(this)
+        shell.setBackground(HeimdallUi.isFreyaFamily(this)
                 ? HeimdallUi.cncFlush(this, 14)
-                : HeimdallUi.glass(this, 0xFA0B111B, 0xFF070A10,
-                        0x886A829C, 0x44344150, 14, 2));
+                : HeimdallUi.glassSurface(this, ThemeGlassColors.OVERLAY, 14, 2));
 
         LinearLayout header = new LinearLayout(this);
         header.setOrientation(LinearLayout.VERTICAL);
@@ -12136,7 +12848,7 @@ public class AssistantActivity extends Activity {
         header.addView(headerSubtitle, new LinearLayout.LayoutParams(-1, dp(22)));
 
         View headerDivider = new View(this);
-        headerDivider.setBackgroundColor(HeimdallUi.isPearl(this) ? 0x287B8792 : 0x445F7C9A);
+        headerDivider.setBackgroundColor(HeimdallUi.componentColors(this).structuralDivider);
         shell.addView(headerDivider, new LinearLayout.LayoutParams(-1, dp(1)));
 
         LinearLayout body = new LinearLayout(this);
@@ -12148,7 +12860,7 @@ public class AssistantActivity extends Activity {
         shell.addView(bodyScroll, new LinearLayout.LayoutParams(-1, 0, 1));
 
         View footerDivider = new View(this);
-        footerDivider.setBackgroundColor(HeimdallUi.isPearl(this) ? 0x287B8792 : 0x445F7C9A);
+        footerDivider.setBackgroundColor(HeimdallUi.componentColors(this).structuralDivider);
         shell.addView(footerDivider, new LinearLayout.LayoutParams(-1, dp(1)));
 
         LinearLayout actions = new LinearLayout(this);
@@ -12181,10 +12893,9 @@ public class AssistantActivity extends Activity {
 
         LinearLayout shell = new LinearLayout(this);
         shell.setOrientation(LinearLayout.VERTICAL);
-        shell.setBackground(HeimdallUi.isPearl(this)
+        shell.setBackground(HeimdallUi.isFreyaFamily(this)
                 ? HeimdallUi.cncFlush(this, 14)
-                : HeimdallUi.glass(this, 0xFA0B111B, 0xFF070A10,
-                        0x886A829C, 0x44344150, 14, 2));
+                : HeimdallUi.glassSurface(this, ThemeGlassColors.OVERLAY, 14, 2));
 
         LinearLayout header = new LinearLayout(this);
         header.setOrientation(LinearLayout.VERTICAL);
@@ -12198,7 +12909,7 @@ public class AssistantActivity extends Activity {
                 10, MUTED, false), new LinearLayout.LayoutParams(-1, dp(20)));
 
         View headerDivider = new View(this);
-        headerDivider.setBackgroundColor(HeimdallUi.isPearl(this) ? 0x287B8792 : 0x445F7C9A);
+        headerDivider.setBackgroundColor(HeimdallUi.componentColors(this).structuralDivider);
         shell.addView(headerDivider, new LinearLayout.LayoutParams(-1, dp(1)));
 
         GamepadSequenceComposer.EditableSequence restoredSequence = null;
@@ -12222,7 +12933,7 @@ public class AssistantActivity extends Activity {
         shell.addView(editor, new LinearLayout.LayoutParams(-1, 0, 1));
 
         View footerDivider = new View(this);
-        footerDivider.setBackgroundColor(HeimdallUi.isPearl(this) ? 0x287B8792 : 0x445F7C9A);
+        footerDivider.setBackgroundColor(HeimdallUi.componentColors(this).structuralDivider);
         shell.addView(footerDivider, new LinearLayout.LayoutParams(-1, dp(1)));
         LinearLayout actions = new LinearLayout(this);
         actions.setOrientation(LinearLayout.HORIZONTAL);
@@ -12860,8 +13571,8 @@ public class AssistantActivity extends Activity {
                 stepsList.addView(row, new LinearLayout.LayoutParams(-1, dp(80)));
                 if (i < steps.size() - 1) {
                     View divider = new View(this);
-                    divider.setBackgroundColor(HeimdallUi.isPearl(this)
-                            ? 0x207B8792 : 0x28445A72);
+                    divider.setBackgroundColor(
+                            HeimdallUi.componentColors(this).structuralDividerSubtle);
                     stepsList.addView(divider, new LinearLayout.LayoutParams(-1, dp(1)));
                 }
                 continue;
@@ -13074,8 +13785,8 @@ public class AssistantActivity extends Activity {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
         card.setPadding(dp(10), dp(8), dp(10), dp(8));
-        card.setBackground(HeimdallUi.isPearl(this)
-                ? HeimdallUi.pearlMenuPanel(this, 10)
+        card.setBackground(HeimdallUi.isFreyaFamily(this)
+                ? HeimdallUi.cncMenuPanel(this, 10)
                 : HeimdallUi.insetPanel(this, 10));
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2);
         params.setMargins(0, dp(6), 0, dp(10));
@@ -13097,7 +13808,7 @@ public class AssistantActivity extends Activity {
         checkBox.setTextColor(HeimdallUi.textColor(this));
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             int checked = HeimdallUi.accent(this);
-            int unchecked = HeimdallUi.isPearl(this) ? 0xFF788693 : 0xFF7F91A6;
+            int unchecked = HeimdallUi.componentColors(this).controlUnchecked;
             checkBox.setButtonTintList(new ColorStateList(
                     new int[][]{
                             new int[]{android.R.attr.state_checked},
@@ -13166,17 +13877,17 @@ public class AssistantActivity extends Activity {
         open.setTextSize(13);
         open.setTextColor(HeimdallUi.textColor(this));
         open.setGravity(Gravity.CENTER_VERTICAL | Gravity.LEFT);
-        open.setBackground(HeimdallUi.isPearl(this)
-                ? HeimdallUi.pearlMenuControl(this, 8, false, false)
+        open.setBackground(HeimdallUi.isFreyaFamily(this)
+                ? HeimdallUi.cncMenuControl(this, 8, false, false)
                 : HeimdallUi.surfacePanel(this, 8));
         open.setMinHeight(0);
         open.setMinWidth(0);
         open.setPadding(dp(10), 0, dp(8), 0);
         open.setOnClickListener(v -> openAction.run());
-        open.setOnLongClickListener(v -> {
-            editAction.run();
-            return true;
-        });
+        DelayedEditLongPressGesture editGesture =
+                new DelayedEditLongPressGesture(open, editAction);
+        open.setLongClickable(false);
+        open.setOnTouchListener((view, event) -> editGesture.onTouchEvent(event));
         row.addView(open, new LinearLayout.LayoutParams(0, dp(52), 1));
         return row;
     }
@@ -13185,11 +13896,11 @@ public class AssistantActivity extends Activity {
         ImageButton button = new ImageButton(this);
         button.setImageResource(iconRes);
         int iconColor = danger
-                ? (HeimdallUi.isPearl(this) ? 0xFFB34A4F : DANGER)
+                ? HeimdallUi.semanticColor(this, HeimdallUi.SEMANTIC_ERROR)
                 : HeimdallUi.textColor(this);
         button.setColorFilter(iconColor);
-        if (HeimdallUi.isPearl(this)) {
-            button.setBackground(HeimdallUi.pearlMenuControl(this, 8, false, false));
+        if (HeimdallUi.isFreyaFamily(this)) {
+            button.setBackground(HeimdallUi.cncMenuControl(this, 8, false, false));
         } else {
             button.setBackground(danger
                     ? rounded(DANGER_BG, DANGER, 8)
@@ -13296,7 +14007,7 @@ public class AssistantActivity extends Activity {
                 super.onDraw(canvas);
                 if (TouchpadSettings.MODE_VIRTUAL_MOUSE.equals(
                         TouchpadSettings.normalizeMode(touchpadSettings.mode))
-                        && !HeimdallUi.isPearl(AssistantActivity.this)) {
+                        && !HeimdallUi.isFreyaFamily(AssistantActivity.this)) {
                     drawVirtualMouseFeedback(canvas);
                 }
             }
@@ -13317,12 +14028,17 @@ public class AssistantActivity extends Activity {
             virtualMouseTouchSlop = viewConfiguration.getScaledTouchSlop();
             virtualMouseDoubleTapSlop = viewConfiguration.getScaledDoubleTapSlop();
             virtualMouseDoubleTapTimeoutMs = ViewConfiguration.getDoubleTapTimeout();
-            setBackground(HeimdallUi.isPearl(AssistantActivity.this)
-                    ? null
-                    : HeimdallUi.glass(AssistantActivity.this,
-                            0x550D1420, 0x77070A10,
-                            0x00000000, 0x00000000,
-                            HeimdallUi.RADIUS_MODULE, 0));
+            if (HeimdallUi.isFreyaFamily(AssistantActivity.this)) {
+                setBackground(null);
+            } else {
+                ThemePalette palette = HeimdallUi.resolvedTheme(
+                        AssistantActivity.this).palette;
+                setBackground(HeimdallUi.glass(AssistantActivity.this,
+                        HeimdallUi.withAlpha(palette.surfaceControl, 0x55),
+                        HeimdallUi.withAlpha(palette.surfaceInset, 0x77),
+                        0x00000000, 0x00000000,
+                        HeimdallUi.RADIUS_MODULE, 0));
+            }
             virtualMouseFeedbackView.setClickable(false);
             virtualMouseFeedbackView.setFocusable(false);
             virtualMouseFeedbackView.setImportantForAccessibility(
@@ -13520,29 +14236,31 @@ public class AssistantActivity extends Activity {
             paint.setStyle(Paint.Style.STROKE);
             paint.setStrokeCap(Paint.Cap.ROUND);
             paint.setStrokeWidth(dp(x >= 0 ? 2 : 1));
-            boolean pearl = HeimdallUi.isPearl(AssistantActivity.this);
-            paint.setColor(pearl
-                    ? (x >= 0 ? 0xFFF08A2A : 0xCCF7F9FB)
-                    : (x >= 0 ? 0xEE70B7FF : 0x996A9DDB));
+            ThemeComponentColors colors = HeimdallUi.componentColors(AssistantActivity.this);
+            paint.setColor(x >= 0
+                    ? colors.precisionReticleOuterActive
+                    : colors.precisionReticleOuterIdle);
             canvas.drawCircle(centerX, centerY, radius, paint);
-            paint.setColor(pearl
-                    ? (x >= 0 ? 0xFFFFB05C : 0xAAF7F9FB)
-                    : (x >= 0 ? 0xCC9ED0FF : 0x665A8DFF));
+            paint.setColor(x >= 0
+                    ? colors.precisionReticleInnerActive
+                    : colors.precisionReticleInnerIdle);
             canvas.drawCircle(centerX, centerY, dp(5), paint);
             canvas.drawLine(centerX - arm, centerY, centerX - gap, centerY, paint);
             canvas.drawLine(centerX + gap, centerY, centerX + arm, centerY, paint);
             canvas.drawLine(centerX, centerY - arm, centerX, centerY - gap, paint);
             canvas.drawLine(centerX, centerY + gap, centerX, centerY + arm, paint);
             paint.setStyle(Paint.Style.FILL);
-            paint.setColor(pearl ? 0xFFF08A2A : 0xE6E6EDF3);
+            paint.setColor(colors.precisionReticleCenter);
             canvas.drawCircle(centerX, centerY, dp(2), paint);
             if (x >= 0 && y >= 0) {
                 paint.setStyle(Paint.Style.STROKE);
                 paint.setStrokeWidth(dp(1));
-                paint.setColor(pearl ? 0x99F08A2A : 0x9970B7FF);
+                paint.setColor(scaleColorAlpha(
+                        HeimdallUi.activeInput(AssistantActivity.this), 0.6f));
                 canvas.drawCircle(x, y, dp(12), paint);
                 paint.setStyle(Paint.Style.FILL);
-                paint.setColor(pearl ? 0xCCF08A2A : 0xCC70B7FF);
+                paint.setColor(scaleColorAlpha(
+                        HeimdallUi.activeInput(AssistantActivity.this), 0.8f));
                 canvas.drawCircle(x, y, dp(3), paint);
             }
             paint.setStrokeCap(Paint.Cap.BUTT);
@@ -13553,23 +14271,20 @@ public class AssistantActivity extends Activity {
                 boolean showFocusCorners) {
             float pressProgress = virtualMouseMode
                     ? 0f : clampFloat(surfacePressProgress, 0f, 1f);
-            boolean pearl = HeimdallUi.isPearl(AssistantActivity.this);
-            if (pearl) {
-                drawPearlInputFrame(canvas);
+            boolean freya = HeimdallUi.isFreyaFamily(AssistantActivity.this);
+            if (freya) {
+                drawFreyaInputFrame(canvas);
             }
             float radius = surfaceRadius();
             paint.setStyle(Paint.Style.FILL);
-            if (pearl) {
-                int top = blendColor(0xFF717B81, 0xFF7C868C, pressProgress);
-                int bottom = blendColor(0xFF566168, 0xFF626C72, pressProgress);
-                paint.setShader(new LinearGradient(0, rect.top, 0, rect.bottom,
-                        top, bottom, Shader.TileMode.CLAMP));
-            } else {
-                int idleFace = shizukuTouchMode ? 0xFF0D161B : 0xFF0D1520;
-                int activeFace = rightStickMode ? 0xFF0F1E30 : 0xFF0F1E2A;
-                paint.setShader(null);
-                paint.setColor(blendColor(idleFace, activeFace, pressProgress));
-            }
+            ThemeComponentColors colors =
+                    HeimdallUi.componentColors(AssistantActivity.this);
+            int top = blendColor(colors.inputFaceIdleTop,
+                    colors.inputFaceActiveTop, pressProgress);
+            int bottom = blendColor(colors.inputFaceIdleBottom,
+                    colors.inputFaceActiveBottom, pressProgress);
+            paint.setShader(new LinearGradient(0, rect.top, 0, rect.bottom,
+                    top, bottom, Shader.TileMode.CLAMP));
             canvas.drawRoundRect(rect, radius, radius, paint);
             paint.setShader(null);
 
@@ -13584,7 +14299,7 @@ public class AssistantActivity extends Activity {
             }
         }
 
-        private void drawPearlInputFrame(Canvas canvas) {
+        private void drawFreyaInputFrame(Canvas canvas) {
             float outerRadius = dp(HeimdallUi.RADIUS_MODULE);
             RectF shadow = new RectF(rect);
             shadow.inset(dp(1) / 2f, dp(1) / 2f);
@@ -13637,15 +14352,13 @@ public class AssistantActivity extends Activity {
         private void drawSurfaceDepth(Canvas canvas, float pressProgress) {
             float radius = Math.max(rect.width(), rect.height()) * 0.72f;
             paint.setStyle(Paint.Style.FILL);
-            boolean pearl = HeimdallUi.isPearl(AssistantActivity.this);
-            int idleCenter = pearl ? 0x0FFFFFFF : 0x145A8DFF;
-            int activeCenter = pearl ? 0x20F08A2A : 0x244EA1FF;
+            boolean freya = HeimdallUi.isFreyaFamily(AssistantActivity.this);
+            ThemeComponentColors colors = HeimdallUi.componentColors(AssistantActivity.this);
+            int idleCenter = colors.inputDepthIdleCenter;
+            int activeCenter = colors.inputDepthActiveCenter;
             paint.setShader(new RadialGradient(rect.centerX(), rect.centerY(), radius,
-                    pearl
-                            ? new int[]{blendColor(idleCenter, activeCenter, pressProgress),
-                                    0x00000000, 0x22404A52}
-                            : new int[]{blendColor(idleCenter, activeCenter, pressProgress),
-                                    0x00070A10, 0x2E000000},
+                    new int[]{blendColor(idleCenter, activeCenter, pressProgress),
+                            0x00000000, colors.inputDepthOuter},
                     new float[]{0f, 0.62f, 1f}, Shader.TileMode.CLAMP));
             float corner = surfaceRadius();
             canvas.drawRoundRect(rect, corner, corner, paint);
@@ -13655,8 +14368,8 @@ public class AssistantActivity extends Activity {
         private void drawSurfaceGlow(Canvas canvas, float pressProgress) {
             paint.setShader(null);
             paint.setStyle(Paint.Style.STROKE);
-            boolean pearl = HeimdallUi.isPearl(AssistantActivity.this);
-            if (pearl) {
+            boolean freya = HeimdallUi.isFreyaFamily(AssistantActivity.this);
+            if (freya) {
                 if (pressProgress <= 0.001f) {
                     return;
                 }
@@ -13664,7 +14377,9 @@ public class AssistantActivity extends Activity {
                 RectF glow = new RectF(rect);
                 glow.inset(glowWidth / 2f, glowWidth / 2f);
                 paint.setStrokeWidth(glowWidth);
-                paint.setColor(scaleColorAlpha(0x55F08A2A, pressProgress));
+                paint.setColor(scaleColorAlpha(
+                        HeimdallUi.activeInput(AssistantActivity.this),
+                        pressProgress * (0x55 / 255f)));
                 float glowRadius = Math.max(0f,
                         surfaceRadius() - glowWidth / 2f);
                 canvas.drawRoundRect(glow, glowRadius, glowRadius, paint);
@@ -13672,7 +14387,9 @@ public class AssistantActivity extends Activity {
                 RectF edge = new RectF(rect);
                 edge.inset(dp(1) / 2f, dp(1) / 2f);
                 paint.setStrokeWidth(dp(1));
-                paint.setColor(blendColor(0x84657078, 0xD8F08A2A, pressProgress));
+                paint.setColor(blendColor(0x84657078,
+                        scaleColorAlpha(HeimdallUi.activeInput(AssistantActivity.this),
+                                0xD8 / 255f), pressProgress));
                 canvas.drawRoundRect(edge,
                         Math.max(0f, surfaceRadius() - dp(1) / 2f),
                         Math.max(0f, surfaceRadius() - dp(1) / 2f),
@@ -13705,7 +14422,7 @@ public class AssistantActivity extends Activity {
             paint.setShader(null);
         }
 
-        private void drawPearlVirtualMouseOuterEdge(Canvas canvas) {
+        private void drawFreyaVirtualMouseOuterEdge(Canvas canvas) {
             paint.setShader(null);
             paint.setStyle(Paint.Style.STROKE);
             float hairline = dp(1);
@@ -13728,9 +14445,9 @@ public class AssistantActivity extends Activity {
             paint.setStyle(Paint.Style.STROKE);
             paint.setStrokeWidth(lerp(dp(1), dp(2), pressProgress));
             paint.setStrokeCap(Paint.Cap.ROUND);
-            paint.setColor(HeimdallUi.isPearl(AssistantActivity.this)
-                    ? blendColor(0xAAF08A2A, 0xFFF08A2A, pressProgress)
-                    : blendColor(0x886A9DDB, 0xEE70B7FF, pressProgress));
+            ThemeComponentColors colors = HeimdallUi.componentColors(AssistantActivity.this);
+            paint.setColor(blendColor(colors.inputFocusCornerIdle,
+                    colors.inputFocusCornerActive, pressProgress));
             canvas.drawLine(left, top, left + length, top, paint);
             canvas.drawLine(left, top, left, top + length, paint);
             canvas.drawLine(right, top, right - length, top, paint);
@@ -13749,24 +14466,20 @@ public class AssistantActivity extends Activity {
             float radius = surfaceRadius();
             surfaceClip.addRoundRect(rect, radius, radius, Path.Direction.CW);
             canvas.clipPath(surfaceClip);
-            boolean pearl = HeimdallUi.isPearl(AssistantActivity.this);
+            boolean freya = HeimdallUi.isFreyaFamily(AssistantActivity.this);
             if (virtualMouseMode) {
                 canvas.clipRect(rect.left, rect.top, rect.right,
                         virtualMouseButtonTop());
             }
             paint.setStyle(Paint.Style.STROKE);
             paint.setStrokeWidth(1f);
-            paint.setColor(pearl
-                    ? (virtualMouseMode ? 0x16818B91
-                            : HeimdallUi.inputTexture(AssistantActivity.this))
-                    : (shizukuTouchMode ? 0x244AE0A9
-                            : (rightStickMode ? 0x265A8DFF
-                                    : HeimdallUi.inputTexture(AssistantActivity.this))));
+            paint.setColor(freya && virtualMouseMode
+                    ? 0x16818B91 : HeimdallUi.inputTexture(AssistantActivity.this));
             int step = dp(14);
             for (int xLine = -getHeight(); xLine < getWidth(); xLine += step) {
                 canvas.drawLine(xLine, rect.bottom, xLine + getHeight(), rect.top, paint);
             }
-            paint.setColor(virtualMouseMode && pearl
+            paint.setColor(virtualMouseMode && freya
                     ? 0x106E787E
                     : HeimdallUi.inputTextureAlt(AssistantActivity.this));
             int offset = dp(7);
@@ -13782,9 +14495,10 @@ public class AssistantActivity extends Activity {
                 return;
             }
             paint.setStyle(Paint.Style.FILL);
-            paint.setColor(HeimdallUi.isPearl(AssistantActivity.this) ? 0x22F08A2A : 0x224EA1FF);
+            ThemeComponentColors colors = HeimdallUi.componentColors(AssistantActivity.this);
+            paint.setColor(colors.touchPointHalo);
             canvas.drawCircle(x, y, dp(44), paint);
-            paint.setColor(HeimdallUi.isPearl(AssistantActivity.this) ? 0xCCF08A2A : 0xCC70B7FF);
+            paint.setColor(colors.touchPointCore);
             canvas.drawCircle(x, y, dp(18), paint);
             paint.setColor(HeimdallUi.textColor(AssistantActivity.this));
             canvas.drawCircle(x, y, dp(3), paint);
@@ -13795,13 +14509,14 @@ public class AssistantActivity extends Activity {
             float centerY = rect.centerY();
             paint.setShader(null);
             paint.setStyle(Paint.Style.FILL);
-            paint.setColor(HeimdallUi.isPearl(AssistantActivity.this) ? 0x18F08A2A : 0x1255B7E8);
+            ThemeComponentColors colors = HeimdallUi.componentColors(AssistantActivity.this);
+            paint.setColor(colors.inputCenterHalo);
             canvas.drawCircle(centerX, centerY, dp(28), paint);
             paint.setStyle(Paint.Style.STROKE);
             paint.setStrokeWidth(dp(1));
-            paint.setColor(HeimdallUi.isPearl(AssistantActivity.this) ? 0x88F7F9FB : 0x775A8DFF);
+            paint.setColor(colors.inputCenterRing);
             canvas.drawCircle(centerX, centerY, dp(20), paint);
-            paint.setColor(HeimdallUi.isPearl(AssistantActivity.this) ? 0xAAF08A2A : 0x996A9DDB);
+            paint.setColor(colors.inputCenterAccentRing);
             canvas.drawCircle(centerX, centerY, dp(7), paint);
             paint.setStyle(Paint.Style.FILL);
             paint.setColor(HeimdallUi.inputCenter(AssistantActivity.this));
@@ -13824,10 +14539,12 @@ public class AssistantActivity extends Activity {
                 capY = centerY + dy * scale;
             }
 
-            boolean pearl = HeimdallUi.isPearl(AssistantActivity.this);
+            boolean freya = HeimdallUi.isFreyaFamily(AssistantActivity.this);
             boolean active = x >= 0 && y >= 0;
+            ThemeGlassColors glass = freya
+                    ? null : HeimdallUi.glassColors(AssistantActivity.this);
 
-            if (pearl) {
+            if (freya) {
                 paint.setShader(null);
                 paint.setStyle(Paint.Style.FILL);
                 paint.setColor(0x1E000000);
@@ -13842,64 +14559,72 @@ public class AssistantActivity extends Activity {
 
             paint.setStyle(Paint.Style.FILL);
             paint.setShader(new RadialGradient(
-                    pearl ? centerX - radius * 0.16f : centerX,
-                    pearl ? centerY - radius * 0.18f : centerY,
-                    pearl ? radius * 1.22f : radius,
-                    pearl
+                    freya ? centerX - radius * 0.16f : centerX,
+                    freya ? centerY - radius * 0.18f : centerY,
+                    freya ? radius * 1.22f : radius,
+                    freya
                             ? new int[]{0xFF747F87, 0xFF4B545B, 0xFF2A3136}
-                            : new int[]{0xFF1B2536, 0xFF0A0D13, 0xFF030407},
+                            : glass.rightStickWell,
                     new float[]{0f, 0.72f, 1f}, Shader.TileMode.CLAMP));
             canvas.drawCircle(centerX, centerY, radius, paint);
             paint.setShader(null);
 
             paint.setStyle(Paint.Style.STROKE);
-            paint.setStrokeWidth(pearl ? dp(1) : dp(1));
-            if (pearl) {
+            paint.setStrokeWidth(freya ? dp(1) : dp(1));
+            if (freya) {
                 paint.setShader(new LinearGradient(centerX - radius, centerY - radius,
                         centerX + radius, centerY + radius,
                         new int[]{0xE8FFFFFF, 0x9AAAB3B9, 0x88434C54},
                         new float[]{0f, 0.54f, 1f}, Shader.TileMode.CLAMP));
             } else {
-                paint.setColor(0x665A7494);
+                paint.setColor(glass.rightStickWellEdge);
             }
             canvas.drawCircle(centerX, centerY, radius, paint);
             paint.setShader(null);
-            if (pearl) {
+            if (freya) {
                 paint.setStrokeWidth(dp(1));
                 paint.setColor(0x4CFFFFFF);
                 canvas.drawCircle(centerX, centerY, radius * 0.78f, paint);
             }
             paint.setStrokeWidth(dp(1));
-            paint.setColor(pearl ? 0x668D989F : 0x339AA8B8);
+            paint.setColor(freya ? 0x668D989F : glass.rightStickDeadZone);
             canvas.drawCircle(centerX, centerY, deadRadius, paint);
 
             paint.setStrokeWidth(dp(2));
-            paint.setColor(pearl
-                    ? (active ? 0xB8F08A2A : 0x4079858D)
-                    : 0x6670B7FF);
+            paint.setColor(freya
+                    ? (active ? scaleColorAlpha(
+                            HeimdallUi.activeInput(AssistantActivity.this), 0xB8 / 255f)
+                            : 0x4079858D)
+                    : (active ? scaleColorAlpha(
+                            HeimdallUi.activeInput(AssistantActivity.this), 0xB8 / 255f)
+                            : glass.rightStickTrailIdle));
             if (active) {
                 canvas.drawLine(centerX, centerY, capX, capY, paint);
             }
 
             paint.setStyle(Paint.Style.FILL);
-            paint.setColor(pearl ? 0x3D000000 : 0x66000000);
+            paint.setColor(freya ? 0x3D000000 : 0x66000000);
             canvas.drawCircle(capX, capY + dp(3), dp(34), paint);
             paint.setShader(new RadialGradient(capX - dp(10), capY - dp(12), dp(42),
-                    pearl
+                    freya
                             ? new int[]{0xFF838E96, 0xFF434B52, 0xFF20262B}
-                            : new int[]{0xFF566171, 0xFF242A33, 0xFF0D1015},
+                            : glass.rightStickCap,
                     new float[]{0f, 0.55f, 1f}, Shader.TileMode.CLAMP));
             canvas.drawCircle(capX, capY, dp(31), paint);
             paint.setShader(null);
             paint.setStyle(Paint.Style.STROKE);
-            paint.setStrokeWidth(pearl ? dp(2) : dp(1));
-            if (pearl && !active) {
+            paint.setStrokeWidth(freya ? dp(2) : dp(1));
+            if (freya && !active) {
                 paint.setShader(new LinearGradient(capX - dp(31), capY - dp(31),
                         capX + dp(31), capY + dp(31),
                         new int[]{0xE6FFFFFF, 0xAA9AA5AD, 0x88515B63},
                         new float[]{0f, 0.55f, 1f}, Shader.TileMode.CLAMP));
             } else {
-                paint.setColor(pearl ? 0xD8F08A2A : 0xAA4EA1FF);
+                paint.setColor(freya
+                        ? scaleColorAlpha(HeimdallUi.activeInput(AssistantActivity.this),
+                                0xD8 / 255f)
+                        : (active ? glass.rightStickCapActiveEdge
+                                : glass.rightStickCapIdleEdge));
             }
             canvas.drawCircle(capX, capY, dp(31), paint);
             paint.setShader(null);
@@ -14134,15 +14859,17 @@ public class AssistantActivity extends Activity {
         private void drawVirtualMouseControls(Canvas canvas) {
             float buttonTop = virtualMouseButtonTop();
             float middle = rect.centerX();
-            boolean pearl = HeimdallUi.isPearl(AssistantActivity.this);
+            boolean freya = HeimdallUi.isFreyaFamily(AssistantActivity.this);
+            ThemeGlassColors glass = freya
+                    ? null : HeimdallUi.glassColors(AssistantActivity.this);
 
             if (!virtualMouseUsesButtonStrip()) {
-                if (pearl) {
-                    drawPearlVirtualMouseOuterEdge(canvas);
+                if (freya) {
+                    drawFreyaVirtualMouseOuterEdge(canvas);
                 } else {
                     drawSurfaceGlow(canvas, 0f);
                 }
-                if (pearl && virtualMouseMotionPointerId >= 0 && x >= 0f && y >= 0f
+                if (freya && virtualMouseMotionPointerId >= 0 && x >= 0f && y >= 0f
                         && y < buttonTop) {
                     drawVirtualMouseTouchPoint(canvas);
                 }
@@ -14156,18 +14883,18 @@ public class AssistantActivity extends Activity {
             canvas.clipPath(surfaceClip);
 
             paint.setStyle(Paint.Style.FILL);
-            if (pearl) {
+            if (freya) {
                 paint.setShader(new LinearGradient(0f, buttonTop, 0f, rect.bottom,
                         0xFF59636A, 0xFF485259, Shader.TileMode.CLAMP));
             } else {
                 paint.setShader(new LinearGradient(0f, buttonTop, 0f, rect.bottom,
-                        new int[]{0xFF1B3247, 0xFF122638, 0xFF09141F},
+                        glass.virtualMouseStrip,
                         new float[]{0f, 0.46f, 1f}, Shader.TileMode.CLAMP));
             }
             canvas.drawRect(rect.left, buttonTop, rect.right, rect.bottom, paint);
             paint.setShader(null);
 
-            if (pearl) {
+            if (freya) {
                 drawVirtualMousePressedState(canvas,
                         new RectF(rect.left, buttonTop, middle, rect.bottom),
                         virtualMouseLeftPressProgress, true);
@@ -14178,18 +14905,18 @@ public class AssistantActivity extends Activity {
 
             paint.setStyle(Paint.Style.STROKE);
             paint.setStrokeWidth(dp(1));
-            paint.setColor(pearl ? 0xB04D575E : 0x7044637D);
+            paint.setColor(freya ? 0xB04D575E : glass.virtualMouseStripEdge);
             canvas.drawLine(rect.left, buttonTop, rect.right, buttonTop, paint);
-            paint.setColor(pearl ? 0x52343C42 : 0x344D6478);
+            paint.setColor(freya ? 0x52343C42 : glass.virtualMouseDivider);
             canvas.drawLine(middle, buttonTop + dp(4), middle,
                     rect.bottom - dp(4), paint);
             canvas.restore();
-            if (pearl) {
-                drawPearlVirtualMouseOuterEdge(canvas);
+            if (freya) {
+                drawFreyaVirtualMouseOuterEdge(canvas);
             } else {
                 drawSurfaceGlow(canvas, 0f);
             }
-            if (pearl && virtualMouseMotionPointerId >= 0 && x >= 0f && y >= 0f
+            if (freya && virtualMouseMotionPointerId >= 0 && x >= 0f && y >= 0f
                     && y < buttonTop) {
                 drawVirtualMouseTouchPoint(canvas);
             }
@@ -14198,7 +14925,7 @@ public class AssistantActivity extends Activity {
         private void drawVirtualMouseFeedback(Canvas canvas) {
             float buttonTop = virtualMouseButtonTop();
             float middle = rect.centerX();
-            boolean pearl = HeimdallUi.isPearl(AssistantActivity.this);
+            boolean freya = HeimdallUi.isFreyaFamily(AssistantActivity.this);
             if (virtualMouseUsesButtonStrip()) {
                 canvas.save();
                 surfaceClip.reset();
@@ -14210,10 +14937,10 @@ public class AssistantActivity extends Activity {
                 canvas.clipPath(surfaceClip);
                 drawVirtualMousePressedState(canvas,
                         new RectF(rect.left, buttonTop, middle, rect.bottom),
-                        virtualMouseLeftPressProgress, pearl);
+                        virtualMouseLeftPressProgress, freya);
                 drawVirtualMousePressedState(canvas,
                         new RectF(middle, buttonTop, rect.right, rect.bottom),
-                        virtualMouseRightPressProgress, pearl);
+                        virtualMouseRightPressProgress, freya);
                 canvas.restore();
             }
             if (virtualMouseMotionPointerId >= 0 && x >= 0f && y >= 0f
@@ -14223,21 +14950,22 @@ public class AssistantActivity extends Activity {
         }
 
         private void drawVirtualMousePressedState(Canvas canvas, RectF hotArea,
-                float rawProgress, boolean pearl) {
+                float rawProgress, boolean freya) {
             float progress = clampFloat(rawProgress, 0f, 1f);
             if (progress <= 0.001f) {
                 return;
             }
             paint.setShader(null);
-            if (!pearl) {
+            if (!freya) {
+                ThemeGlassColors glass = HeimdallUi.glassColors(AssistantActivity.this);
                 boolean left = hotArea.centerX() <= rect.centerX();
                 Path buttonPath = virtualMouseButtonPath(hotArea, left, 0f);
                 paint.setStyle(Paint.Style.FILL);
                 paint.setShader(new LinearGradient(0f, hotArea.top, 0f, hotArea.bottom,
                         new int[]{
-                                scaleColorAlpha(0x303E91D6, progress),
-                                scaleColorAlpha(0x1E2D70B8, progress),
-                                scaleColorAlpha(0x0C0C3C68, progress)},
+                                scaleColorAlpha(glass.virtualMousePressed[0], progress),
+                                scaleColorAlpha(glass.virtualMousePressed[1], progress),
+                                scaleColorAlpha(glass.virtualMousePressed[2], progress)},
                         new float[]{0f, 0.48f, 1f}, Shader.TileMode.CLAMP));
                 canvas.drawPath(buttonPath, paint);
                 paint.setShader(null);
@@ -14260,7 +14988,8 @@ public class AssistantActivity extends Activity {
             }
             paint.setStyle(Paint.Style.FILL);
             paint.setColor(scaleColorAlpha(
-                    0x24F08A2A, progress));
+                    HeimdallUi.activeInput(AssistantActivity.this),
+                    progress * (0x24 / 255f)));
             canvas.drawRect(hotArea, paint);
 
             paint.setStyle(Paint.Style.STROKE);
@@ -14274,7 +15003,8 @@ public class AssistantActivity extends Activity {
             insetEdge.inset(dp(2), dp(2));
             paint.setStrokeWidth(dp(1));
             paint.setColor(scaleColorAlpha(
-                    0xB8F08A2A, progress));
+                    HeimdallUi.activeInput(AssistantActivity.this),
+                    progress * (0xB8 / 255f)));
             canvas.drawRect(insetEdge, paint);
         }
 
@@ -14291,7 +15021,7 @@ public class AssistantActivity extends Activity {
         }
 
         private void invalidateVirtualMouseFeedback() {
-            if (HeimdallUi.isPearl(AssistantActivity.this)) {
+            if (HeimdallUi.isFreyaFamily(AssistantActivity.this)) {
                 invalidate();
             } else {
                 Rect dirty = new Rect();
@@ -14415,8 +15145,7 @@ public class AssistantActivity extends Activity {
         private void drawVirtualMouseTouchPoint(Canvas canvas) {
             paint.setShader(null);
             paint.setStyle(Paint.Style.FILL);
-            paint.setColor(HeimdallUi.isPearl(AssistantActivity.this)
-                    ? 0xCCF08A2A : 0xCC70B7FF);
+            paint.setColor(HeimdallUi.componentColors(AssistantActivity.this).touchPointCore);
             canvas.drawCircle(x, y, dp(18), paint);
             paint.setColor(HeimdallUi.textColor(AssistantActivity.this));
             canvas.drawCircle(x, y, dp(3), paint);

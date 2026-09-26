@@ -393,7 +393,7 @@ final class TouchpadSettingsController {
             input.setButtonTintList(new ColorStateList(
                     new int[][]{new int[]{android.R.attr.state_checked}, new int[]{}},
                     new int[]{HeimdallUi.accent(activity),
-                            HeimdallUi.isPearl(activity) ? 0xFF788693 : 0xFF7F91A6}));
+                            HeimdallUi.componentColors(activity).controlUnchecked}));
         }
         input.setChecked(checked);
         content.addView(input, new LinearLayout.LayoutParams(-1, dp(42)));
@@ -440,8 +440,8 @@ final class TouchpadSettingsController {
 
     private void styleSeekBar(SeekBar seekBar) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) return;
-        int active = HeimdallUi.isPearl(activity) ? 0xFFF08A2A : HeimdallUi.accent(activity);
-        int track = HeimdallUi.isPearl(activity) ? 0xFF909AA2 : 0xFF445A72;
+        int active = HeimdallUi.accent(activity);
+        int track = HeimdallUi.componentColors(activity).sliderTrack;
         seekBar.setProgressTintList(ColorStateList.valueOf(active));
         seekBar.setProgressBackgroundTintList(ColorStateList.valueOf(track));
         seekBar.setThumbTintList(ColorStateList.valueOf(active));

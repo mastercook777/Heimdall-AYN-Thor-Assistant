@@ -100,17 +100,17 @@ final class InteractiveMapLoadIndicator extends View {
     @Override
     protected void onDraw(Canvas canvas) {
         super.onDraw(canvas);
-        boolean pearl = HeimdallUi.isPearl(getContext());
+        ThemeComponentColors colors = HeimdallUi.componentColors(getContext());
         float centerX = getWidth() / 2f;
         float centerY = getHeight() / 2f;
         int activeColor = state == STATE_LOADED
-                ? HeimdallUi.COLOR_SUCCESS
+                ? colors.statusLampSuccess
                 : state == STATE_ERROR
-                        ? HeimdallUi.COLOR_DANGER
+                        ? colors.statusLampError
                         : HeimdallUi.accent(getContext());
         for (int index = 0; index < 3; index++) {
             float x = centerX + dp((index - 1) * 12);
-            dotPaint.setColor(pearl ? 0x66717A82 : 0x88414A53);
+            dotPaint.setColor(colors.statusLampOuter);
             canvas.drawCircle(x, centerY, dp(3), dotPaint);
             dotPaint.setColor(index < illuminatedCount
                     ? activeColor

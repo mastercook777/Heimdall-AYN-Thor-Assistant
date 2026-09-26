@@ -41,9 +41,7 @@ final class FirstSetupView extends FrameLayout {
         header.setGravity(Gravity.CENTER_VERTICAL);
 
         ImageView mark = new ImageView(getContext());
-        mark.setImageResource(HeimdallUi.isPearl(getContext())
-                ? R.drawable.ic_heimdall_header_mark_freya
-                : R.drawable.ic_heimdall_header_mark_blue);
+        mark.setImageResource(HeimdallUi.materialSpec(getContext()).headerBrandMarkRes);
         mark.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
         mark.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
         header.addView(mark, new LinearLayout.LayoutParams(dp(46), dp(46)));

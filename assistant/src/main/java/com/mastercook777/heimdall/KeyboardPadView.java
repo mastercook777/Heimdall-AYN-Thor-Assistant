@@ -60,18 +60,18 @@ final class KeyboardPadView extends ViewGroup {
         setWillNotDraw(false);
         setClipChildren(false);
         setMotionEventSplittingEnabled(true);
-        boolean pearl = HeimdallUi.isPearl(context);
-        chassisWellPaint.setColor(pearl ? 0xFF454A50 : 0xF214171B);
+        ThemeKeyboardColors colors = HeimdallUi.componentColors(context).keyboard;
+        chassisWellPaint.setColor(colors.bedFill);
         chassisWellStrokePaint.setStyle(Paint.Style.STROKE);
         chassisWellStrokePaint.setStrokeWidth(dp(1));
-        chassisWellStrokePaint.setColor(pearl ? 0xFF737A81 : 0x665C6872);
+        chassisWellStrokePaint.setColor(colors.bedEdge);
         if (editMode) {
             setBackground(null);
         } else {
-            setBackground(HeimdallUi.isPearl(context)
+            setBackground(HeimdallUi.isFreyaFamily(context)
                     ? HeimdallUi.cncInputFrame(context, HeimdallUi.RADIUS_MODULE)
-                    : HeimdallUi.glass(context, 0xD2141C27, 0xE80A0E14,
-                            0x665F7C9A, 0x33344150, HeimdallUi.RADIUS_MODULE, 1));
+                    : HeimdallUi.glassSurface(context, ThemeGlassColors.KEYBOARD_FRAME,
+                            HeimdallUi.RADIUS_MODULE, 1));
         }
         menuView = new ChassisMenuView(context);
         menuView.setVisibility(editMode ? View.GONE : View.VISIBLE);
@@ -304,15 +304,18 @@ final class KeyboardPadView extends ViewGroup {
         }
 
         private void applySurface(boolean pressed) {
-            if (HeimdallUi.isPearl(getContext())) {
-                setBackground(new PearlKeycapDrawable(getContext(), pressed));
+            if (HeimdallUi.isFreyaFamily(getContext())) {
+                setBackground(new FreyaKeycapDrawable(getContext(), pressed));
                 setElevation(pressed ? 0f : dp(1));
             } else {
+                ThemeKeyboardColors colors =
+                        HeimdallUi.componentColors(getContext()).keyboard;
                 Drawable surface = HeimdallUi.glass(getContext(),
-                        pressed ? 0xFF24364A : 0xFF2B2D30,
-                        pressed ? 0xFF101A26 : 0xFF17191C,
-                        pressed ? 0xFF70B7FF : 0x99717A82,
-                        pressed ? 0x884EA1FF : 0x55323539, 7, pressed ? 2 : 1);
+                        pressed ? colors.keycapPressedFaceTop : colors.keycapFaceTop,
+                        pressed ? colors.keycapPressedFaceBottom : colors.keycapFaceBottom,
+                        pressed ? colors.keycapPressedEdge : colors.keycapIdleEdge,
+                        pressed ? colors.activeEdgeBottom : colors.keycapIdleEdgeBottom,
+                        7, pressed ? 2 : 1);
                 setBackground(new InsetDrawable(surface, dp(BLUE_KEYCAP_VISUAL_INSET_DP)));
                 setElevation(pressed ? 0f : dp(1));
             }
@@ -340,11 +343,14 @@ final class KeyboardPadView extends ViewGroup {
             int width = getWidth();
             int height = getHeight();
             if (width <= 0 || height <= 0) return;
-            if (!HeimdallUi.isPearl(getContext())) {
+            if (!HeimdallUi.isFreyaFamily(getContext())) {
+                ThemeKeyboardColors colors =
+                        HeimdallUi.componentColors(getContext()).keyboard;
                 reliefPaint.setStrokeWidth(dp(1));
-                reliefPaint.setColor(pressedVisual ? 0x5570B7FF : 0x557B848C);
+                reliefPaint.setColor(pressedVisual
+                        ? colors.keycapReliefActive : colors.keycapReliefIdle);
                 canvas.drawLine(dp(7), dp(3), width - dp(7), dp(3), reliefPaint);
-                reliefPaint.setColor(0x88090B0D);
+                reliefPaint.setColor(colors.keycapReliefBottom);
                 canvas.drawLine(dp(7), height - dp(3), width - dp(7), height - dp(3), reliefPaint);
             }
             String customLabel = key.display.label;
@@ -406,10 +412,11 @@ final class KeyboardPadView extends ViewGroup {
                 if (!editMode && interactionEnabled && event.getPointerCount() == 1) {
                     pending = true;
                     postDelayed(showFirstProgressDot,
-                            MacroButtonView.EDIT_LONG_PRESS_TIMEOUT_MS / 3L);
+                            HeimdallInteraction.EDIT_LONG_PRESS_TIMEOUT_MS / 3L);
                     postDelayed(showSecondProgressDot,
-                            MacroButtonView.EDIT_LONG_PRESS_TIMEOUT_MS * 2L / 3L);
-                    postDelayed(triggerEdit, MacroButtonView.EDIT_LONG_PRESS_TIMEOUT_MS);
+                            HeimdallInteraction.EDIT_LONG_PRESS_TIMEOUT_MS * 2L / 3L);
+                    postDelayed(triggerEdit,
+                            HeimdallInteraction.EDIT_LONG_PRESS_TIMEOUT_MS);
                 }
                 setPressed(true);
                 invalidate();
@@ -473,35 +480,48 @@ final class KeyboardPadView extends ViewGroup {
         @Override
         protected void onDraw(Canvas canvas) {
             super.onDraw(canvas);
-            boolean pearl = HeimdallUi.isPearl(getContext());
+            ThemeComponentColors colors = HeimdallUi.componentColors(getContext());
             float outerRadius = dp(3);
             float innerRadius = dp(1.8f);
             float centerY = dp(CHASSIS_VISUAL_HEADER_DP) / 2f;
             float centerX = getWidth() / 2f;
             for (int index = 0; index < 3; index++) {
                 float x = centerX + dp((index - 1) * 10);
-                dotPaint.setColor(pearl ? 0x66717A82 : 0x88414A53);
+                dotPaint.setColor(colors.statusLampOuter);
                 canvas.drawCircle(x, centerY, outerRadius, dotPaint);
                 boolean lit = index < progressDots;
                 dotPaint.setColor(lit
-                        ? (pearl ? 0xFFE77F1F : 0xFF70B7FF)
-                        : (pearl ? 0xFF555D65 : 0xFF202A33));
+                        ? colors.keyboard.menuActive
+                        : colors.keyboard.menuIdle);
                 canvas.drawCircle(x, centerY, innerRadius, dotPaint);
             }
         }
     }
 
-    /** Pearl-only vertical lighting keeps every keycap optically aligned at every aspect ratio. */
-    private static final class PearlKeycapDrawable extends Drawable {
+    /** Freya-only vertical lighting keeps every keycap optically aligned at every aspect ratio. */
+    private static final class FreyaKeycapDrawable extends Drawable {
         private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final RectF rect = new RectF();
         private final float density;
         private final boolean pressed;
+        private final int pressedEdgeColor;
+        private final int idleEdgeColor;
+        private final int[] faceColors;
+        private final int[] shellColors;
+        private final int[] rimColors;
         private int alpha = 255;
 
-        PearlKeycapDrawable(Context context, boolean pressed) {
+        FreyaKeycapDrawable(Context context, boolean pressed) {
             density = context.getResources().getDisplayMetrics().density;
             this.pressed = pressed;
+            ThemeKeyboardColors keyboard = HeimdallUi.componentColors(context).keyboard;
+            ThemeCncColors.Surface raised = HeimdallUi.cncColors(context)
+                    .surface(ThemeCncColors.RAISED);
+            pressedEdgeColor = keyboard.keycapPressedEdge;
+            idleEdgeColor = keyboard.keycapIdleEdge;
+            faceColors = new int[]{keyboard.keycapFaceTop, keyboard.keycapFaceBottom};
+            shellColors = raised.shellColors();
+            rimColors = raised.rimColors();
         }
 
         @Override
@@ -519,25 +539,25 @@ final class KeyboardPadView extends ViewGroup {
             RectF shell = new RectF(rect);
             shell.inset(px(0.45f), px(0.45f));
             gradient(canvas, shell, radius - px(0.45f),
-                    new int[]{0xFFF9FAF9, 0xFFBBC2C7, 0xFF717C85},
+                    shellColors,
                     new float[]{0f, 0.52f, 1f});
 
             RectF rim = new RectF(shell);
             rim.inset(px(1.25f), px(1.25f));
             float rimRadius = Math.max(0f, radius - px(1.7f));
             gradient(canvas, rim, rimRadius,
-                    new int[]{0xFFFFFFFF, 0xFFF2F3F2, 0xFFB8C0C5},
+                    rimColors,
                     new float[]{0f, 0.58f, 1f});
 
             RectF face = new RectF(rim);
             face.inset(px(1.35f), px(1.35f));
             gradient(canvas, face, Math.max(0f, rimRadius - px(1.35f)),
-                    new int[]{0xFFFBFAF8, 0xFFF5F4F1}, null);
+                    faceColors, null);
 
             paint.setShader(null);
             paint.setStyle(Paint.Style.STROKE);
             paint.setStrokeWidth(px(pressed ? 1.15f : 0.7f));
-            paint.setColor(withAlpha(pressed ? 0xB8E77F1F : 0x8A717B84));
+            paint.setColor(withAlpha(pressed ? pressedEdgeColor : idleEdgeColor));
             canvas.drawRoundRect(shell, radius - px(0.45f), radius - px(0.45f), paint);
         }
 

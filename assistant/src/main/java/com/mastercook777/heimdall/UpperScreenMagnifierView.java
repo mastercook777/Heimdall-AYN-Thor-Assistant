@@ -23,8 +23,6 @@ import android.widget.TextView;
 
 final class UpperScreenMagnifierView extends FrameLayout
         implements UpperScreenProjectionService.Listener, TextureView.SurfaceTextureListener {
-    private static final int DARK_CONTENT_INSET_DP = 1;
-    private static final int PEARL_CONTENT_INSET_DP = 6;
     private static final long MULTI_TAP_TIMEOUT_MS = ViewConfiguration.getDoubleTapTimeout();
     private static final long TRIPLE_TAP_TOTAL_TIMEOUT_MS = MULTI_TAP_TIMEOUT_MS * 2L;
 
@@ -45,6 +43,7 @@ final class UpperScreenMagnifierView extends FrameLayout
     private final ImageView frozenStopControl;
     private final int touchSlopSquared;
     private final int multiTapSlopSquared;
+    private final Runnable triggerEditLongPress = this::triggerEditLongPress;
     private final Runnable resetTapSequenceRunnable = this::resetTapSequence;
     private final Runnable clearSingleTapSuppressionRunnable =
             () -> suppressNextConfirmedTap = false;
@@ -54,6 +53,7 @@ final class UpperScreenMagnifierView extends FrameLayout
     private boolean resumed;
     private boolean tapCandidate;
     private boolean longPressTriggered;
+    private boolean editLongPressPending;
     private boolean suppressNextConfirmedTap;
     private float tapDownX;
     private float tapDownY;
@@ -76,14 +76,12 @@ final class UpperScreenMagnifierView extends FrameLayout
         displayFrame = new ShapeFrameLayout(context, circular);
         displayFrame.setContentDescription(
                 context.getString(R.string.magnifier_live_content_description));
-        displayFrame.setBackground(HeimdallUi.isPearl(context)
+        displayFrame.setBackground(HeimdallUi.isFreyaFamily(context)
                 ? HeimdallUi.cncInputFrame(context, HeimdallUi.RADIUS_MODULE, circular)
                 : circular
-                        ? HeimdallUi.glassCircle(context,
-                                0xB20C131D, 0xD2070B11, 0x7770B7FF, 0x33445A72,
-                                HeimdallUi.STROKE_HAIRLINE)
-                        : HeimdallUi.glass(context,
-                                0xB20C131D, 0xD2070B11, 0x7770B7FF, 0x33445A72,
+                        ? HeimdallUi.glassCircleSurface(context,
+                                ThemeGlassColors.MAGNIFIER_FRAME, HeimdallUi.STROKE_HAIRLINE)
+                        : HeimdallUi.glassSurface(context, ThemeGlassColors.MAGNIFIER_FRAME,
                                 HeimdallUi.RADIUS_MODULE, HeimdallUi.STROKE_HAIRLINE));
         addView(displayFrame, new LayoutParams(-1, -1));
 
@@ -96,12 +94,8 @@ final class UpperScreenMagnifierView extends FrameLayout
                 if (circular) {
                     outline.setOval(0, 0, view.getWidth(), view.getHeight());
                 } else {
-                    int insetDp = HeimdallUi.isPearl(getContext())
-                            ? PEARL_CONTENT_INSET_DP : DARK_CONTENT_INSET_DP;
-                    float radius = dp(HeimdallUi.isPearl(getContext())
-                            ? HeimdallUi.concentricInnerRadiusDp(
-                                    HeimdallUi.RADIUS_MODULE, insetDp)
-                            : Math.max(0f, HeimdallUi.RADIUS_MODULE - insetDp));
+                    float radius = dp(HeimdallUi.mediaFrameInnerRadiusDp(
+                            getContext(), HeimdallUi.RADIUS_MODULE));
                     outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), radius);
                 }
             }
@@ -121,7 +115,7 @@ final class UpperScreenMagnifierView extends FrameLayout
 
         statusView = new TextView(context);
         statusView.setText(R.string.magnifier_enable_hint);
-        statusView.setTextColor(HeimdallUi.isPearl(context) ? 0xFF5E6D7E : 0xFF8EA4BA);
+        statusView.setTextColor(HeimdallUi.componentColors(context).mediaHintText);
         statusView.setTextSize(12);
         statusView.setGravity(Gravity.CENTER);
         statusView.setPadding(dp(8), dp(8), dp(8), dp(8));
@@ -186,18 +180,13 @@ final class UpperScreenMagnifierView extends FrameLayout
                         return false;
                     }
 
-                    @Override
-                    public void onLongPress(MotionEvent event) {
-                        longPressTriggered = true;
-                        tapCandidate = false;
-                        resetTapSequence();
-                        displayFrame.performLongClick();
-                    }
                 });
+        gestures.setIsLongpressEnabled(false);
         displayFrame.setOnTouchListener((view, event) -> {
-            boolean gestureHandled = gestures.onTouchEvent(event);
             boolean tripleTapHandled = trackTripleTap(event);
-            return gestureHandled || tripleTapHandled;
+            boolean editLongPressHandled = trackEditLongPress(gestures, event);
+            boolean gestureHandled = !editLongPressHandled && gestures.onTouchEvent(event);
+            return gestureHandled || tripleTapHandled || editLongPressHandled;
         });
     }
 
@@ -268,6 +257,8 @@ final class UpperScreenMagnifierView extends FrameLayout
 
     void release() {
         pause();
+        cancelEditLongPress();
+        longPressTriggered = false;
         resetTapSequence();
         removeCallbacks(clearSingleTapSuppressionRunnable);
         suppressNextConfirmedTap = false;
@@ -515,6 +506,56 @@ final class UpperScreenMagnifierView extends FrameLayout
         return eligible && registerTap(event);
     }
 
+    private boolean trackEditLongPress(GestureDetector gestures, MotionEvent event) {
+        int action = event.getActionMasked();
+        if (action == MotionEvent.ACTION_DOWN) {
+            cancelEditLongPress();
+            if (event.getPointerCount() == 1) {
+                editLongPressPending = true;
+                postDelayed(triggerEditLongPress,
+                        HeimdallInteraction.EDIT_LONG_PRESS_TIMEOUT_MS);
+            }
+        } else if (action == MotionEvent.ACTION_POINTER_DOWN) {
+            cancelEditLongPress();
+        } else if (action == MotionEvent.ACTION_MOVE) {
+            float dx = event.getX() - tapDownX;
+            float dy = event.getY() - tapDownY;
+            if (event.getPointerCount() != 1 || dx * dx + dy * dy > touchSlopSquared) {
+                cancelEditLongPress();
+            }
+        } else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+            boolean consume = longPressTriggered;
+            cancelEditLongPress();
+            if (consume) {
+                MotionEvent cancel = MotionEvent.obtain(event);
+                cancel.setAction(MotionEvent.ACTION_CANCEL);
+                gestures.onTouchEvent(cancel);
+                cancel.recycle();
+                longPressTriggered = false;
+                return true;
+            }
+        }
+        return longPressTriggered;
+    }
+
+    private void triggerEditLongPress() {
+        if (!editLongPressPending || !isAttachedToWindow()
+                || !displayFrame.isShown() || !displayFrame.isEnabled()) {
+            cancelEditLongPress();
+            return;
+        }
+        editLongPressPending = false;
+        longPressTriggered = true;
+        tapCandidate = false;
+        resetTapSequence();
+        displayFrame.performLongClick();
+    }
+
+    private void cancelEditLongPress() {
+        if (editLongPressPending) removeCallbacks(triggerEditLongPress);
+        editLongPressPending = false;
+    }
+
     private boolean registerTap(MotionEvent event) {
         long eventTime = event.getEventTime();
         float x = event.getX();
@@ -559,8 +600,7 @@ final class UpperScreenMagnifierView extends FrameLayout
     }
 
     private int contentInset() {
-        return dp(HeimdallUi.isPearl(getContext())
-                ? PEARL_CONTENT_INSET_DP : DARK_CONTENT_INSET_DP);
+        return dp(HeimdallUi.mediaFrameContentInsetDp(getContext()));
     }
 
     private int dp(int value) {
