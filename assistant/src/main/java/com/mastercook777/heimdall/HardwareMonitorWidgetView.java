@@ -38,12 +38,13 @@ final class HardwareMonitorWidgetView extends FrameLayout {
 
     HardwareMonitorWidgetView(Context context) {
         super(context);
+        boolean freyaFamily = HeimdallUi.isFreyaFamily(context);
         setClickable(false);
         setFocusable(false);
         setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_YES);
 
         FrameLayout displayFrame = new FrameLayout(context);
-        displayFrame.setBackground(HeimdallUi.isFreyaFamily(context)
+        displayFrame.setBackground(freyaFamily
                 ? HeimdallUi.cncInputFrame(context, HeimdallUi.RADIUS_MODULE, false)
                 : HeimdallUi.glassSurface(context, ThemeGlassColors.MEDIA_FRAME,
                         HeimdallUi.RADIUS_MODULE, HeimdallUi.STROKE_HAIRLINE));
@@ -70,12 +71,16 @@ final class HardwareMonitorWidgetView extends FrameLayout {
         LinearLayout dashboard = new LinearLayout(context);
         dashboard.setOrientation(LinearLayout.HORIZONTAL);
         dashboard.setGravity(Gravity.CENTER_VERTICAL);
-        dashboard.setPadding(dp(12), dp(8), dp(12), dp(8));
+        // Freya's CNC frame already consumes a larger material inset than the
+        // Heimdall glass frame. Keep the family material intact, but reclaim
+        // vertical content budget so the default two-row widget remains legible.
+        dashboard.setPadding(dp(12), dp(freyaFamily ? 2 : 8),
+                dp(12), dp(freyaFamily ? 2 : 8));
         dashboard.setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);
         viewport.addView(dashboard, new FrameLayout.LayoutParams(-1, -1));
 
         MetricViews cpu = createMetric(context, R.drawable.ic_hardware_temperature,
-                R.string.hardware_monitor_cpu, false);
+                R.string.hardware_monitor_cpu, false, freyaFamily);
         cpuIcon = cpu.icon;
         cpuValue = cpu.value;
         dashboard.addView(cpu.root, new LinearLayout.LayoutParams(0, -1, 1f));
@@ -88,7 +93,7 @@ final class HardwareMonitorWidgetView extends FrameLayout {
         dashboard.addView(divider, dividerParams);
 
         MetricViews ram = createMetric(context, R.drawable.ic_hardware_memory,
-                R.string.hardware_monitor_ram, true);
+                R.string.hardware_monitor_ram, true, freyaFamily);
         ramIcon = ram.icon;
         ramValue = ram.value;
         ramProgress = ram.progress;
@@ -111,7 +116,7 @@ final class HardwareMonitorWidgetView extends FrameLayout {
     }
 
     private MetricViews createMetric(Context context, int iconResource, int labelResource,
-            boolean includeProgress) {
+            boolean includeProgress, boolean compactFreya) {
         LinearLayout root = new LinearLayout(context);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setGravity(Gravity.CENTER_VERTICAL);
@@ -119,14 +124,15 @@ final class HardwareMonitorWidgetView extends FrameLayout {
         LinearLayout header = new LinearLayout(context);
         header.setOrientation(LinearLayout.HORIZONTAL);
         header.setGravity(Gravity.CENTER_VERTICAL);
-        root.addView(header, new LinearLayout.LayoutParams(-1, dp(22)));
+        root.addView(header, new LinearLayout.LayoutParams(-1, dp(compactFreya ? 18 : 22)));
 
         ImageView icon = new ImageView(context);
         icon.setImageResource(iconResource);
         icon.setScaleType(ImageView.ScaleType.FIT_CENTER);
         icon.setImageTintList(ColorStateList.valueOf(withAlpha(
                 HeimdallUi.accent(context), 0.82f)));
-        header.addView(icon, new LinearLayout.LayoutParams(dp(17), dp(17)));
+        int iconSize = compactFreya ? 15 : 17;
+        header.addView(icon, new LinearLayout.LayoutParams(dp(iconSize), dp(iconSize)));
 
         TextView label = new TextView(context);
         label.setText(labelResource);
@@ -149,8 +155,9 @@ final class HardwareMonitorWidgetView extends FrameLayout {
         if (includeProgress) {
             progress = new HardwareMonitorProgressView(context);
             LinearLayout.LayoutParams progressParams =
-                    new LinearLayout.LayoutParams(-1, dp(5));
-            progressParams.setMargins(0, dp(2), 0, dp(2));
+                    new LinearLayout.LayoutParams(-1, dp(compactFreya ? 4 : 5));
+            int progressMargin = compactFreya ? 1 : 2;
+            progressParams.setMargins(0, dp(progressMargin), 0, dp(progressMargin));
             root.addView(progress, progressParams);
         }
         return new MetricViews(root, icon, value, progress);
