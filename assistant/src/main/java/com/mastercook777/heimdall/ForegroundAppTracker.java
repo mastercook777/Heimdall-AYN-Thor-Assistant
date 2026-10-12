@@ -97,7 +97,7 @@ final class ForegroundAppTracker {
     }
 
     static boolean isObservationRequested(Context context) {
-        return isEnabled(context);
+        return isEnabled(context) && ScreenPowerObserver.isInteractive(context);
     }
 
     static void publish(Snapshot snapshot) {

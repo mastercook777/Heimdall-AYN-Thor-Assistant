@@ -19,6 +19,9 @@ final class TranslationSettingsStore {
     private static final String KEY_ALIAS = "heimdall_translation_api_key_v1";
     private static final String ANDROID_KEY_STORE = "AndroidKeyStore";
     private static final String TRANSFORMATION = "AES/GCM/NoPadding";
+    private static final String LEGACY_API_KEY = "api_key_ciphertext";
+    private static final String SILICONFLOW_API_KEY = "siliconflow_api_key_ciphertext";
+    private static final String CUSTOM_API_KEY = "custom_api_key_ciphertext";
 
     private TranslationSettingsStore() {}
 
@@ -29,7 +32,9 @@ final class TranslationSettingsStore {
         config.region = prefs.getString("region", TranslationProviderConfig.REGION_CHINA);
         config.customBaseUrl = prefs.getString("custom_base", "");
         config.customModel = prefs.getString("custom_model", "");
-        config.apiKey = decrypt(prefs.getString("api_key_ciphertext", ""));
+        migrateLegacyCiphertext(prefs, config.provider);
+        config.siliconFlowApiKey = decrypt(prefs.getString(SILICONFLOW_API_KEY, ""));
+        config.customApiKey = decrypt(prefs.getString(CUSTOM_API_KEY, ""));
         config.sanitize();
         return config;
     }
@@ -37,15 +42,31 @@ final class TranslationSettingsStore {
     static boolean save(Context context, TranslationProviderConfig value) {
         TranslationProviderConfig config = value == null
                 ? new TranslationProviderConfig() : value.copy();
-        String encrypted = encrypt(config.apiKey);
-        if (config.apiKey.length() > 0 && encrypted.length() == 0) return false;
+        String siliconFlowEncrypted = encrypt(config.siliconFlowApiKey);
+        if (config.siliconFlowApiKey.length() > 0 && siliconFlowEncrypted.length() == 0) {
+            return false;
+        }
+        String customEncrypted = encrypt(config.customApiKey);
+        if (config.customApiKey.length() > 0 && customEncrypted.length() == 0) return false;
         return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
                 .putString("provider", config.provider)
                 .putString("region", config.region)
                 .putString("custom_base", config.customBaseUrl)
                 .putString("custom_model", config.customModel)
-                .putString("api_key_ciphertext", encrypted)
+                .putString(SILICONFLOW_API_KEY, siliconFlowEncrypted)
+                .putString(CUSTOM_API_KEY, customEncrypted)
+                .remove(LEGACY_API_KEY)
                 .commit();
+    }
+
+    static void migrateLegacyCiphertext(SharedPreferences prefs, String selectedProvider) {
+        if (prefs == null || !prefs.contains(LEGACY_API_KEY)) return;
+        String legacy = prefs.getString(LEGACY_API_KEY, "");
+        String destination = TranslationProviderConfig.PROVIDER_CUSTOM.equals(selectedProvider)
+                ? CUSTOM_API_KEY : SILICONFLOW_API_KEY;
+        SharedPreferences.Editor editor = prefs.edit();
+        if (!prefs.contains(destination)) editor.putString(destination, legacy);
+        editor.remove(LEGACY_API_KEY).apply();
     }
 
     private static String encrypt(String plaintext) {

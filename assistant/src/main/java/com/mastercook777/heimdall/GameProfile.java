@@ -243,6 +243,16 @@ public final class GameProfile {
         return maps;
     }
 
+    public boolean removeMapAt(int index) {
+        ensureMapEntries();
+        if (index < 0 || index >= maps.size()) {
+            return false;
+        }
+        maps.remove(index);
+        syncLegacyMapFields();
+        return true;
+    }
+
     public void syncLegacyMapFields() {
         if (maps.isEmpty()) {
             mapTitle = "";

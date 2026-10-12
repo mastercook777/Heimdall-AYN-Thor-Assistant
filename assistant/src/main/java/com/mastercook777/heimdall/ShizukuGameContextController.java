@@ -21,9 +21,9 @@ final class ShizukuGameContextController implements AutoCloseable {
     }
 
     private static final long BIND_TIMEOUT_MS = 8_000L;
-    static final String SERVICE_PROCESS_SUFFIX = "game_context_v15";
-    static final String SERVICE_TAG = "heimdall_game_context_v15";
-    static final int SERVICE_VERSION = 14;
+    static final String SERVICE_PROCESS_SUFFIX = "game_context_v16";
+    static final String SERVICE_TAG = "heimdall_game_context_v16";
+    static final int SERVICE_VERSION = 15;
     private final Context appContext;
     private final Listener listener;
     private final Object lock = new Object();
@@ -62,6 +62,7 @@ final class ShizukuGameContextController implements AutoCloseable {
     private CountDownLatch bindLatch;
     private boolean boundRequested;
     private volatile boolean enabled;
+    private volatile int queryGeneration;
     private volatile boolean closed;
     private String lastDiagnostic = "";
 
@@ -73,6 +74,7 @@ final class ShizukuGameContextController implements AutoCloseable {
     void setEnabled(boolean enabled) {
         boolean changed = this.enabled != enabled;
         this.enabled = enabled;
+        if (changed) queryGeneration++;
         if (changed) recordDiagnostic("controller enabled=" + enabled);
         if (!enabled) {
             publish(GameContextSnapshot.UNKNOWN);
@@ -85,7 +87,35 @@ final class ShizukuGameContextController implements AutoCloseable {
     void suspend() {
         if (!enabled) return;
         enabled = false;
+        queryGeneration++;
         recordDiagnostic("controller suspended; service retained");
+    }
+
+    /** Stop process/log polling during device sleep without losing same-PID identity. */
+    void suspendForStandby() {
+        enabled = false;
+        queryGeneration++;
+        if (closed) return;
+        executor.execute(() -> {
+            IBinder service;
+            synchronized (lock) { service = binder; }
+            if (service == null || !service.isBinderAlive()) return;
+            Parcel data = Parcel.obtain();
+            Parcel reply = Parcel.obtain();
+            try {
+                data.writeInterfaceToken(ShizukuGameContextUserService.DESCRIPTOR);
+                data.writeInt(1);
+                service.transact(ShizukuGameContextUserService.TRANSACTION_SET_MONITOR_PAUSED,
+                        data, reply, 0);
+                reply.readException();
+                recordDiagnostic("monitor paused for standby; identity retained");
+            } catch (Throwable error) {
+                recordDiagnostic("monitor pause failed type=" + error.getClass().getSimpleName());
+            } finally {
+                data.recycle();
+                reply.recycle();
+            }
+        });
     }
 
     void refresh(ForegroundAppTracker.Snapshot foreground) {
@@ -106,6 +136,7 @@ final class ShizukuGameContextController implements AutoCloseable {
             recordDiagnostic("request coalesced package=" + packageName);
             return;
         }
+        final int generation = queryGeneration;
         executor.execute(() -> {
             try {
                 IBinder service = awaitService();
@@ -114,14 +145,16 @@ final class ShizukuGameContextController implements AutoCloseable {
                     publish(GameContextSnapshot.UNKNOWN);
                     return;
                 }
-                queryRemote(service, packageName);
+                if (enabled && generation == queryGeneration) {
+                    queryRemote(service, packageName, generation);
+                }
             } finally {
                 requestInFlight.set(false);
             }
         });
     }
 
-    private void queryRemote(IBinder service, String packageName) {
+    private void queryRemote(IBinder service, String packageName, int generation) {
         Parcel data = Parcel.obtain();
         Parcel reply = Parcel.obtain();
         try {
@@ -183,11 +216,11 @@ final class ShizukuGameContextController implements AutoCloseable {
             } else {
                 snapshot = GameContextSnapshot.UNKNOWN;
             }
-            publish(snapshot);
+            if (enabled && !closed && generation == queryGeneration) publish(snapshot);
         } catch (Throwable error) {
             recordDiagnostic("query failed type=" + error.getClass().getSimpleName());
             invalidateBinder();
-            publish(GameContextSnapshot.UNKNOWN);
+            if (enabled && generation == queryGeneration) publish(GameContextSnapshot.UNKNOWN);
         } finally {
             data.recycle();
             reply.recycle();

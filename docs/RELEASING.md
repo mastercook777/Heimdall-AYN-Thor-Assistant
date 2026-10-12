@@ -22,6 +22,16 @@ requires an explicit owner decision.
 Tester Debug and public Alpha use different package names and different signing
 keys. The Alpha key must never be used for Debug builds.
 
+## Native packaging and release optimization
+
+The default APK targets ARM64 and ARM32. Intel emulator builds must opt in with
+`-PheimdallAbis=arm64-v8a,armeabi-v7a,x86,x86_64`; do not publish such a diagnostic
+build as the ordinary Thor APK. Four offline OCR scripts remain bundled.
+Release code/resource shrinking is enabled with Heimdall-owned classes and JNI /
+Shizuku entrypoints preserved. Acceptance must cover the exact signed optimized
+Release candidate; an unminified Debug smoke does not validate R8 behavior.
+See `STANDBY_AND_APK_SIZE.md` for the 2026-10-10 size and standby audit.
+
 ## Version And Identity Sources
 
 - `version.properties` is the only editable source for `VERSION_CODE` and
@@ -113,11 +123,15 @@ the change's stated non-device gates have passed.
    ```powershell
    ./scripts/verify_release_readiness.ps1
    ./scripts/verify_source_boundary.ps1
+   python tools/audit_localization.py --base main
    ./gradlew.bat :assistant:assembleDebug :assistant:lintDebug --no-daemon
    ```
 
-5. Review the exact pull-request diff and merge only after CI passes.
-6. Confirm the release commit is clean and already contained in `main`.
+5. Review the changed English and Simplified-Chinese copy using
+   `docs/ENGLISH_COPY_STYLE_GUIDE.md`. The script checks structure; candidate
+   text fit and meaning still need an exact-APK pass on Thor.
+6. Review the exact pull-request diff and merge only after CI passes.
+7. Confirm the release commit is clean and already contained in `main`.
 
 ## Build The Local Real-Signed Candidate
 

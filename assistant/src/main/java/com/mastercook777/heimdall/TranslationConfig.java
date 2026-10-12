@@ -15,12 +15,22 @@ public final class TranslationConfig {
     public static final String LANGUAGE_JAPANESE = "ja";
     public static final String LANGUAGE_KOREAN = "ko";
 
+    public static final String TEXT_SIZE_COMPACT = "compact";
+    public static final String TEXT_SIZE_STANDARD = "standard";
+    public static final String TEXT_SIZE_LARGE = "large";
+    public static final String TEXT_SIZE_EXTRA_LARGE = "extra_large";
+    public static final String LINE_SPACING_COMPACT = "compact";
+    public static final String LINE_SPACING_STANDARD = "standard";
+    public static final String LINE_SPACING_RELAXED = "relaxed";
+
     public float regionLeft = 0.10f;
     public float regionTop = 0.65f;
     public float regionRight = 0.90f;
     public float regionBottom = 0.90f;
     public String ocrScript = SCRIPT_JAPANESE;
     public String targetLanguage = LANGUAGE_CHINESE_SIMPLIFIED;
+    public String textSizePreset = TEXT_SIZE_COMPACT;
+    public String lineSpacingPreset = LINE_SPACING_STANDARD;
 
     public TranslationConfig copy() {
         TranslationConfig result = new TranslationConfig();
@@ -30,6 +40,8 @@ public final class TranslationConfig {
         result.regionBottom = regionBottom;
         result.ocrScript = ocrScript;
         result.targetLanguage = targetLanguage;
+        result.textSizePreset = textSizePreset;
+        result.lineSpacingPreset = lineSpacingPreset;
         result.sanitize();
         return result;
     }
@@ -41,6 +53,8 @@ public final class TranslationConfig {
         regionBottom = clamp(regionBottom, regionTop + 0.02f, 1f);
         ocrScript = normalizeScript(ocrScript);
         targetLanguage = normalizeTargetLanguage(targetLanguage);
+        textSizePreset = normalizeTextSizePreset(textSizePreset);
+        lineSpacingPreset = normalizeLineSpacingPreset(lineSpacingPreset);
     }
 
     public JSONObject toJson() throws JSONException {
@@ -52,6 +66,8 @@ public final class TranslationConfig {
         object.put("regionBottom", regionBottom);
         object.put("ocrScript", ocrScript);
         object.put("targetLanguage", targetLanguage);
+        object.put("textSizePreset", textSizePreset);
+        object.put("lineSpacingPreset", lineSpacingPreset);
         return object;
     }
 
@@ -64,6 +80,10 @@ public final class TranslationConfig {
             result.regionBottom = (float) object.optDouble("regionBottom", result.regionBottom);
             result.ocrScript = object.optString("ocrScript", result.ocrScript);
             result.targetLanguage = object.optString("targetLanguage", result.targetLanguage);
+            result.textSizePreset = object.optString(
+                    "textSizePreset", result.textSizePreset);
+            result.lineSpacingPreset = object.optString(
+                    "lineSpacingPreset", result.lineSpacingPreset);
         }
         result.sanitize();
         return result;
@@ -85,6 +105,36 @@ public final class TranslationConfig {
             return value;
         }
         return LANGUAGE_CHINESE_SIMPLIFIED;
+    }
+
+    public static String normalizeTextSizePreset(String value) {
+        if (TEXT_SIZE_COMPACT.equals(value) || TEXT_SIZE_LARGE.equals(value)
+                || TEXT_SIZE_EXTRA_LARGE.equals(value)) {
+            return value;
+        }
+        return TEXT_SIZE_STANDARD;
+    }
+
+    public static String normalizeLineSpacingPreset(String value) {
+        if (LINE_SPACING_COMPACT.equals(value) || LINE_SPACING_RELAXED.equals(value)) {
+            return value;
+        }
+        return LINE_SPACING_STANDARD;
+    }
+
+    public int textSizeSp() {
+        String normalized = normalizeTextSizePreset(textSizePreset);
+        if (TEXT_SIZE_COMPACT.equals(normalized)) return 14;
+        if (TEXT_SIZE_LARGE.equals(normalized)) return 18;
+        if (TEXT_SIZE_EXTRA_LARGE.equals(normalized)) return 22;
+        return 16;
+    }
+
+    public int lineSpacingExtraDp() {
+        String normalized = normalizeLineSpacingPreset(lineSpacingPreset);
+        if (LINE_SPACING_COMPACT.equals(normalized)) return 0;
+        if (LINE_SPACING_RELAXED.equals(normalized)) return 5;
+        return 2;
     }
 
     public static String sourceCode(String script) {

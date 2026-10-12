@@ -30,10 +30,19 @@ final class UpperScreenMagnifierView extends FrameLayout
         void onProjectionRequested(WidgetLayout.Item item);
         void onRegionRequested(WidgetLayout.Item item, float targetAspectRatio);
         void onStopRequested();
+        void onInteractivePreparationRequested();
+        boolean isInteractiveReady();
+        boolean onInteractiveTouchStart(float sourceX, float sourceY,
+                int sourceWidth, int sourceHeight);
+        boolean onInteractiveTouchMove(float sourceX, float sourceY);
+        boolean onInteractiveTouchEnd(float sourceX, float sourceY);
+        void onInteractiveTouchCancel();
+        void onInteractiveUnavailable();
     }
 
     private final WidgetLayout.Item item;
     private final ActionListener actionListener;
+    private final boolean interactive;
     private final boolean circular;
     private final ShapeFrameLayout displayFrame;
     private final FrameLayout viewport;
@@ -62,11 +71,16 @@ final class UpperScreenMagnifierView extends FrameLayout
     private long firstTapTimeMs;
     private long lastTapTimeMs;
     private int tapCount;
+    private boolean interactiveTouchActive;
+    private boolean interactiveGestureBlocked;
+    private int interactivePointerId = MotionEvent.INVALID_POINTER_ID;
+    private final float[] mappedTouchPoint = new float[2];
 
     UpperScreenMagnifierView(Context context, WidgetLayout.Item item, ActionListener listener) {
         super(context);
         this.item = item;
         this.actionListener = listener;
+        interactive = WidgetLayout.isInteractiveMagnifier(item);
         circular = WidgetLayout.isCircularMagnifier(item);
         ViewConfiguration configuration = ViewConfiguration.get(context);
         int touchSlop = configuration.getScaledTouchSlop();
@@ -74,8 +88,9 @@ final class UpperScreenMagnifierView extends FrameLayout
         touchSlopSquared = touchSlop * touchSlop;
         multiTapSlopSquared = multiTapSlop * multiTapSlop;
         displayFrame = new ShapeFrameLayout(context, circular);
-        displayFrame.setContentDescription(
-                context.getString(R.string.magnifier_live_content_description));
+        displayFrame.setContentDescription(context.getString(interactive
+                ? R.string.portal_interactive_content_description
+                : R.string.magnifier_live_content_description));
         displayFrame.setBackground(HeimdallUi.isFreyaFamily(context)
                 ? HeimdallUi.cncInputFrame(context, HeimdallUi.RADIUS_MODULE, circular)
                 : circular
@@ -138,11 +153,14 @@ final class UpperScreenMagnifierView extends FrameLayout
         displayFrame.setOnClickListener(view -> {
             if (!UpperScreenProjectionService.isActiveOrStarting()) {
                 actionListener.onProjectionRequested(item);
-            } else if (UpperScreenProjectionService.isFrozen()) {
-                UpperScreenProjectionService.setFrozen(false);
+            } else if (!interactive && isThisPortalFrozen()) {
+                setThisPortalFrozen(false);
             }
         });
         displayFrame.setOnLongClickListener(view -> {
+            if (interactive) {
+                return false;
+            }
             float contentWidth = Math.max(1f, viewport.getWidth());
             float contentHeight = Math.max(1f, viewport.getHeight());
             actionListener.onRegionRequested(item,
@@ -173,8 +191,8 @@ final class UpperScreenMagnifierView extends FrameLayout
                             return true;
                         }
                         if (UpperScreenProjectionService.isRunning()
-                                && !UpperScreenProjectionService.isFrozen()) {
-                            UpperScreenProjectionService.setFrozen(true);
+                                && !isThisPortalFrozen()) {
+                            setThisPortalFrozen(true);
                             return true;
                         }
                         return false;
@@ -182,12 +200,17 @@ final class UpperScreenMagnifierView extends FrameLayout
 
                 });
         gestures.setIsLongpressEnabled(false);
-        displayFrame.setOnTouchListener((view, event) -> {
-            boolean tripleTapHandled = trackTripleTap(event);
-            boolean editLongPressHandled = trackEditLongPress(gestures, event);
-            boolean gestureHandled = !editLongPressHandled && gestures.onTouchEvent(event);
-            return gestureHandled || tripleTapHandled || editLongPressHandled;
-        });
+        if (interactive) {
+            displayFrame.setLongClickable(false);
+            displayFrame.setOnTouchListener((view, event) -> handleInteractiveTouch(event));
+        } else {
+            displayFrame.setOnTouchListener((view, event) -> {
+                boolean tripleTapHandled = trackTripleTap(event);
+                boolean editLongPressHandled = trackEditLongPress(gestures, event);
+                boolean gestureHandled = !editLongPressHandled && gestures.onTouchEvent(event);
+                return gestureHandled || tripleTapHandled || editLongPressHandled;
+            });
+        }
     }
 
     @Override
@@ -236,12 +259,20 @@ final class UpperScreenMagnifierView extends FrameLayout
 
     void resume() {
         resumed = true;
+        if (interactive) {
+            actionListener.onInteractivePreparationRequested();
+            if (isThisPortalFrozen()) {
+                setThisPortalFrozen(false);
+            }
+        }
         UpperScreenProjectionService.setListener(this);
-        UpperScreenProjectionService.setRegion(item.magnifierLeft, item.magnifierTop,
-                item.magnifierRight, item.magnifierBottom);
-        UpperScreenProjectionService.setTuning(
-                WidgetLayout.magnifierTargetAspectRatio(item),
-                item.magnifierFps, item.magnifierZoom);
+        if (!UpperScreenProjectionService.isMultiPortalMode()) {
+            UpperScreenProjectionService.setRegion(item.magnifierLeft, item.magnifierTop,
+                    item.magnifierRight, item.magnifierBottom);
+            UpperScreenProjectionService.setTuning(
+                    WidgetLayout.magnifierTargetAspectRatio(item),
+                    item.magnifierFps, item.magnifierZoom);
+        }
         if (UpperScreenProjectionService.isRunning()) {
             textureView.setVisibility(VISIBLE);
             statusView.setText(R.string.magnifier_connecting);
@@ -253,6 +284,20 @@ final class UpperScreenMagnifierView extends FrameLayout
 
     void pause() {
         resumed = false;
+        cancelInteractiveTouch();
+    }
+
+    String itemId() {
+        return item.itemId == null ? "" : item.itemId;
+    }
+
+    float renderedContentAspectRatio() {
+        int width = viewport.getWidth();
+        int height = viewport.getHeight();
+        if (width <= 0 || height <= 0) {
+            return 0f;
+        }
+        return width / (float) height;
     }
 
     void release() {
@@ -297,6 +342,8 @@ final class UpperScreenMagnifierView extends FrameLayout
         statusView.setVisibility(VISIBLE);
         if (active) {
             post(this::ensureOutputSurfaceIfAvailable);
+        } else {
+            cancelInteractiveTouch();
         }
         updateFrozenIndicator();
     }
@@ -337,7 +384,13 @@ final class UpperScreenMagnifierView extends FrameLayout
 
     private void attachSurfaceIfReady() {
         if (outputSurface != null && outputSurface.isValid()) {
-            UpperScreenProjectionService.attachOutputSurface(outputSurface);
+            if (UpperScreenProjectionService.isMultiPortalMode()) {
+                UpperScreenProjectionService.attachPortalOutput(itemId(), outputSurface,
+                        UpperScreenProjectionService.sourceWidth(),
+                        UpperScreenProjectionService.sourceHeight(), item);
+            } else {
+                UpperScreenProjectionService.attachOutputSurface(outputSurface);
+            }
         }
     }
 
@@ -382,6 +435,11 @@ final class UpperScreenMagnifierView extends FrameLayout
                     UpperScreenProjectionService.sourceWidth(),
                     UpperScreenProjectionService.sourceHeight());
         }
+        if (UpperScreenProjectionService.isMultiPortalMode()) {
+            UpperScreenProjectionService.updatePortalTargetSize(itemId(),
+                    UpperScreenProjectionService.sourceWidth(),
+                    UpperScreenProjectionService.sourceHeight());
+        }
     }
 
     private void detachSurface() {
@@ -389,7 +447,11 @@ final class UpperScreenMagnifierView extends FrameLayout
         if (surface == null) {
             return;
         }
-        UpperScreenProjectionService.detachOutputSurface(surface);
+        if (UpperScreenProjectionService.isMultiPortalMode()) {
+            UpperScreenProjectionService.detachPortalOutput(itemId());
+        } else {
+            UpperScreenProjectionService.detachOutputSurface(surface);
+        }
         outputSurface = null;
         outputSurfaceTexture = null;
         surface.release();
@@ -404,23 +466,32 @@ final class UpperScreenMagnifierView extends FrameLayout
             return;
         }
 
-        float centerX = (UpperScreenProjectionService.regionLeft()
-                + UpperScreenProjectionService.regionRight()) * 0.5f * sourceWidth;
-        float centerY = (UpperScreenProjectionService.regionTop()
-                + UpperScreenProjectionService.regionBottom()) * 0.5f * sourceHeight;
-        float cropWidth = Math.max(2f, (UpperScreenProjectionService.regionRight()
-                - UpperScreenProjectionService.regionLeft()) * sourceWidth);
-        float cropHeight = Math.max(2f, (UpperScreenProjectionService.regionBottom()
-                - UpperScreenProjectionService.regionTop()) * sourceHeight);
+        PortalSurfaceFanOut.Spec portalSpec = UpperScreenProjectionService.isMultiPortalMode()
+                ? UpperScreenProjectionService.portalSpec(itemId(), item) : null;
+
+        float regionLeft = portalSpec == null
+                ? UpperScreenProjectionService.regionLeft() : portalSpec.left;
+        float regionTop = portalSpec == null
+                ? UpperScreenProjectionService.regionTop() : portalSpec.top;
+        float regionRight = portalSpec == null
+                ? UpperScreenProjectionService.regionRight() : portalSpec.right;
+        float regionBottom = portalSpec == null
+                ? UpperScreenProjectionService.regionBottom() : portalSpec.bottom;
+        float centerX = (regionLeft + regionRight) * 0.5f * sourceWidth;
+        float centerY = (regionTop + regionBottom) * 0.5f * sourceHeight;
+        float cropWidth = Math.max(2f, (regionRight - regionLeft) * sourceWidth);
+        float cropHeight = Math.max(2f, (regionBottom - regionTop) * sourceHeight);
         float aspect = circular ? 1f
-                : clamp(UpperScreenProjectionService.targetAspectRatio(), 0.2f, 5f);
+                : clamp(portalSpec == null
+                        ? UpperScreenProjectionService.targetAspectRatio()
+                        : portalSpec.aspect, 0.2f, 5f);
         if (cropWidth / cropHeight > aspect) {
             cropWidth = cropHeight * aspect;
         } else {
             cropHeight = cropWidth / aspect;
         }
         float zoom = WidgetLayout.normalizeMagnifierZoom(
-                UpperScreenProjectionService.targetZoom());
+                portalSpec == null ? UpperScreenProjectionService.targetZoom() : portalSpec.zoom);
         cropWidth /= zoom;
         cropHeight /= zoom;
         float fitScale = Math.min(1f,
@@ -435,8 +506,15 @@ final class UpperScreenMagnifierView extends FrameLayout
     }
 
     private void updateFrozenIndicator() {
-        boolean frozen = UpperScreenProjectionService.isFrozen();
-        frozenStopControl.setVisibility(frozen && !circular ? VISIBLE : GONE);
+        boolean frozen = isThisPortalFrozen();
+        frozenStopControl.setVisibility(frozen && !circular && !interactive ? VISIBLE : GONE);
+        if (interactive) {
+            displayFrame.setContentDescription(getResources().getString(
+                    UpperScreenProjectionService.isActiveOrStarting()
+                            ? R.string.portal_interactive_content_description
+                            : R.string.portal_stopped_content_description));
+            return;
+        }
         if (frozen) {
             displayFrame.setContentDescription(getResources().getString(circular
                     ? R.string.magnifier_circle_paused_content_description
@@ -449,6 +527,14 @@ final class UpperScreenMagnifierView extends FrameLayout
             displayFrame.setContentDescription(getResources().getString(
                     R.string.magnifier_stopped_content_description));
         }
+    }
+
+    private boolean isThisPortalFrozen() {
+        return UpperScreenProjectionService.isPortalFrozen(itemId());
+    }
+
+    private void setThisPortalFrozen(boolean value) {
+        UpperScreenProjectionService.setPortalFrozen(itemId(), value);
     }
 
     private ImageView createFrozenStopControl(Context context) {
@@ -468,6 +554,133 @@ final class UpperScreenMagnifierView extends FrameLayout
                 HeimdallUi.rounded(context, 0xB20C1117, 0x997B8188, 10, 1));
         control.setBackground(background);
         return control;
+    }
+
+    private boolean handleInteractiveTouch(MotionEvent event) {
+        int action = event.getActionMasked();
+        if (action == MotionEvent.ACTION_DOWN) {
+            interactiveGestureBlocked = false;
+            interactivePointerId = event.getPointerId(0);
+            if (!isInsideViewport(event.getX(), event.getY())) {
+                interactivePointerId = MotionEvent.INVALID_POINTER_ID;
+                return false;
+            }
+            if (!UpperScreenProjectionService.isRunning()) {
+                actionListener.onProjectionRequested(item);
+                interactiveGestureBlocked = true;
+                return true;
+            }
+            if (!actionListener.isInteractiveReady()) {
+                actionListener.onInteractiveUnavailable();
+                interactiveGestureBlocked = true;
+                return true;
+            }
+            if (!mapEventPointToSource(event, 0, mappedTouchPoint)) {
+                interactiveGestureBlocked = true;
+                return true;
+            }
+            interactiveTouchActive = actionListener.onInteractiveTouchStart(
+                    mappedTouchPoint[0], mappedTouchPoint[1],
+                    UpperScreenProjectionService.sourceWidth(),
+                    UpperScreenProjectionService.sourceHeight());
+            interactiveGestureBlocked = !interactiveTouchActive;
+            return true;
+        }
+        if (action == MotionEvent.ACTION_POINTER_DOWN) {
+            cancelInteractiveTouch();
+            interactiveGestureBlocked = true;
+            return true;
+        }
+        if (action == MotionEvent.ACTION_CANCEL) {
+            cancelInteractiveTouch();
+            interactiveGestureBlocked = false;
+            interactivePointerId = MotionEvent.INVALID_POINTER_ID;
+            return true;
+        }
+        if (interactiveGestureBlocked) {
+            if (action == MotionEvent.ACTION_UP) {
+                interactiveGestureBlocked = false;
+                interactivePointerId = MotionEvent.INVALID_POINTER_ID;
+            }
+            return true;
+        }
+        int pointerIndex = event.findPointerIndex(interactivePointerId);
+        if (pointerIndex < 0 || !mapEventPointToSource(event, pointerIndex, mappedTouchPoint)) {
+            cancelInteractiveTouch();
+            interactiveGestureBlocked = true;
+            return true;
+        }
+        if (circular && !isInsideViewport(
+                event.getX(pointerIndex), event.getY(pointerIndex))) {
+            cancelInteractiveTouch();
+            interactiveGestureBlocked = true;
+            return true;
+        }
+        if (action == MotionEvent.ACTION_MOVE) {
+            if (interactiveTouchActive && !actionListener.onInteractiveTouchMove(
+                    mappedTouchPoint[0], mappedTouchPoint[1])) {
+                cancelInteractiveTouch();
+                interactiveGestureBlocked = true;
+            }
+            return true;
+        }
+        if (action == MotionEvent.ACTION_UP) {
+            if (interactiveTouchActive) {
+                actionListener.onInteractiveTouchEnd(mappedTouchPoint[0], mappedTouchPoint[1]);
+            }
+            interactiveTouchActive = false;
+            interactivePointerId = MotionEvent.INVALID_POINTER_ID;
+            return true;
+        }
+        return true;
+    }
+
+    private boolean isInsideViewport(float x, float y) {
+        if (x < viewport.getLeft() || x > viewport.getRight()
+                || y < viewport.getTop() || y > viewport.getBottom()) {
+            return false;
+        }
+        if (!circular) {
+            return true;
+        }
+        float localX = x - viewport.getLeft();
+        float localY = y - viewport.getTop();
+        float radius = Math.min(viewport.getWidth(), viewport.getHeight()) * 0.5f;
+        float dx = localX - viewport.getWidth() * 0.5f;
+        float dy = localY - viewport.getHeight() * 0.5f;
+        return dx * dx + dy * dy <= radius * radius;
+    }
+
+    private boolean mapEventPointToSource(MotionEvent event, int pointerIndex, float[] out) {
+        float localX = event.getX(pointerIndex) - viewport.getLeft();
+        float localY = event.getY(pointerIndex) - viewport.getTop();
+        return sourceViewport.mapRenderedPointToSource(localX, localY, out);
+    }
+
+    private void cancelInteractiveTouch() {
+        if (interactiveTouchActive) {
+            actionListener.onInteractiveTouchCancel();
+        }
+        interactiveTouchActive = false;
+        interactivePointerId = MotionEvent.INVALID_POINTER_ID;
+    }
+
+    static boolean mapRenderedPointToSource(float viewX, float viewY,
+            float viewportWidth, float viewportHeight,
+            float cropLeft, float cropTop, float cropWidth, float cropHeight,
+            int sourceWidth, int sourceHeight, float[] out) {
+        if (out == null || out.length < 2 || viewportWidth <= 0f || viewportHeight <= 0f
+                || cropWidth <= 0f || cropHeight <= 0f
+                || sourceWidth <= 0 || sourceHeight <= 0) {
+            return false;
+        }
+        float scaleX = viewportWidth / cropWidth;
+        float scaleY = viewportHeight / cropHeight;
+        float clampedX = clamp(viewX, 0f, viewportWidth);
+        float clampedY = clamp(viewY, 0f, viewportHeight);
+        out[0] = clamp(cropLeft + clampedX / scaleX, 0f, sourceWidth - 1f);
+        out[1] = clamp(cropTop + clampedY / scaleY, 0f, sourceHeight - 1f);
+        return true;
     }
 
     private boolean trackTripleTap(MotionEvent event) {
@@ -678,6 +891,13 @@ final class UpperScreenMagnifierView extends FrameLayout
             cropWidth = Math.max(1f, width);
             cropHeight = Math.max(1f, height);
             invalidate();
+        }
+
+        boolean mapRenderedPointToSource(float x, float y, float[] out) {
+            return UpperScreenMagnifierView.mapRenderedPointToSource(
+                    x, y, getWidth(), getHeight(),
+                    cropLeft, cropTop, cropWidth, cropHeight,
+                    sourceWidth, sourceHeight, out);
         }
 
         @Override

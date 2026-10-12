@@ -1,5 +1,7 @@
 package com.mastercook777.heimdall;
 
+import java.net.URI;
+
 public final class TranslationProviderConfig {
     public static final String PROVIDER_SILICONFLOW = "siliconflow";
     public static final String PROVIDER_CUSTOM = "custom_openai";
@@ -12,7 +14,8 @@ public final class TranslationProviderConfig {
 
     public String provider = PROVIDER_SILICONFLOW;
     public String region = REGION_CHINA;
-    public String apiKey = "";
+    public String siliconFlowApiKey = "";
+    public String customApiKey = "";
     public String customBaseUrl = "";
     public String customModel = "";
 
@@ -20,7 +23,8 @@ public final class TranslationProviderConfig {
         TranslationProviderConfig result = new TranslationProviderConfig();
         result.provider = provider;
         result.region = region;
-        result.apiKey = apiKey;
+        result.siliconFlowApiKey = siliconFlowApiKey;
+        result.customApiKey = customApiKey;
         result.customBaseUrl = customBaseUrl;
         result.customModel = customModel;
         result.sanitize();
@@ -30,9 +34,21 @@ public final class TranslationProviderConfig {
     public void sanitize() {
         provider = PROVIDER_CUSTOM.equals(provider) ? PROVIDER_CUSTOM : PROVIDER_SILICONFLOW;
         region = REGION_GLOBAL.equals(region) ? REGION_GLOBAL : REGION_CHINA;
-        apiKey = safe(apiKey);
+        siliconFlowApiKey = safe(siliconFlowApiKey);
+        customApiKey = safe(customApiKey);
         customBaseUrl = safe(customBaseUrl);
         customModel = safe(customModel);
+    }
+
+    public String activeApiKey() {
+        sanitize();
+        return PROVIDER_CUSTOM.equals(provider) ? customApiKey : siliconFlowApiKey;
+    }
+
+    public void setActiveApiKey(String value) {
+        String sanitized = safe(value);
+        if (PROVIDER_CUSTOM.equals(provider)) customApiKey = sanitized;
+        else siliconFlowApiKey = sanitized;
     }
 
     public String resolvedBaseUrl() {
@@ -52,8 +68,18 @@ public final class TranslationProviderConfig {
     public boolean isComplete() {
         sanitize();
         String baseUrl = resolvedBaseUrl();
-        return apiKey.length() > 0 && resolvedModel().length() > 0
+        return activeApiKey().length() > 0 && resolvedModel().length() > 0
                 && baseUrl.startsWith("https://");
+    }
+
+    public boolean isOfficialDeepSeekEndpoint() {
+        if (!PROVIDER_CUSTOM.equals(provider)) return false;
+        try {
+            String host = new URI(resolvedBaseUrl()).getHost();
+            return host != null && "api.deepseek.com".equalsIgnoreCase(host);
+        } catch (Exception ignored) {
+            return false;
+        }
     }
 
     private static String safe(String value) {
