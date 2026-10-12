@@ -53,6 +53,15 @@ final class GuideTextLoader {
         });
     }
 
+    static void loadUri(Context context, Uri uri, Callback callback) {
+        Context appContext = context.getApplicationContext();
+        Handler main = new Handler(Looper.getMainLooper());
+        EXECUTOR.execute(() -> {
+            Result result = loadFile(appContext, uri);
+            main.post(() -> callback.onLoaded(result));
+        });
+    }
+
     private static Result loadNote(String content) {
         byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
         if (bytes.length > GuideTextDocument.MAX_BYTES) {
@@ -62,9 +71,13 @@ final class GuideTextLoader {
     }
 
     private static Result loadFile(Context context, String rawUri) {
+        String value = rawUri == null ? "" : rawUri.trim();
+        Uri uri = Uri.parse(value.contains("://") ? value : "file://" + value);
+        return loadFile(context, uri);
+    }
+
+    private static Result loadFile(Context context, Uri uri) {
         try {
-            String value = rawUri == null ? "" : rawUri.trim();
-            Uri uri = Uri.parse(value.contains("://") ? value : "file://" + value);
             try (InputStream input = context.getContentResolver().openInputStream(uri)) {
                 if (input == null) {
                     return new Result(null, Failure.UNREADABLE);

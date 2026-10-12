@@ -17,7 +17,7 @@
 
 English | [简体中文](README.zh-CN.md)
 
-Heimdall keeps the game on Thor's upper screen while the lower screen becomes a persistent control and reference console: Profiles, macros, touch controls, translation, hardware status, maps, guides, local-media Canvases, magnification, recording, and Quick Actions stay within thumb reach.
+Heimdall keeps the game on Thor's upper screen while the lower screen becomes a persistent control and reference console: Profiles, macros, touch controls, translation, hardware status, maps, guides, local-media Canvases, Portals, recording, and Quick Actions stay within thumb reach.
 
 > **Alpha software:** Heimdall targets AYN Thor. Compatibility is not guaranteed for every Thor firmware, controller mode, game, emulator, or other dual-screen device.
 
@@ -30,7 +30,7 @@ Heimdall keeps the game on Thor's upper screen while the lower screen becomes a 
   </tr>
   <tr>
     <td align="center"><strong>Active play:</strong> Precision Aim and circular magnification</td>
-    <td align="center"><strong>Profile controls:</strong> magnifier, touchpad, and Macros</td>
+    <td align="center"><strong>Profile controls:</strong> Portal, touchpad, and Macros</td>
   </tr>
   <tr>
     <td width="50%"><img src="docs/assets/readme/thor-guide-reader.jpg" alt="AYN Thor game on the upper screen with a local text Guide open in Heimdall on the lower screen"></td>
@@ -46,12 +46,12 @@ Heimdall keeps the game on Thor's upper screen while the lower screen becomes a 
 
 | Area | What Heimdall provides |
 | --- | --- |
-| Profiles and Grid | Separate game layouts, App bindings, themes, touch settings, maps, guides, and Canvases. Drag and resize modules on a visible 12 x 8 Grid, then save explicitly. |
+| Profiles and Grid | Separate game layouts, App bindings, themes, touch settings, maps, guides, and Canvases. Drag and resize modules on a visible 12 x 8 Grid, then save explicitly. Browse curated Community Profiles and import each as a new Profile. |
 | Macros | Structured tap, hold, swipe, wait, and physical-controller sequences, including a controller composer with chords, charge holds, recomposition, mirroring, cloning, and bounded cancellation. No free-form command editing is required. |
 | Touch and aiming | Basic Touch, touchpad drag, Virtual Right Stick, Precision Aim, a real relative Virtual Mouse, and mapping-compatible Shizuku Touch when the required route is available. |
 | PC keyboard | A temporary complete US ANSI keyboard plus Profile-owned configurable Keypad modules through Shizuku/uinput. This is active-play PC input, not Android IME text entry. |
 | Reference tools | Local maps, PDFs, guides, Interactive Map links, and Profile-owned image or muted looping-video Canvases. |
-| Upper-screen tools | Screenshot, screen recording, and one live region magnifier per Profile. |
+| Upper-screen tools | Screenshot, screen recording, and up to two live Portals per Profile. A Portal can show an upper-screen region or send one-finger touches to it. |
 | Translation and status | Profile-owned upper-screen text translation with on-device OCR, plus a passive CPU-temperature and RAM monitor when Thor exposes the required ordinary-App sensor. |
 | Appearance | Six registered Heimdall/Freya colorways, optional per-Profile theme binding, and an experimental App-global opt-in switch for theme-matched Thor joystick LEDs. |
 
@@ -72,11 +72,11 @@ Heimdall keeps the game on Thor's upper screen while the lower screen becomes a 
 
 | What you want to use | Required setup |
 | --- | --- |
-| Profiles, Grid, maps, guides, Canvas, and normal UI | Install Heimdall only. No Developer options or Shizuku required. |
+| Profiles, Grid, maps, guides, Canvas, Community Profile browsing, and normal UI | Install Heimdall only. The Community catalog and downloads need a network connection. |
 | Upper-screen taps, holds, swipes, and compatible touchpad drag | Enable the Heimdall Accessibility service for **Basic Touch**. |
 | Real-time Translation | Enable Heimdall Accessibility for upper-screen capture, then configure a supported HTTPS translation provider and API key. OCR runs on-device; recognized text is sent to the selected provider. |
 | Physical-controller recording/replay, Virtual Right Stick, Precision Aim, Virtual Mouse, PC Keyboard, or mapping-compatible Enhanced Touch | Install, start, and authorize **Shizuku**. This route needs Developer options for wireless debugging. |
-| Live magnifier or screen recording | Accept Android's screen-capture consent when Heimdall requests it. |
+| View Only or Interactive Portal, or screen recording | Accept Android's screen-capture consent when Heimdall requests it. Interactive Portal also requires Shizuku and the available Enhanced Touch route. |
 
 You do not need to enable every permission during first launch. Start with one Profile and one route, test it, then add features as needed.
 
@@ -123,7 +123,7 @@ Older builds export configuration-only JSON, which remains importable but cannot
 
 Basic Touch sends compatible taps, holds, swipes, and touchpad drags to the upper screen through Android Accessibility. It does not require Shizuku or Developer options.
 
-1. Open **Settings > Connection** in Heimdall.
+1. Open **Settings > Connections** in Heimdall.
 2. Choose **Basic Touch** and tap its enable action.
 3. In Android Accessibility settings, find Heimdall, read the system warning, and enable the service.
 4. Return to Heimdall and confirm Basic Touch is available.
@@ -131,7 +131,7 @@ Basic Touch sends compatible taps, holds, swipes, and touchpad drags to the uppe
 
 > Basic Accessibility touch and Thor's built-in mapper use separate touch streams and may cancel each other when used simultaneously. If coexistence is required, use the mapping-compatible Enhanced Touch route only when Heimdall reports it as available.
 
-## 4. Set Up Shizuku For Controller Enhancement (Optional)
+## 4. Set Up Shizuku for Advanced Controls (Optional)
 
 Shizuku is needed for physical-controller recording/replay, Virtual Right Stick, Precision Aim, and mapping-compatible Enhanced Touch. Heimdall does not require root.
 
@@ -161,9 +161,9 @@ Developer options are now available. You normally do not need to repeat these ei
 4. Choose **Pair device with pairing code**.
 5. Enter the displayed code in Shizuku's notification or pairing screen.
 6. Return to Shizuku, tap **Start**, and wait for it to report that Shizuku is running.
-7. Open **Heimdall > Settings > Connection > Controller Enhancement**.
+7. Open **Heimdall > Settings > Connections > Advanced Controls**.
 8. Tap the authorize/connect action and allow Heimdall in the Shizuku permission dialog.
-9. Return to Heimdall and confirm Controller Enhancement is available.
+9. Return to Heimdall and confirm Advanced Controls are available.
 
 After restarting Thor, check Shizuku before using controller features. If it is no longer running, start it again; pairing normally does not need to be repeated.
 
@@ -185,19 +185,20 @@ Open the visual Grid editor to add, drag, resize, or remove modules. Modules sna
 
 ### Physical-Controller Macros
 
-Controller recording and replay require Shizuku and an available Controller Enhancement route. Thor's built-in mapper may hide already-mapped physical buttons from Heimdall's recording stream. If this happens, begin recording, temporarily return to Android Home to press the button, then return to Heimdall to review and save the sequence.
+Controller recording and replay require Shizuku and an available Advanced Controls route. Thor's built-in mapper may hide already-mapped physical buttons from Heimdall's recording stream. If this happens, begin recording, temporarily return to Android Home to press the button, then return to Heimdall to review and save the sequence.
 
 Enhanced Touch protects Thor's built-in mapping by default and rejects Macros containing physical-controller steps before replay. If the mapper is off, you may disable that protection for the current Profile; screen steps still use the strict mapping-compatible touch route and never fall back to Accessibility.
 
 ### Touchpad, Virtual Right Stick, And Precision Aim
 
 - **Touch drag** converts lower-screen finger movement into an upper-screen drag.
-- **Virtual Right Stick** emits Thor right-stick input through Controller Enhancement and should return to neutral immediately after release.
+- **Virtual Right Stick** emits Thor right-stick input through Advanced Controls and should return to neutral immediately after release.
 - **Precision Aim** is for small camera corrections. Start with low sensitivity and keep the physical stick for large turns.
 
-### Magnifier, Maps, Guides, And Canvas
+### Portal, Community Profiles, Maps, Guides, And Canvas
 
-- Add the magnifier to the Grid, accept Android's capture consent, and select the upper-screen region. Hold the module to reselect the region. One live magnifier is supported per Profile, and it cannot run at the same time as screen recording.
+- Add up to two Portals to a Profile's Grid. Each Portal has its own upper-screen region, zoom, shape, frame rate, and View Only or Interactive mode. Both share one screen-capture session. Interactive mode sends one-finger input through the available Shizuku Enhanced Touch route; only one Portal gesture can be active at a time. Portal and screen recording cannot run together. Choose the region in Portal Settings, then press Save; Grid placement has its own Save.
+- Open **Community Profiles** from Profile management to browse the curated catalog. A download is checked against its catalog size and SHA-256, validated as a `.heimdall-profile` bundle, and imported as a new Profile. Existing Profiles are not replaced. The catalog and bundles come from the [community repository](https://github.com/mastercook777/heimdall-community-profiles).
 - Maps and guides belong to the current Profile and may reference local images, PDFs, text, or an Interactive Map URL.
 - Canvas accepts local JPG, PNG, GIF, WebP, and MP4 media. GIF and animated WebP require Android 9 or newer; MP4 is always muted and loops. A Profile can contain multiple independent static Canvases, while GIF, animated WebP, and MP4 share a limit of one dynamic Canvas. Files are limited to 50 MiB; images may be up to 4096 × 4096 and MP4 video up to 2048px on its longest side. APNG is not supported. Double-tap a Canvas for full-screen viewing and hold it to replace its media or adjust composition.
 
@@ -206,6 +207,7 @@ Enhanced Touch protects Thor's built-in mapping by default and rejects Macros co
 - Add one Translation module to a Profile, hold it to choose the upper-screen region, OCR script, and target language, then save the component. The runtime region shortcut commits only the confirmed region; it does not save unrelated Grid placement changes.
 - Translation uses Heimdall Accessibility screenshots and bundled on-device ML Kit OCR. It does not acquire MediaProjection. Only recognized text is sent over HTTPS to the configured SiliconFlow or custom OpenAI-compatible `/chat/completions` endpoint.
 - Provider settings and the API key are App-global. The API key is encrypted with Android Keystore and is not included in Profile JSON or `.heimdall-profile` exports.
+- **Test connection** checks the current Settings draft. Press the Settings footer **Save** after a successful test to make that provider configuration active.
 - Add one Hardware Monitor per Profile to show CPU temperature and used/total RAM. It needs no Shizuku permission and shows unavailable rather than guessing when Thor's verified CPU sensor cannot be read uniquely.
 
 ### Themes And Joystick Lighting
@@ -228,13 +230,13 @@ Android platform backup is disabled for this Alpha. Uninstalling the App removes
 - Mapping-compatible Shizuku Touch is verified only on tested Thor firmware, game, and mapper combinations. Other firmware may report it unavailable.
 - Basic Accessibility touch and Thor's built-in mapper may cancel each other during simultaneous operation.
 - Thor's mapper may hide mapped controller buttons from the Macro recorder.
-- Only one live magnifier is supported per Profile, and magnification cannot share MediaProjection with recording.
-- After a lower-screen Tab round trip, the frozen magnifier's Stop marker can occasionally be missing; stopping can also leave the final retained frame visible. These are known presentation-state issues, not proof that the frame is still live.
+- A Profile supports at most two live Portals. Interactive input is one finger and one active Portal gesture at a time. Portals cannot share MediaProjection with recording.
+- After a lower-screen Tab round trip, a frozen Portal's Stop marker can occasionally be missing; stopping can also leave the final retained frame visible. These are known presentation-state issues, not proof that the frame is still live.
 - Translation quality, latency, and service availability depend on the selected OCR script, network, model, and provider. SiliconFlow China with Hunyuan-MT-7B is the owner-tested route; other listed or custom OpenAI-compatible endpoints are protocol-compatible but not all are Thor-validated.
 - Hardware Monitor reports CPU temperature only when Thor exposes one unique readable `cpu-0-1` thermal source to the ordinary App process. It intentionally does not substitute battery temperature or estimate fan speed.
-- Theme-matched joystick lighting is experimental, depends on Thor firmware behavior, and remains off by default. A fixed segment near the upper-left of the left joystick may retain a stale/different color or remain lit after Theme, brightness, or switch changes. If this occurs, use Thor's system lighting controls to restore or disable the lights.
+- Theme-matched joystick lighting remains optional and off by default. It uses the Thor stock-lighting protocol; if firmware behavior differs, use Thor's system lighting controls to restore or disable the lights.
 
-Read the [v0.3.0-alpha.1 release notes](docs/releases/v0.3.0-alpha.1.md) for the complete tested scope, migration notes, and known limitations. The visually reviewed 0.2.0 [English](docs/guides/Heimdall-0.2.0-alpha.1-User-Guide-en.pdf) and [Simplified-Chinese](docs/guides/Heimdall-0.2.0-alpha.1-User-Guide-zh-CN.pdf) PDF guides remain available as archived references; this README is the current setup guide for 0.3.0.
+Read the [v0.4.0-alpha.1 release notes](docs/releases/v0.4.0-alpha.1.md) for the new scope and known limitations. The visually reviewed 0.2.0 [English](docs/guides/Heimdall-0.2.0-alpha.1-User-Guide-en.pdf) and [Simplified-Chinese](docs/guides/Heimdall-0.2.0-alpha.1-User-Guide-zh-CN.pdf) PDF guides remain archived references; this README is the current setup guide.
 
 ## Helpful Bug Reports
 

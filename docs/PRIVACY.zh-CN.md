@@ -22,7 +22,7 @@ Profile、宏、布局数据、地图、攻略、Canvas 图片、设置、导入
 
 ## 屏幕捕获与音频
 
-在系统支持时，截图使用 Android 可识别显示屏的无障碍 API。录屏和实时放大镜需要明确的 Android MediaProjection 授权。游戏声音录制使用 Android Audio Playback Capture，不选择麦克风输入；上屏应用可以拒绝播放音频捕获。
+在系统支持时，截图使用 Android 可识别显示屏的无障碍 API。录屏和实时界门需要明确的 Android MediaProjection 授权。游戏声音录制使用 Android Audio Playback Capture，不选择麦克风输入；上屏应用可以拒绝播放音频捕获。
 
 ## 本地 OCR 与 ML Kit 指标
 
@@ -33,6 +33,8 @@ Google 说明 ML Kit SDK 可能为获取修复、模型或硬件加速兼容信�
 ## 网络
 
 联网和网络状态权限用于玩家自行配置的 Interactive Map 页面及连接状态。为保证页面兼容性，Interactive Map 页面可以运行 JavaScript，但 Heimdall 不向页面暴露 JavaScript 接口。
+
+玩家打开社区 Profile 时，Heimdall 会通过 HTTPS 从官方 GitHub 仓库获取精选目录；打开条目时可能下载预览图，选择“下载并导入”后会从目录列出的 HTTPS 来源下载 Profile 迁移包。目录保存在应用存储中，预览和下载内容使用临时缓存。迁移包在进入正常导入流程前，会按目录中的字节大小和 SHA-256 校验。浏览或导入社区 Profile 不会上传玩家已有的 Profile。
 
 可选的实时翻译模块通过 Android 无障碍服务捕获玩家选定的上屏区域，并使用应用内置的 ML Kit 识别器在本机完成 OCR。Heimdall 会把已识别文字、目标语言和简短翻译指令通过 HTTPS 发送给已配置的 SiliconFlow 或自定义 OpenAI 兼容 `/chat/completions` 接口；截图本身不会发送。翻译服务商自己的隐私、保留、账户和计费条款仍然适用。
 

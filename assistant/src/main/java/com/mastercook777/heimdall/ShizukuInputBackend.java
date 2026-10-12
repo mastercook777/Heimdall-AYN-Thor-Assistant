@@ -9,11 +9,20 @@ import android.view.Surface;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 
 public final class ShizukuInputBackend implements InputBackend {
     private final AccessibilityInputBackend fallback = new AccessibilityInputBackend();
     private final Object touchLock = new Object();
     private final ExecutorService touchExecutor = Executors.newSingleThreadExecutor();
+    private final ScheduledExecutorService portalTouchLeaseExecutor =
+            Executors.newSingleThreadScheduledExecutor(runnable -> {
+                Thread thread = new Thread(runnable, "portal-touch-heartbeat");
+                thread.setDaemon(true);
+                return thread;
+            });
     private final ShizukuTouchMacroReplay touchMacroReplay =
             new ShizukuTouchMacroReplay(touchExecutor);
     private boolean nativeTouchActive;
@@ -28,12 +37,28 @@ public final class ShizukuInputBackend implements InputBackend {
     private float pendingNativeTouchDy;
     private int pendingNativeTouchFrameMs = 8;
     private InputBridge.Callback nativeTouchCallback;
+    private boolean portalTouchActive;
+    private boolean portalTouchMoveScheduled;
+    private int portalTouchGeneration;
+    private int portalTouchMoveSerial;
+    private int portalTouchWidth;
+    private int portalTouchHeight;
+    private int portalTouchRotation;
+    private int portalTouchX;
+    private int portalTouchY;
+    private Context portalTouchContext;
+    private InputBridge.Callback portalTouchCallback;
+    private ScheduledFuture<?> portalTouchHeartbeat;
     private final Object macroLock = new Object();
     private int nativeMacroGeneration;
     private Thread nativeMacroThread;
     private InputBridge.Callback nativeMacroCallback;
     private String nativeMacroLabel = "";
     private boolean nativeMacroCancelRequested;
+
+    ShizukuInputBackend() {
+        ShizukuNativeController.addServiceLossListener(this::handleServiceLoss);
+    }
 
     @Override
     public String name() {
@@ -63,7 +88,7 @@ public final class ShizukuInputBackend implements InputBackend {
     public void dispatchMappedTouchMacro(Context context, Macro macro,
             boolean allowControllerSteps, InputBridge.Callback callback) {
         synchronized (touchLock) {
-            if (nativeTouchActive) {
+            if (nativeTouchActive || portalTouchActive) {
                 callback.onError(context.getString(
                         R.string.macro_enhanced_touch_gesture_busy));
                 return;
@@ -277,7 +302,7 @@ public final class ShizukuInputBackend implements InputBackend {
             return false;
         }
         synchronized (touchLock) {
-            if (touchMacroReplay.isRunning()) {
+            if (touchMacroReplay.isRunning() || portalTouchActive) {
                 callback.onError(context.getString(
                         R.string.touchpad_enhanced_touch_macro_busy));
                 return false;
@@ -346,6 +371,256 @@ public final class ShizukuInputBackend implements InputBackend {
             pendingNativeTouchDy = 0f;
         }
         enqueueNativeTouchEvent(context, MotionEvent.ACTION_CANCEL, x, y, callback);
+    }
+
+    boolean startPortalTouch(Context context, int width, int height, float x, float y,
+            InputBridge.Callback callback) {
+        if (context == null || callback == null || width <= 0 || height <= 0
+                || !InputBridge.advancedControlsReady(context)
+                || !ShizukuNativeController.isServiceBound()) {
+            if (context != null && callback != null) {
+                callback.onError(context.getString(R.string.portal_interactive_unavailable));
+            }
+            return false;
+        }
+        Context appContext = context.getApplicationContext();
+        int generation;
+        int touchX = clampCoordinate(x, width);
+        int touchY = clampCoordinate(y, height);
+        synchronized (touchLock) {
+            if (touchMacroReplay.isRunning() || nativeTouchActive || portalTouchActive) {
+                callback.onError(context.getString(R.string.portal_touch_busy));
+                return false;
+            }
+            generation = ++portalTouchGeneration;
+            portalTouchActive = true;
+            portalTouchMoveScheduled = false;
+            portalTouchMoveSerial = 0;
+            portalTouchWidth = width;
+            portalTouchHeight = height;
+            portalTouchRotation = resolveDisplayRotation(context, Display.DEFAULT_DISPLAY);
+            portalTouchX = touchX;
+            portalTouchY = touchY;
+            portalTouchContext = appContext;
+            portalTouchCallback = callback;
+            schedulePortalHeartbeatLocked(generation);
+        }
+        touchExecutor.execute(() -> emitPortalFrame(appContext, generation,
+                MotionEvent.ACTION_DOWN, touchX, touchY, callback));
+        return true;
+    }
+
+    boolean movePortalTouch(Context context, float x, float y) {
+        synchronized (touchLock) {
+            if (!portalTouchActive) {
+                return false;
+            }
+            portalTouchX = clampCoordinate(x, portalTouchWidth);
+            portalTouchY = clampCoordinate(y, portalTouchHeight);
+            portalTouchMoveSerial++;
+            schedulePortalMoveLocked(portalTouchContext, portalTouchGeneration);
+            return true;
+        }
+    }
+
+    boolean endPortalTouch(Context context, float x, float y) {
+        return finishPortalTouch(context, MotionEvent.ACTION_UP, x, y);
+    }
+
+    void cancelPortalTouch(Context context) {
+        int x;
+        int y;
+        synchronized (touchLock) {
+            if (!portalTouchActive) {
+                return;
+            }
+            x = portalTouchX;
+            y = portalTouchY;
+        }
+        finishPortalTouch(context, MotionEvent.ACTION_CANCEL, x, y);
+    }
+
+    private boolean finishPortalTouch(Context context, int action, float x, float y) {
+        Context appContext;
+        InputBridge.Callback callback;
+        int generation;
+        int touchX;
+        int touchY;
+        int width;
+        int height;
+        int rotation;
+        synchronized (touchLock) {
+            if (!portalTouchActive) {
+                return false;
+            }
+            appContext = portalTouchContext != null
+                    ? portalTouchContext : context.getApplicationContext();
+            callback = portalTouchCallback;
+            generation = portalTouchGeneration;
+            touchX = clampCoordinate(x, portalTouchWidth);
+            touchY = clampCoordinate(y, portalTouchHeight);
+            width = portalTouchWidth;
+            height = portalTouchHeight;
+            rotation = portalTouchRotation;
+            portalTouchX = touchX;
+            portalTouchY = touchY;
+            portalTouchActive = false;
+            portalTouchMoveSerial++;
+            cancelPortalHeartbeatLocked();
+        }
+        touchExecutor.execute(() -> {
+            String result = ShizukuNativeController.injectPortalTouchEvent(appContext,
+                    Display.DEFAULT_DISPLAY, action, touchX, touchY,
+                    width, height, rotation);
+            if (!"ok".equals(result)) {
+                ShizukuNativeController.releaseMappedTouch(appContext);
+                notifyPortalFailure(generation, callback, appContext);
+            } else if (action == MotionEvent.ACTION_CANCEL) {
+                ShizukuNativeController.releaseMappedTouch(appContext);
+            }
+            synchronized (touchLock) {
+                if (generation == portalTouchGeneration && !portalTouchActive) {
+                    portalTouchContext = null;
+                    portalTouchCallback = null;
+                }
+            }
+        });
+        return true;
+    }
+
+    private void schedulePortalMoveLocked(Context context, int generation) {
+        if (portalTouchMoveScheduled || context == null) {
+            return;
+        }
+        portalTouchMoveScheduled = true;
+        touchExecutor.execute(() -> drainPortalMove(context, generation));
+    }
+
+    private void drainPortalMove(Context context, int generation) {
+        int x;
+        int y;
+        int width;
+        int height;
+        int rotation;
+        int serial;
+        InputBridge.Callback callback;
+        synchronized (touchLock) {
+            if (generation != portalTouchGeneration || !portalTouchActive) {
+                portalTouchMoveScheduled = false;
+                return;
+            }
+            x = portalTouchX;
+            y = portalTouchY;
+            width = portalTouchWidth;
+            height = portalTouchHeight;
+            rotation = portalTouchRotation;
+            serial = portalTouchMoveSerial;
+            callback = portalTouchCallback;
+        }
+        String result = ShizukuNativeController.injectPortalTouchEvent(context,
+                Display.DEFAULT_DISPLAY, MotionEvent.ACTION_MOVE, x, y,
+                width, height, rotation);
+        if (!"ok".equals(result)) {
+            ShizukuNativeController.releaseMappedTouch(context);
+            notifyPortalFailure(generation, callback, context);
+            return;
+        }
+        synchronized (touchLock) {
+            portalTouchMoveScheduled = false;
+            if (generation == portalTouchGeneration && portalTouchActive
+                    && serial != portalTouchMoveSerial) {
+                schedulePortalMoveLocked(context, generation);
+            }
+        }
+    }
+
+    private void emitPortalFrame(Context context, int generation, int action,
+            int x, int y, InputBridge.Callback callback) {
+        int width;
+        int height;
+        int rotation;
+        synchronized (touchLock) {
+            if (generation != portalTouchGeneration) {
+                return;
+            }
+            width = portalTouchWidth;
+            height = portalTouchHeight;
+            rotation = portalTouchRotation;
+        }
+        String result = ShizukuNativeController.injectPortalTouchEvent(context,
+                Display.DEFAULT_DISPLAY, action, x, y, width, height, rotation);
+        if (!"ok".equals(result)) {
+            ShizukuNativeController.releaseMappedTouch(context);
+            notifyPortalFailure(generation, callback, context);
+        }
+    }
+
+    private void notifyPortalFailure(int generation, InputBridge.Callback callback,
+            Context context) {
+        synchronized (touchLock) {
+            if (generation != portalTouchGeneration) {
+                return;
+            }
+            portalTouchActive = false;
+            portalTouchMoveScheduled = false;
+            portalTouchMoveSerial++;
+            portalTouchContext = null;
+            portalTouchCallback = null;
+            cancelPortalHeartbeatLocked();
+            portalTouchGeneration++;
+        }
+        if (callback != null) {
+            AssistantMainHandler.post(() -> callback.onError(
+                    context.getString(R.string.portal_touch_failed)));
+        }
+    }
+
+    private void handleServiceLoss() {
+        InputBridge.Callback callback;
+        Context context;
+        synchronized (touchLock) {
+            if (!portalTouchActive) {
+                return;
+            }
+            callback = portalTouchCallback;
+            context = portalTouchContext;
+            portalTouchActive = false;
+            portalTouchMoveScheduled = false;
+            portalTouchMoveSerial++;
+            portalTouchContext = null;
+            portalTouchCallback = null;
+            cancelPortalHeartbeatLocked();
+            portalTouchGeneration++;
+        }
+        if (callback != null && context != null) {
+            AssistantMainHandler.post(() -> callback.onError(
+                    context.getString(R.string.portal_interactive_unavailable)));
+        }
+    }
+
+    private int clampCoordinate(float value, int size) {
+        return Math.round(clamp(value, 1f, Math.max(1f, size - 1f)));
+    }
+
+    private void schedulePortalHeartbeatLocked(int generation) {
+        cancelPortalHeartbeatLocked();
+        portalTouchHeartbeat = portalTouchLeaseExecutor.scheduleAtFixedRate(() -> {
+            synchronized (touchLock) {
+                if (!portalTouchActive || generation != portalTouchGeneration) {
+                    cancelPortalHeartbeatLocked();
+                    return;
+                }
+                portalTouchMoveSerial++;
+                schedulePortalMoveLocked(portalTouchContext, generation);
+            }
+        }, 300L, 300L, TimeUnit.MILLISECONDS);
+    }
+
+    private void cancelPortalHeartbeatLocked() {
+        if (portalTouchHeartbeat != null) {
+            portalTouchHeartbeat.cancel(false);
+            portalTouchHeartbeat = null;
+        }
     }
 
     private void scheduleNativeTouchLocked(Context context) {

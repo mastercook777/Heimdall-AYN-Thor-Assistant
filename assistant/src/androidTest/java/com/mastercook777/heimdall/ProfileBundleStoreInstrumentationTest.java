@@ -60,10 +60,14 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
             testThemeRegistryContract();
             testProfileThemeBindingContract();
             testWidgetLayoutIdentityContract();
+            testPortalModelAndInverseTransformContract();
             testTranslationWidgetModelContract();
+            testTranslationProviderCredentialIsolationContract();
             testCanvasRuntimeDecodePolicy();
             testCanvasExtremeAspectFillPolicy();
             testCanvasAnimationContract();
+            testGuideTextImportUsesCompleteLongReaderPath();
+            testLastLocalMapDeletionClearsLegacyFallback();
             testProfileIconDecodePolicy();
             testUserMacroIconDeletionContract();
             testGameContextIdentityAndResolverContract();
@@ -81,6 +85,8 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
             testStartupCapabilityDefaultContract();
             testAdvancedControlsStateContract();
             testInteractiveMapBrowserSettingsContract();
+            testCommunityProfileCatalogContract();
+            testCommunityProfileDownloadVerificationContract();
             testSelfContainedRoundTripAfterSourcesAreDeleted();
             testCorruptMissingUnsafeAndOversizedBundlesFailClosed();
             testLegacyProfileJsonRemainsImportable();
@@ -107,6 +113,53 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
                 ShizukuNativeUserService.TRANSACTION_RELEASE_VIRTUAL_KEYBOARD_KEYS);
         assertEquals(ShizukuNativeUserService.TRANSACTION_RELEASE_VIRTUAL_KEYBOARD_KEYS + 1,
                 ShizukuNativeUserService.TRANSACTION_RELEASE_VIRTUAL_KEYBOARD);
+        assertEquals(ShizukuNativeUserService.TRANSACTION_RELEASE_VIRTUAL_KEYBOARD + 1,
+                ShizukuNativeUserService.TRANSACTION_INJECT_PORTAL_TOUCH_EVENT);
+    }
+
+    public void testGuideTextImportUsesCompleteLongReaderPath() throws Exception {
+        byte[] line = "\u4e2d\u6587\u653b\u7565\u8def\u7ebf\uff1a\u4fdd\u7559\u5b8c\u6574\u5185\u5bb9\u3002\n"
+                .getBytes(StandardCharsets.UTF_8);
+        ByteArrayOutputStream source = new ByteArrayOutputStream();
+        while (source.size() < 599 * 1024) {
+            source.write(line);
+        }
+        byte[] bytes = source.toByteArray();
+        String expected = new String(bytes, StandardCharsets.UTF_8);
+        assertTrue(bytes.length > 60_000);
+        assertTrue(bytes.length < GuideTextDocument.MAX_BYTES);
+
+        Uri uri = fixture("guide-long-text", "\u4e2d\u6587\u653b\u7565.txt", bytes);
+        CountDownLatch latch = new CountDownLatch(1);
+        GuideTextLoader.Result[] loaded = new GuideTextLoader.Result[1];
+        GuideTextLoader.loadUri(target, uri, result -> {
+            loaded[0] = result;
+            latch.countDown();
+        });
+
+        assertTrue("Guide text import timed out", latch.await(30, TimeUnit.SECONDS));
+        assertNotNull(loaded[0]);
+        assertEquals(GuideTextLoader.Failure.NONE, loaded[0].failure);
+        assertNotNull(loaded[0].document);
+        assertEquals(expected, loaded[0].document.text);
+    }
+
+    public void testLastLocalMapDeletionClearsLegacyFallback() throws Exception {
+        GameProfile profile = new GameProfile("Map deletion", "General", "",
+                Collections.emptyList());
+        profile.mapTitle = "Imported PDF";
+        profile.mapUri = "content://maps/imported.pdf";
+
+        assertTrue(profile.removeMapAt(0));
+        assertTrue(profile.maps.isEmpty());
+        assertEquals("", profile.mapTitle);
+        assertEquals("", profile.mapUri);
+
+        String json = ProfileStore.profilesToJson(Collections.singletonList(profile));
+        GameProfile restored = ProfileStore.profilesFromJson(json).get(0);
+        assertTrue(restored.safeMaps().isEmpty());
+        assertEquals("", restored.mapTitle);
+        assertEquals("", restored.mapUri);
     }
 
     public void testThemeRegistryContract() {
@@ -176,17 +229,16 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
                 ThemeJoystickLighting.scaleHardwareColor(0xFF123456, 50));
         assertEquals(0xFF020509,
                 ThemeJoystickLighting.scaleHardwareColor(0xFF123456, 0));
-        String ledCommand = ThorJoystickLedAdapter.buildStaticColorCommand(0xFF123456);
-        assertEquals(
-                "echo 1-18:52:86:255 > /sys/class/sn3112l/led/brightness"
-                        + "; echo 1-18:52:86:255 > /sys/class/sn3112r/led/brightness",
-                ledCommand);
-        String ledOffCommand = ThorJoystickLedAdapter.buildTurnOffCommand();
-        assertEquals(
-                "echo 1-0:0:0:0 > /sys/class/sn3112l/led/brightness"
-                        + "; echo 1-0:0:0:0 > /sys/class/sn3112r/led/brightness",
-                ledOffCommand);
-        assertEquals(0, ThorJoystickLedAdapter.TRANSACTION_FLAGS);
+        assertEquals("1-18:52:86",
+                ThorJoystickLedAdapter.buildStaticColorPayload(0xFF123456));
+        assertEquals("/sys/class/sn3112l/led/enable",
+                ThorJoystickLedAdapter.LEFT_ENABLE_NODE);
+        assertEquals("/sys/class/sn3112r/led/enable",
+                ThorJoystickLedAdapter.RIGHT_ENABLE_NODE);
+        assertEquals("/sys/class/sn3112l/led/brightness",
+                ThorJoystickLedAdapter.LEFT_BRIGHTNESS_NODE);
+        assertEquals("/sys/class/sn3112r/led/brightness",
+                ThorJoystickLedAdapter.RIGHT_BRIGHTNESS_NODE);
         assertEquals(1, blue.materials.mediaFrameContentInsetDp);
         assertEquals(6, white.materials.mediaFrameContentInsetDp);
         assertEquals(0xFF4EA1FF, blue.palette.accent);
@@ -855,6 +907,106 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
         assertFalse(repaired.items.get(0).itemId.equals(repaired.items.get(1).itemId));
     }
 
+    public void testPortalModelAndInverseTransformContract() throws Exception {
+        JSONObject legacy = new JSONObject();
+        legacy.put("type", WidgetLayout.TYPE_MAGNIFIER);
+        WidgetLayout.Item legacyPortal = WidgetLayout.Item.fromJson(legacy);
+        assertEquals(WidgetLayout.MAGNIFIER_MODE_VIEW,
+                WidgetLayout.normalizeMagnifierMode(legacyPortal.magnifierMode));
+
+        WidgetLayout layout = new WidgetLayout();
+        layout.items.clear();
+        WidgetLayout.Item interactive = new WidgetLayout.Item(
+                WidgetLayout.TYPE_MAGNIFIER, 0, 0, 6, 4);
+        interactive.magnifierMode = WidgetLayout.MAGNIFIER_MODE_INTERACTIVE;
+        interactive.magnifierShape = WidgetLayout.MAGNIFIER_SHAPE_CIRCLE;
+        layout.items.add(interactive);
+        layout.sanitize();
+        assertTrue(WidgetLayout.isInteractiveMagnifier(interactive));
+        assertEquals(WidgetLayout.MAGNIFIER_SHAPE_CIRCLE,
+                interactive.magnifierShape);
+        WidgetLayout.Item restored = WidgetLayout.fromJson(layout.toJson())
+                .findItem(WidgetLayout.TYPE_MAGNIFIER);
+        assertNotNull(restored);
+        assertEquals(WidgetLayout.MAGNIFIER_MODE_INTERACTIVE,
+                restored.magnifierMode);
+        assertEquals(WidgetLayout.MAGNIFIER_SHAPE_CIRCLE,
+                restored.magnifierShape);
+
+        WidgetLayout dual = new WidgetLayout();
+        dual.items.clear();
+        WidgetLayout.Item firstPortal = new WidgetLayout.Item(
+                WidgetLayout.TYPE_MAGNIFIER, 0, 0, 6, 4);
+        firstPortal.magnifierMode = WidgetLayout.MAGNIFIER_MODE_INTERACTIVE;
+        firstPortal.magnifierLeft = 0.10f;
+        WidgetLayout.Item secondPortal = new WidgetLayout.Item(
+                WidgetLayout.TYPE_MAGNIFIER, 6, 0, 6, 4);
+        secondPortal.magnifierMode = WidgetLayout.MAGNIFIER_MODE_INTERACTIVE;
+        secondPortal.magnifierShape = WidgetLayout.MAGNIFIER_SHAPE_CIRCLE;
+        secondPortal.magnifierLeft = 0.55f;
+        WidgetLayout.Item excessPortal = new WidgetLayout.Item(
+                WidgetLayout.TYPE_MAGNIFIER, 0, 4, 6, 4);
+        dual.items.add(firstPortal);
+        dual.items.add(secondPortal);
+        dual.items.add(excessPortal);
+        dual.sanitize();
+        assertEquals(2, dual.findItems(WidgetLayout.TYPE_MAGNIFIER).size());
+        assertEquals(WidgetLayout.MAGNIFIER_MODE_INTERACTIVE, firstPortal.magnifierMode);
+        assertEquals(WidgetLayout.MAGNIFIER_MODE_INTERACTIVE, secondPortal.magnifierMode);
+        assertEquals(WidgetLayout.MAGNIFIER_SHAPE_CIRCLE, secondPortal.magnifierShape);
+        assertFalse(firstPortal.itemId.equals(secondPortal.itemId));
+        WidgetLayout dualRestored = WidgetLayout.fromJson(dual.toJson());
+        assertEquals(2, dualRestored.findItems(WidgetLayout.TYPE_MAGNIFIER).size());
+        assertEquals(firstPortal.itemId,
+                dualRestored.findItems(WidgetLayout.TYPE_MAGNIFIER).get(0).itemId);
+        assertEquals(secondPortal.itemId,
+                dualRestored.findItems(WidgetLayout.TYPE_MAGNIFIER).get(1).itemId);
+        assertEquals(0.10f,
+                dualRestored.findItems(WidgetLayout.TYPE_MAGNIFIER).get(0).magnifierLeft);
+        assertEquals(0.55f,
+                dualRestored.findItems(WidgetLayout.TYPE_MAGNIFIER).get(1).magnifierLeft);
+
+        assertEquals(0f, PortalSurfaceFanOut.fullFrameTextureV(0));
+        assertEquals(0f, PortalSurfaceFanOut.fullFrameTextureV(1));
+        assertEquals(1f, PortalSurfaceFanOut.fullFrameTextureV(2));
+        assertEquals(1f, PortalSurfaceFanOut.fullFrameTextureV(3));
+
+        PortalSurfaceFanOut.Spec transportSpec = new PortalSurfaceFanOut.Spec(
+                0.11f, 0.22f, 0.77f, 0.88f, 1.25f, 1.5f, 30);
+        PortalSurfaceFanOut.Spec sixtyFps = transportSpec.withFps(60);
+        assertEquals(0.11f, sixtyFps.left);
+        assertEquals(0.22f, sixtyFps.top);
+        assertEquals(0.77f, sixtyFps.right);
+        assertEquals(0.88f, sixtyFps.bottom);
+        assertEquals(1.25f, sixtyFps.aspect);
+        assertEquals(1.5f, sixtyFps.zoom);
+        assertEquals(60, sixtyFps.fps);
+
+        interactive.magnifierAspectRatio = 0.75f;
+        assertEquals(1.6f,
+                WidgetLayout.magnifierRegionSelectionAspectRatio(interactive, 1.6f));
+        assertEquals(0.75f,
+                WidgetLayout.magnifierRegionSelectionAspectRatio(interactive, 0f));
+        interactive.magnifierShape = WidgetLayout.MAGNIFIER_SHAPE_CIRCLE;
+        assertEquals(1f,
+                WidgetLayout.magnifierRegionSelectionAspectRatio(interactive, 1.6f));
+        interactive.magnifierShape = WidgetLayout.MAGNIFIER_SHAPE_RECTANGLE;
+
+        float[] sourcePoint = new float[2];
+        assertTrue(UpperScreenMagnifierView.mapRenderedPointToSource(
+                300f, 150f, 600f, 300f,
+                480f, 270f, 960f, 540f,
+                1920, 1080, sourcePoint));
+        assertTrue(Math.abs(sourcePoint[0] - 960f) < 0.01f);
+        assertTrue(Math.abs(sourcePoint[1] - 540f) < 0.01f);
+        assertTrue(UpperScreenMagnifierView.mapRenderedPointToSource(
+                600f, 300f, 600f, 300f,
+                720f, 405f, 480f, 270f,
+                1920, 1080, sourcePoint));
+        assertTrue(Math.abs(sourcePoint[0] - 1200f) < 0.01f);
+        assertTrue(Math.abs(sourcePoint[1] - 675f) < 0.01f);
+    }
+
     public void testTranslationWidgetModelContract() throws Exception {
         WidgetLayout layout = new WidgetLayout();
         layout.items.clear();
@@ -864,6 +1016,8 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
         first.translationConfig.regionRight = 2f;
         first.translationConfig.ocrScript = TranslationConfig.SCRIPT_KOREAN;
         first.translationConfig.targetLanguage = TranslationConfig.LANGUAGE_ENGLISH;
+        first.translationConfig.textSizePreset = TranslationConfig.TEXT_SIZE_EXTRA_LARGE;
+        first.translationConfig.lineSpacingPreset = TranslationConfig.LINE_SPACING_RELAXED;
         layout.items.add(first);
         layout.items.add(new WidgetLayout.Item(
                 WidgetLayout.TYPE_TRANSLATION, 6, 0, 6, 3));
@@ -878,6 +1032,33 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
                 restored.items.get(0).safeTranslation().ocrScript);
         assertEquals(TranslationConfig.LANGUAGE_ENGLISH,
                 restored.items.get(0).safeTranslation().targetLanguage);
+        assertEquals(TranslationConfig.TEXT_SIZE_EXTRA_LARGE,
+                restored.items.get(0).safeTranslation().textSizePreset);
+        assertEquals(TranslationConfig.LINE_SPACING_RELAXED,
+                restored.items.get(0).safeTranslation().lineSpacingPreset);
+        assertEquals(22, restored.items.get(0).safeTranslation().textSizeSp());
+        assertEquals(5, restored.items.get(0).safeTranslation().lineSpacingExtraDp());
+
+        JSONObject legacyTranslation = first.safeTranslation().toJson();
+        legacyTranslation.remove("textSizePreset");
+        legacyTranslation.remove("lineSpacingPreset");
+        TranslationConfig legacyPresentation = TranslationConfig.fromJson(legacyTranslation);
+        assertEquals(TranslationConfig.TEXT_SIZE_COMPACT,
+                legacyPresentation.textSizePreset);
+        assertEquals(TranslationConfig.LINE_SPACING_STANDARD,
+                legacyPresentation.lineSpacingPreset);
+        assertEquals(14, legacyPresentation.textSizeSp());
+        assertEquals(2, legacyPresentation.lineSpacingExtraDp());
+
+        JSONObject invalidPresentation = first.safeTranslation().toJson();
+        invalidPresentation.put("textSizePreset", "oversized");
+        invalidPresentation.put("lineSpacingPreset", "floating");
+        TranslationConfig sanitizedPresentation = TranslationConfig.fromJson(
+                invalidPresentation);
+        assertEquals(TranslationConfig.TEXT_SIZE_STANDARD,
+                sanitizedPresentation.textSizePreset);
+        assertEquals(TranslationConfig.LINE_SPACING_STANDARD,
+                sanitizedPresentation.lineSpacingPreset);
 
         TranslationTextStabilizer stabilizer = new TranslationTextStabilizer();
         assertEquals(null, stabilizer.accept("  Hello\n world "));
@@ -951,6 +1132,24 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
                 provider.resolvedBaseUrl());
         assertEquals(TranslationProviderConfig.SILICONFLOW_GLOBAL_MODEL,
                 provider.resolvedModel());
+        provider.siliconFlowApiKey = "siliconflow-key";
+        provider.customApiKey = "custom-key";
+        assertEquals("siliconflow-key", provider.activeApiKey());
+        provider.provider = TranslationProviderConfig.PROVIDER_CUSTOM;
+        assertEquals("custom-key", provider.activeApiKey());
+        provider.setActiveApiKey("updated-custom-key");
+        assertEquals("updated-custom-key", provider.customApiKey);
+        assertEquals("siliconflow-key", provider.siliconFlowApiKey);
+        provider.customBaseUrl = "https://api.deepseek.com";
+        provider.customModel = "deepseek-flash";
+        assertTrue(provider.isOfficialDeepSeekEndpoint());
+        JSONObject deepSeekBody = TranslationApiClient.createRequestBody(provider,
+                "Translate me", TranslationConfig.LANGUAGE_CHINESE_SIMPLIFIED);
+        assertEquals("disabled", deepSeekBody.getJSONObject("thinking").getString("type"));
+        provider.customBaseUrl = "https://example.com/v1";
+        assertFalse(provider.isOfficialDeepSeekEndpoint());
+        assertFalse(TranslationApiClient.createRequestBody(provider, "Translate me",
+                TranslationConfig.LANGUAGE_CHINESE_SIMPLIFIED).has("thinking"));
 
         GameProfile profile = new GameProfile("Translation", "General", "", 1,
                 Collections.singletonList(new Macro("M1", ProfileStore.steps("wait:80ms"))));
@@ -966,6 +1165,33 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
         profiles.put(new JSONObject(duplicate.toString()));
         List<GameProfile> imported = ProfileStore.profilesFromJson(profiles.toString());
         assertFalse(imported.get(0).safeProfileId().equals(imported.get(1).safeProfileId()));
+    }
+
+    public void testTranslationProviderCredentialIsolationContract() {
+        Context testContext = getContext();
+        android.content.SharedPreferences customPrefs = testContext.getSharedPreferences(
+                "translation_credential_migration_custom_test", Context.MODE_PRIVATE);
+        customPrefs.edit().clear().putString("api_key_ciphertext", "legacy-custom").commit();
+        TranslationSettingsStore.migrateLegacyCiphertext(customPrefs,
+                TranslationProviderConfig.PROVIDER_CUSTOM);
+        assertFalse(customPrefs.contains("api_key_ciphertext"));
+        assertEquals("legacy-custom",
+                customPrefs.getString("custom_api_key_ciphertext", ""));
+        assertFalse(customPrefs.contains("siliconflow_api_key_ciphertext"));
+
+        android.content.SharedPreferences siliconFlowPrefs = testContext.getSharedPreferences(
+                "translation_credential_migration_siliconflow_test", Context.MODE_PRIVATE);
+        siliconFlowPrefs.edit().clear()
+                .putString("api_key_ciphertext", "legacy-siliconflow").commit();
+        TranslationSettingsStore.migrateLegacyCiphertext(siliconFlowPrefs,
+                TranslationProviderConfig.PROVIDER_SILICONFLOW);
+        assertFalse(siliconFlowPrefs.contains("api_key_ciphertext"));
+        assertEquals("legacy-siliconflow",
+                siliconFlowPrefs.getString("siliconflow_api_key_ciphertext", ""));
+        assertFalse(siliconFlowPrefs.contains("custom_api_key_ciphertext"));
+
+        customPrefs.edit().clear().commit();
+        siliconFlowPrefs.edit().clear().commit();
     }
 
     public void testHardwareMonitorModelContract() throws Exception {
@@ -1449,14 +1675,14 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
     }
 
     public void testGameContextUserServiceLifetimeContract() throws Exception {
-        assertEquals("game_context_v15",
+        assertEquals("game_context_v16",
                 ShizukuGameContextController.SERVICE_PROCESS_SUFFIX);
-        assertEquals("heimdall_game_context_v15",
+        assertEquals("heimdall_game_context_v16",
                 ShizukuGameContextController.SERVICE_TAG);
-        assertEquals(14, ShizukuGameContextController.SERVICE_VERSION);
-        assertEquals("heimdall_native_controller_v13",
+        assertEquals(15, ShizukuGameContextController.SERVICE_VERSION);
+        assertEquals("heimdall_native_controller_v14",
                 ShizukuNativeController.SERVICE_TAG);
-        assertEquals(13, ShizukuNativeController.SERVICE_VERSION);
+        assertEquals(14, ShizukuNativeController.SERVICE_VERSION);
         assertTrue(ShizukuUserServiceLifecycle.isDestroyTransaction(16_777_115));
         assertFalse(ShizukuUserServiceLifecycle.isDestroyTransaction(
                 IBinder.FIRST_CALL_TRANSACTION));
@@ -2338,6 +2564,140 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
         assertEquals(Float.valueOf(36f), Float.valueOf(restoredTouchpad.virtualMouseScrollDistance));
         assertFalse(restoredTouchpad.virtualMouseFullGestureArea);
         result.prepared.close();
+    }
+
+    public void testCommunityProfileCatalogContract() throws Exception {
+        String digest = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        JSONObject profile = new JSONObject()
+                .put("id", "gba-universal")
+                .put("name", "GBA Universal")
+                .put("author", "mastercook777")
+                .put("category", "Emulator")
+                .put("subtitle", "Game Boy Advance")
+                .put("description", "Universal lower-screen layout")
+                .put("icon", "https://example.com/gba-icon.png")
+                .put("iconSha256", digest)
+                .put("iconSize", 512)
+                .put("preview", "https://example.com/gba.webp")
+                .put("previewSha256", digest)
+                .put("previewSize", 1024)
+                .put("screenshot", "https://example.com/gba-home.png")
+                .put("screenshotSha256", digest)
+                .put("screenshotSize", 2048)
+                .put("minVersionCode", 30)
+                .put("minHeimdallVersion", "0.3.0")
+                .put("sha256", digest)
+                .put("size", 4096)
+                .put("downloads", new JSONArray()
+                        .put(new JSONObject().put("source", "github")
+                                .put("url", "https://github.com/example/profile.zip"))
+                        .put(new JSONObject().put("source", "gitcode")
+                                .put("url", "https://gitcode.com/example/profile.zip")));
+        JSONObject root = new JSONObject().put("version", 1)
+                .put("profiles", new JSONArray().put(profile));
+
+        CommunityProfileCatalog catalog = CommunityProfileCatalog.parse(root.toString());
+        assertEquals(1, catalog.version);
+        assertEquals(1, catalog.profiles.size());
+        CommunityProfileCatalog.Entry entry = catalog.profiles.get(0);
+        assertEquals("gba-universal", entry.id);
+        assertEquals("Game Boy Advance", entry.subtitle);
+        assertEquals("https://example.com/gba-icon.png", entry.iconUrl);
+        assertEquals(512L, entry.iconSize);
+        assertTrue(entry.hasIcon());
+        assertEquals("https://example.com/gba-home.png", entry.screenshotUrl);
+        assertEquals(2048L, entry.screenshotSize);
+        assertTrue(entry.hasScreenshot());
+        assertEquals("github", entry.downloads.get(0).source);
+        assertEquals("gitcode", entry.downloads.get(1).source);
+        assertFalse(entry.supportsVersion(29));
+        assertTrue(entry.supportsVersion(30));
+        assertEquals(0, CommunityProfileGalleryView.progressForBytes(0L, 4096L));
+        assertEquals(250, CommunityProfileGalleryView.progressForBytes(1024L, 4096L));
+        assertEquals(1000, CommunityProfileGalleryView.progressForBytes(4096L, 4096L));
+        assertEquals(1000, CommunityProfileGalleryView.progressForBytes(8192L, 4096L));
+
+        JSONObject insecure = new JSONObject(profile.toString());
+        insecure.put("downloads", new JSONArray().put(new JSONObject()
+                .put("source", "http").put("url", "http://example.com/profile.zip")));
+        assertCatalogRejected(new JSONObject().put("version", 1)
+                .put("profiles", new JSONArray().put(insecure)));
+
+        JSONObject missingVersionCode = new JSONObject(profile.toString());
+        missingVersionCode.remove("minVersionCode");
+        assertCatalogRejected(new JSONObject().put("version", 1)
+                .put("profiles", new JSONArray().put(missingVersionCode)));
+
+        JSONObject incompleteScreenshot = new JSONObject(profile.toString());
+        incompleteScreenshot.remove("screenshotSize");
+        assertCatalogRejected(new JSONObject().put("version", 1)
+                .put("profiles", new JSONArray().put(incompleteScreenshot)));
+
+        JSONObject incompleteIcon = new JSONObject(profile.toString());
+        incompleteIcon.remove("iconSize");
+        assertCatalogRejected(new JSONObject().put("version", 1)
+                .put("profiles", new JSONArray().put(incompleteIcon)));
+
+        JSONObject legacyPresentation = new JSONObject(profile.toString());
+        legacyPresentation.remove("subtitle");
+        legacyPresentation.remove("icon");
+        legacyPresentation.remove("iconSha256");
+        legacyPresentation.remove("iconSize");
+        legacyPresentation.remove("preview");
+        legacyPresentation.remove("previewSha256");
+        legacyPresentation.remove("previewSize");
+        legacyPresentation.remove("screenshot");
+        legacyPresentation.remove("screenshotSha256");
+        legacyPresentation.remove("screenshotSize");
+        CommunityProfileCatalog legacyCatalog = CommunityProfileCatalog.parse(
+                new JSONObject().put("version", 1)
+                        .put("profiles", new JSONArray().put(legacyPresentation)).toString());
+        assertEquals("Emulator", legacyCatalog.profiles.get(0).subtitle);
+        assertFalse(legacyCatalog.profiles.get(0).hasIcon());
+        assertFalse(legacyCatalog.profiles.get(0).hasScreenshot());
+
+        assertCatalogRejected(new JSONObject().put("version", 1)
+                .put("profiles", new JSONArray().put(profile).put(
+                        new JSONObject(profile.toString()))));
+    }
+
+    public void testCommunityProfileDownloadVerificationContract() throws Exception {
+        File fixture = new File(target.getCacheDir(), "community-profile-verify.bin");
+        byte[] bytes = "verified profile bundle".getBytes(StandardCharsets.UTF_8);
+        try (FileOutputStream output = new FileOutputStream(fixture)) {
+            output.write(bytes);
+            output.getFD().sync();
+        }
+        String digest = ProfileAssetStore.sha256(fixture);
+        CommunityProfileRepository.verifyFile(fixture, bytes.length, digest);
+
+        boolean rejectedSize = false;
+        try {
+            CommunityProfileRepository.verifyFile(fixture, bytes.length + 1L, digest);
+        } catch (Exception expected) {
+            rejectedSize = true;
+        }
+        assertTrue(rejectedSize);
+
+        boolean rejectedDigest = false;
+        try {
+            CommunityProfileRepository.verifyFile(fixture, bytes.length,
+                    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+        } catch (Exception expected) {
+            rejectedDigest = true;
+        }
+        assertTrue(rejectedDigest);
+        fixture.delete();
+    }
+
+    private static void assertCatalogRejected(JSONObject root) {
+        boolean rejected = false;
+        try {
+            CommunityProfileCatalog.parse(root.toString());
+        } catch (Exception expected) {
+            rejected = true;
+        }
+        assertTrue(rejected);
     }
 
     private ExportResult export(List<GameProfile> profiles, Uri destination) throws Exception {

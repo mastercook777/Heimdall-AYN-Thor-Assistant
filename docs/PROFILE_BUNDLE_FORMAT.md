@@ -28,6 +28,14 @@ Import is fail-closed. Heimdall copies the selected file to a private staging di
 
 Validated assets are installed into Heimdall-owned storage with temporary files and atomic renames. Profile references are rewritten to the current package identity, so Debug and public builds do not depend on one another's provider authorities. Replace-all still requires the existing recovery snapshot before current Profile data can be overwritten. A failed import never replaces the current good Profile set; successfully installed but unreferenced content-addressed files may remain harmlessly after a late failure.
 
+## Community Profiles
+
+Community Profiles distribute this exact bundle format without modification. The
+remote catalog adds discovery, preview, compatibility, byte-size, checksum, and
+mirror metadata only. After a verified download, Heimdall calls the same importer
+described above and offers append-only import for the single Profile in the bundle.
+See [Community Profile Catalog V1](COMMUNITY_PROFILE_CATALOG_V1.md).
+
 ## Compatibility and limits
 
 Legacy JSON exports remain importable and are clearly identified as configuration-only. They cannot restore external source files that were not included by the older exporter.

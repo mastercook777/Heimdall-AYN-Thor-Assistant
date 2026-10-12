@@ -40,7 +40,7 @@ running or not authorized. Heimdall does not bundle Shizuku.
 ## Screen Capture And Audio
 
 Screenshots use Android's display-aware Accessibility API where supported.
-Recording and the live magnifier require explicit Android MediaProjection
+Recording and live Portals require explicit Android MediaProjection
 consent. Game-audio recording uses Android Audio Playback Capture and does not
 select microphone input; the upper App may refuse playback capture.
 
@@ -64,6 +64,14 @@ and [Android data disclosure](https://developers.google.com/ml-kit/android-data-
 Internet and network-state access support player-configured Interactive Map
 pages and connection status. Interactive Map pages may run JavaScript for page
 compatibility, but Heimdall exposes no JavaScript interface to them.
+
+When the player opens Community Profiles, Heimdall fetches the curated catalog
+from the official GitHub repository over HTTPS. Opening an entry may fetch its
+preview image; choosing Download & Import fetches its Profile bundle from a
+catalog-listed HTTPS source. The catalog is cached in App storage, while
+previews and downloads use temporary cache storage. The bundle is checked
+against the catalog's byte size and SHA-256 before the normal import flow.
+Browsing or importing does not upload the player's existing Profiles.
 
 The optional Translation Widget captures the player-selected upper-screen
 region through Android Accessibility and performs OCR locally with bundled ML

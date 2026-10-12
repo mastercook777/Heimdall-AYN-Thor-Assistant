@@ -26,8 +26,8 @@ public final class ShizukuNativeController {
     static final String THOR_TOUCH_UNSUPPORTED = "THOR_TOUCH_UNSUPPORTED";
     private static final int REQUEST_CODE = 4109;
     private static final long BIND_TIMEOUT_MS = 10_000L;
-    static final String SERVICE_TAG = "heimdall_native_controller_v13";
-    static final int SERVICE_VERSION = 13;
+    static final String SERVICE_TAG = "heimdall_native_controller_v14";
+    static final int SERVICE_VERSION = 14;
     private static final Object LOCK = new Object();
     private static final ExecutorService BIND_EXECUTOR =
             Executors.newSingleThreadExecutor(runnable -> {
@@ -496,6 +496,13 @@ public final class ShizukuNativeController {
             int x, int y, int width, int height, int rotation) {
         return injectTouchEvent(context,
                 ShizukuNativeUserService.TRANSACTION_INJECT_MAPPED_TOUCH_EVENT,
+                displayId, action, x, y, width, height, rotation);
+    }
+
+    public static String injectPortalTouchEvent(Context context, int displayId, int action,
+            int x, int y, int width, int height, int rotation) {
+        return injectTouchEvent(context,
+                ShizukuNativeUserService.TRANSACTION_INJECT_PORTAL_TOUCH_EVENT,
                 displayId, action, x, y, width, height, rotation);
     }
 

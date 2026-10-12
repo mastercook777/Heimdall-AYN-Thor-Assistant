@@ -135,11 +135,11 @@ final class TranslationWidgetView extends FrameLayout {
 
         translationText = new TextView(context);
         translationText.setText(R.string.translation_waiting_text);
-        translationText.setTextSize(HeimdallUi.TYPE_SECTION_TITLE);
-        translationText.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        translationText.setTextSize(config.textSizeSp());
+        translationText.setTypeface(Typeface.create("sans-serif", Typeface.BOLD));
         translationText.setTextColor(HeimdallUi.translationTextColor(context));
         translationText.setGravity(Gravity.TOP | Gravity.START);
-        translationText.setLineSpacing(dp(2), 1f);
+        translationText.setLineSpacing(dp(config.lineSpacingExtraDp()), 1f);
         translationText.setPadding(0, dp(2), dp(4), dp(4));
         translationScroll = new ScrollView(context);
         translationScroll.setFillViewport(true);

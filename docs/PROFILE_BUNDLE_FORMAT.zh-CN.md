@@ -28,6 +28,10 @@ Heimdall 将 Profile 导出为自包含的 `.heimdall-profile` ZIP 迁移包。�
 
 通过校验的资源会使用临时文件和原子重命名安装到 Heimdall 自有存储。Profile 引用会改写为当前包身份，因此 Debug 与公开版本不会依赖彼此的 provider authority。“全部替换”仍要求在覆盖当前 Profile 数据前成功建立恢复快照。导入失败不会替换当前有效的 Profile 集合；极晚阶段失败时，已安装但未引用的内容寻址文件可能无害地保留。
 
+## 社区 Profile
+
+社区 Profile 原样分发同一种迁移包格式，不会修改或新增 Profile 格式。远程目录只提供发现、预览、兼容性、字节大小、校验和与镜像元数据。下载校验通过后，Heimdall 会调用上述同一个 importer，并只允许把迁移包中的单个 Profile 追加为新 Profile。参见 [Community Profile Catalog V1](COMMUNITY_PROFILE_CATALOG_V1.md)。
+
 ## 兼容性与限制
 
 旧版 JSON 导出仍可导入，并会被明确标记为“仅配置”。它们无法恢复旧版导出器从未包含的外部源文件。

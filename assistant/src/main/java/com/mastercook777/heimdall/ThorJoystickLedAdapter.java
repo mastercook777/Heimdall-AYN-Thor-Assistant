@@ -1,99 +1,123 @@
 package com.mastercook777.heimdall;
 
 import android.graphics.Color;
-import android.os.IBinder;
-import android.os.Parcel;
 
-import java.lang.reflect.Method;
+import java.io.BufferedWriter;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.util.concurrent.Executor;
+import java.util.concurrent.Executors;
 
-/** Minimal best-effort bridge to Thor's firmware-owned joystick LED service. */
+/** Minimal best-effort adapter for Thor's firmware-owned joystick LEDs. */
 final class ThorJoystickLedAdapter {
-    private static final String SERVICE_NAME = "PServerBinder";
-    private static final String LEFT_LED_NODE = "/sys/class/sn3112l/led/brightness";
-    private static final String RIGHT_LED_NODE = "/sys/class/sn3112r/led/brightness";
-    private static final int TRANSACTION_EXECUTE = 0;
-    static final int TRANSACTION_FLAGS = 0;
-    private static final int LED_BRIGHTNESS = 255;
+    static final String LEFT_ENABLE_NODE = "/sys/class/sn3112l/led/enable";
+    static final String RIGHT_ENABLE_NODE = "/sys/class/sn3112r/led/enable";
+    static final String LEFT_BRIGHTNESS_NODE = "/sys/class/sn3112l/led/brightness";
+    static final String RIGHT_BRIGHTNESS_NODE = "/sys/class/sn3112r/led/brightness";
 
-    private volatile IBinder binder;
+    private static final int MAX_WRITE_ATTEMPTS = 20;
+    private static final long WRITE_RETRY_DELAY_MS = 50L;
 
-    boolean isAvailable() {
-        return resolveBinder() != null;
-    }
+    private final Object stateLock = new Object();
+    private final Executor writerExecutor = Executors.newSingleThreadExecutor(runnable -> {
+        Thread thread = new Thread(runnable, "heimdall-joystick-led");
+        thread.setDaemon(true);
+        return thread;
+    });
+
+    private PendingState pendingState;
+    private boolean writerScheduled;
 
     void applyThemeColor(int color) {
-        executeOnce(buildStaticColorCommand(color));
+        submitState(new PendingState(true, buildStaticColorPayload(color)));
     }
 
     void turnOff() {
-        executeOnce(buildTurnOffCommand());
+        submitState(new PendingState(false, null));
     }
 
-    static String buildStaticColorCommand(int color) {
-        int red = Color.red(color);
-        int green = Color.green(color);
-        int blue = Color.blue(color);
-        String value = red + ":" + green + ":" + blue + ":" + LED_BRIGHTNESS;
-        return buildDualStickCommand(value);
+    static String buildStaticColorPayload(int color) {
+        return "1-" + Color.red(color)
+                + ":" + Color.green(color)
+                + ":" + Color.blue(color);
     }
 
-    static String buildTurnOffCommand() {
-        return buildDualStickCommand("0:0:0:0");
-    }
-
-    private static String buildDualStickCommand(String value) {
-        // Thor selects the stick by sysfs path. Prefix 1 is the only verified
-        // static-color channel; additional numeric prefixes are not LED zones.
-        return "echo 1-" + value + " > " + LEFT_LED_NODE
-                + "; echo 1-" + value + " > " + RIGHT_LED_NODE;
-    }
-
-    private synchronized void executeOnce(String command) {
-        IBinder service = resolveBinder();
-        if (service == null) {
-            return;
-        }
-        Parcel data = null;
-        Parcel reply = null;
-        try {
-            data = Parcel.obtain();
-            reply = Parcel.obtain();
-            data.writeStringArray(new String[]{command, "1"});
-            if (!service.transact(TRANSACTION_EXECUTE, data, reply, TRANSACTION_FLAGS)) {
-                binder = null;
+    private void submitState(PendingState state) {
+        synchronized (stateLock) {
+            pendingState = state;
+            if (writerScheduled) {
+                return;
             }
+            writerScheduled = true;
+        }
+        try {
+            writerExecutor.execute(this::drainPendingStates);
         } catch (Throwable ignored) {
-            binder = null;
-        } finally {
-            if (reply != null) {
-                reply.recycle();
-            }
-            if (data != null) {
-                data.recycle();
+            synchronized (stateLock) {
+                writerScheduled = false;
             }
         }
     }
 
-    private IBinder resolveBinder() {
-        IBinder current = binder;
-        if (current != null && current.isBinderAlive()) {
-            return current;
-        }
-        try {
-            Class<?> serviceManager = Class.forName("android.os.ServiceManager");
-            Method getService = serviceManager.getMethod("getService", String.class);
-            Object resolved = getService.invoke(null, SERVICE_NAME);
-            if (resolved instanceof IBinder) {
-                IBinder candidate = (IBinder) resolved;
-                if (candidate.isBinderAlive()) {
-                    binder = candidate;
-                    return candidate;
+    private void drainPendingStates() {
+        while (true) {
+            PendingState state;
+            synchronized (stateLock) {
+                state = pendingState;
+                pendingState = null;
+                if (state == null) {
+                    writerScheduled = false;
+                    return;
                 }
             }
-        } catch (Throwable ignored) {
-            // Firmware service is optional; theme rendering must continue unchanged.
+            writeWithStockRetry(state);
         }
-        binder = null;
-        return null;
+    }
+
+    private static void writeWithStockRetry(PendingState state) {
+        for (int attempt = 0; attempt < MAX_WRITE_ATTEMPTS; attempt++) {
+            try {
+                writeState(state);
+                return;
+            } catch (Exception ignored) {
+                if (attempt + 1 >= MAX_WRITE_ATTEMPTS) {
+                    return;
+                }
+                try {
+                    Thread.sleep(WRITE_RETRY_DELAY_MS);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+            }
+        }
+    }
+
+    private static void writeState(PendingState state) throws IOException {
+        // Match OdinSettings: select the stick by path and write without a newline.
+        String enabledValue = state.enabled ? "1" : "0";
+        writeNode(LEFT_ENABLE_NODE, enabledValue);
+        writeNode(RIGHT_ENABLE_NODE, enabledValue);
+        if (!state.enabled) {
+            return;
+        }
+        writeNode(LEFT_BRIGHTNESS_NODE, state.colorPayload);
+        writeNode(RIGHT_BRIGHTNESS_NODE, state.colorPayload);
+    }
+
+    private static void writeNode(String path, String value) throws IOException {
+        try (BufferedWriter writer = new BufferedWriter(new FileWriter(path))) {
+            writer.write(value);
+        }
+    }
+
+    private static final class PendingState {
+        final boolean enabled;
+        final String colorPayload;
+
+        PendingState(boolean enabled, String colorPayload) {
+            this.enabled = enabled;
+            this.colorPayload = colorPayload;
+        }
     }
 }

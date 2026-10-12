@@ -16,6 +16,10 @@ import android.os.IBinder;
 import android.os.Looper;
 import android.view.Surface;
 
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArraySet;
+
 public final class UpperScreenProjectionService extends Service {
     static final String ACTION_START =
             BuildConfig.APPLICATION_ID + ".START_MAGNIFIER_PROJECTION";
@@ -40,8 +44,12 @@ public final class UpperScreenProjectionService extends Service {
     private static volatile boolean running;
     private static volatile boolean starting;
     private static volatile boolean frozen;
-    private static volatile Listener listener;
+    private static final CopyOnWriteArraySet<Listener> listeners = new CopyOnWriteArraySet<>();
+    private static final Map<String, Boolean> portalFrozen = new ConcurrentHashMap<>();
+    private static final Map<String, PortalSurfaceFanOut.Spec> portalSpecs =
+            new ConcurrentHashMap<>();
     private static volatile Surface outputSurface;
+    private static volatile int portalViewCount = 1;
     private static volatile float regionLeft = 0.25f;
     private static volatile float regionTop = 0.25f;
     private static volatile float regionRight = 0.75f;
@@ -55,6 +63,7 @@ public final class UpperScreenProjectionService extends Service {
     private final Handler mainHandler = new Handler(android.os.Looper.getMainLooper());
     private MediaProjection projection;
     private VirtualDisplay virtualDisplay;
+    private PortalSurfaceFanOut portalFanOut;
     private int densityDpi = 320;
     private boolean stopping;
 
@@ -70,6 +79,28 @@ public final class UpperScreenProjectionService extends Service {
         return running && frozen;
     }
 
+    static boolean isMultiPortalMode() {
+        return portalViewCount > 1;
+    }
+
+    static boolean isPortalFrozen(String itemId) {
+        return isMultiPortalMode()
+                ? running && Boolean.TRUE.equals(portalFrozen.get(itemId))
+                : isFrozen();
+    }
+
+    static void setPortalViewCount(int count) {
+        int normalized = count > 1 ? 2 : 1;
+        if (portalViewCount == normalized) return;
+        portalViewCount = normalized;
+        frozen = false;
+        portalFrozen.clear();
+        portalSpecs.clear();
+        UpperScreenProjectionService service = activeService;
+        if (service != null) service.mainHandler.post(service::reconfigureOutputMode);
+        notifyConfigurationChanged();
+    }
+
     static void markStarting() {
         starting = true;
     }
@@ -79,16 +110,14 @@ public final class UpperScreenProjectionService extends Service {
     }
 
     static void setListener(Listener value) {
-        listener = value;
         if (value != null) {
+            listeners.add(value);
             value.onProjectionConfigurationChanged();
         }
     }
 
     static void clearListener(Listener value) {
-        if (listener == value) {
-            listener = null;
-        }
+        listeners.remove(value);
     }
 
     static void attachOutputSurface(Surface surface) {
@@ -111,6 +140,83 @@ public final class UpperScreenProjectionService extends Service {
         if (service != null) {
             service.requestOutputSurfaceUpdate();
         }
+    }
+
+    static void attachPortalOutput(String itemId, Surface surface, int width, int height,
+            WidgetLayout.Item item) {
+        portalSpecs.put(itemId, specFromItem(item));
+        UpperScreenProjectionService service = activeService;
+        if (service != null) {
+            service.mainHandler.post(() -> service.attachPortalOutputInternal(
+                    itemId, surface, width, height, specFromItem(item)));
+        }
+    }
+
+    static void updatePortalSpec(String itemId, WidgetLayout.Item item) {
+        portalSpecs.put(itemId, specFromItem(item));
+        UpperScreenProjectionService service = activeService;
+        if (service != null) {
+            service.mainHandler.post(() -> {
+                PortalSurfaceFanOut fanOut = service.portalFanOut;
+                if (fanOut != null) fanOut.updateTargetSpec(itemId, specFromItem(item));
+            });
+        }
+        notifyConfigurationChanged();
+    }
+
+    static void updatePortalFps(String itemId, int fps) {
+        int normalizedFps = WidgetLayout.normalizeMagnifierFps(fps);
+        PortalSurfaceFanOut.Spec current = portalSpecs.get(itemId);
+        if (current != null) {
+            portalSpecs.put(itemId, current.withFps(normalizedFps));
+        }
+        UpperScreenProjectionService service = activeService;
+        if (service != null) {
+            service.mainHandler.post(() -> {
+                PortalSurfaceFanOut fanOut = service.portalFanOut;
+                if (fanOut != null) fanOut.updateTargetFps(itemId, normalizedFps);
+            });
+        }
+    }
+
+    static void updatePortalTargetSize(String itemId, int width, int height) {
+        UpperScreenProjectionService service = activeService;
+        if (service != null) {
+            service.mainHandler.post(() -> {
+                PortalSurfaceFanOut fanOut = service.portalFanOut;
+                if (fanOut != null) fanOut.updateTargetSize(itemId, width, height);
+            });
+        }
+    }
+
+    static PortalSurfaceFanOut.Spec portalSpec(String itemId, WidgetLayout.Item fallback) {
+        PortalSurfaceFanOut.Spec spec = portalSpecs.get(itemId);
+        return spec == null ? specFromItem(fallback) : spec;
+    }
+
+    static void detachPortalOutput(String itemId) {
+        UpperScreenProjectionService service = activeService;
+        if (service != null) {
+            PortalSurfaceFanOut fanOut = service.portalFanOut;
+            if (fanOut != null) fanOut.removeTargetAndWait(itemId);
+        }
+    }
+
+    static void setPortalFrozen(String itemId, boolean value) {
+        if (!isMultiPortalMode()) {
+            setFrozen(value);
+            return;
+        }
+        portalFrozen.put(itemId, value);
+        UpperScreenProjectionService service = activeService;
+        if (service != null) {
+            service.mainHandler.post(() -> {
+                PortalSurfaceFanOut fanOut = service.portalFanOut;
+                if (fanOut != null) fanOut.setFrozen(itemId, value);
+            });
+            service.requestOutputSurfaceUpdate();
+        }
+        notifyConfigurationChanged();
     }
 
     static void setFrozen(boolean value) {
@@ -141,6 +247,14 @@ public final class UpperScreenProjectionService extends Service {
         notifyConfigurationChanged();
     }
 
+    static void setFrameRate(int fps) {
+        targetFps = WidgetLayout.normalizeMagnifierFps(fps);
+        UpperScreenProjectionService service = activeService;
+        if (service != null) {
+            service.mainHandler.post(service::applyFrameRate);
+        }
+    }
+
     static float regionLeft() { return regionLeft; }
     static float regionTop() { return regionTop; }
     static float regionRight() { return regionRight; }
@@ -151,8 +265,7 @@ public final class UpperScreenProjectionService extends Service {
     static int sourceHeight() { return sourceHeight; }
 
     private static void notifyConfigurationChanged() {
-        Listener current = listener;
-        if (current != null) {
+        for (Listener current : listeners) {
             current.onProjectionConfigurationChanged();
         }
     }
@@ -220,11 +333,17 @@ public final class UpperScreenProjectionService extends Service {
         if (projection == null || !running) {
             return;
         }
-        Surface target;
-        synchronized (SURFACE_LOCK) {
-            target = outputSurface;
+        Surface activeTarget;
+        if (isMultiPortalMode()) {
+            Surface fanOutSurface = ensurePortalFanOut();
+            activeTarget = allPortalsFrozen() ? null : fanOutSurface;
+        } else {
+            Surface target;
+            synchronized (SURFACE_LOCK) {
+                target = outputSurface;
+            }
+            activeTarget = !frozen && target != null && target.isValid() ? target : null;
         }
-        Surface activeTarget = !frozen && target != null && target.isValid() ? target : null;
         if (virtualDisplay == null) {
             if (activeTarget == null) {
                 return;
@@ -248,6 +367,60 @@ public final class UpperScreenProjectionService extends Service {
         applyFrameRate();
     }
 
+    private void attachPortalOutputInternal(String itemId, Surface surface, int width, int height,
+            PortalSurfaceFanOut.Spec spec) {
+        if (!isMultiPortalMode() || itemId == null || itemId.isEmpty()) return;
+        PortalSurfaceFanOut fanOut = portalFanOut;
+        if (fanOut == null) {
+            requestOutputSurfaceUpdate();
+            fanOut = portalFanOut;
+        }
+        if (fanOut != null) {
+            fanOut.putTarget(itemId, surface, width, height, spec);
+            fanOut.setFrozen(itemId, Boolean.TRUE.equals(portalFrozen.get(itemId)));
+        }
+    }
+
+    private Surface ensurePortalFanOut() {
+        if (portalFanOut == null) {
+            portalFanOut = new PortalSurfaceFanOut(sourceWidth, sourceHeight);
+            Surface surface = portalFanOut.start();
+            if (surface == null || !surface.isValid()) {
+                portalFanOut.release();
+                portalFanOut = null;
+                stopProjection(getString(R.string.magnifier_status_surface_failed));
+                return null;
+            }
+        }
+        return portalFanOut.inputSurface();
+    }
+
+    private void reconfigureOutputMode() {
+        if (virtualDisplay != null) {
+            try {
+                virtualDisplay.setSurface(null);
+            } catch (Throwable ignored) {
+            }
+        }
+        if (!isMultiPortalMode()) releasePortalFanOut();
+        updateOutputSurface();
+    }
+
+    private void releasePortalFanOut() {
+        PortalSurfaceFanOut fanOut = portalFanOut;
+        portalFanOut = null;
+        if (fanOut != null) fanOut.release();
+    }
+
+    private static boolean allPortalsFrozen() {
+        if (!isMultiPortalMode()) return false;
+        int frozenCount = 0;
+        for (Boolean value : portalFrozen.values()) {
+            if (Boolean.TRUE.equals(value)) frozenCount++;
+        }
+        return frozenCount >= portalViewCount;
+    }
+
     private void requestOutputSurfaceUpdate() {
         if (Looper.myLooper() == mainHandler.getLooper()) {
             // TextureView releases its Surface immediately after detachOutputSurface returns.
@@ -262,13 +435,17 @@ public final class UpperScreenProjectionService extends Service {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
             return;
         }
-        Surface target;
-        synchronized (SURFACE_LOCK) {
-            target = outputSurface;
+        Surface target = isMultiPortalMode() && portalFanOut != null
+                ? portalFanOut.inputSurface() : null;
+        if (!isMultiPortalMode()) {
+            synchronized (SURFACE_LOCK) {
+                target = outputSurface;
+            }
         }
         if (target != null && target.isValid()) {
             try {
-                target.setFrameRate(targetFps, Surface.FRAME_RATE_COMPATIBILITY_DEFAULT);
+                target.setFrameRate(isMultiPortalMode() ? 60 : targetFps,
+                        Surface.FRAME_RATE_COMPATIBILITY_DEFAULT);
             } catch (Throwable ignored) {
             }
         }
@@ -281,6 +458,7 @@ public final class UpperScreenProjectionService extends Service {
         }
         sourceWidth = width;
         sourceHeight = height;
+        if (portalFanOut != null) portalFanOut.setSourceSize(width, height);
         notifyConfigurationChanged();
         mainHandler.post(() -> {
             if (virtualDisplay != null && running) {
@@ -300,10 +478,13 @@ public final class UpperScreenProjectionService extends Service {
         running = false;
         starting = false;
         frozen = false;
+        portalFrozen.clear();
+        portalSpecs.clear();
         if (virtualDisplay != null) {
             virtualDisplay.release();
             virtualDisplay = null;
         }
+        releasePortalFanOut();
         if (projection != null) {
             MediaProjection active = projection;
             projection = null;
@@ -319,15 +500,9 @@ public final class UpperScreenProjectionService extends Service {
     }
 
     private void dispatchStatus(String status) {
-        Listener current = listener;
-        if (current != null) {
-            mainHandler.post(() -> {
-                Listener active = listener;
-                if (active != null) {
-                    active.onProjectionStatus(status);
-                }
-            });
-        }
+        mainHandler.post(() -> {
+            for (Listener current : listeners) current.onProjectionStatus(status);
+        });
     }
 
     private Notification createNotification() {
@@ -364,5 +539,16 @@ public final class UpperScreenProjectionService extends Service {
 
     private static float clamp(float value, float min, float max) {
         return Math.max(min, Math.min(max, value));
+    }
+
+    private static PortalSurfaceFanOut.Spec specFromItem(WidgetLayout.Item item) {
+        if (item == null) {
+            return new PortalSurfaceFanOut.Spec(0.25f, 0.25f, 0.75f, 0.75f, 1f, 1f, 30);
+        }
+        return new PortalSurfaceFanOut.Spec(
+                item.magnifierLeft, item.magnifierTop,
+                item.magnifierRight, item.magnifierBottom,
+                WidgetLayout.magnifierTargetAspectRatio(item),
+                item.magnifierZoom, item.magnifierFps);
     }
 }

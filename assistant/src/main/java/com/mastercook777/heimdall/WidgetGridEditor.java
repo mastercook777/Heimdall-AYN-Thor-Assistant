@@ -48,10 +48,13 @@ final class WidgetGridEditor extends View {
 
     void addWidget(String type) {
         WidgetLayout layout = host.editableLayout();
-        if (WidgetLayout.TYPE_MAGNIFIER.equals(type)
-                && layout.findItem(WidgetLayout.TYPE_MAGNIFIER) != null) {
-            host.showError(getContext().getString(R.string.grid_editor_magnifier_limit));
-            return;
+        if (WidgetLayout.TYPE_MAGNIFIER.equals(type)) {
+            java.util.List<WidgetLayout.Item> portals =
+                    layout.findItems(WidgetLayout.TYPE_MAGNIFIER);
+            if (portals.size() >= 2) {
+                host.showError(getContext().getString(R.string.grid_editor_magnifier_limit));
+                return;
+            }
         }
         if (WidgetLayout.TYPE_TRANSLATION.equals(type)
                 && layout.findItem(WidgetLayout.TYPE_TRANSLATION) != null) {

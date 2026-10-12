@@ -13,6 +13,19 @@ This guide is the English copy baseline for the Thor lower-screen UI. It favors 
 
 Character count is a triage signal, not a rendering guarantee. Final fit still requires English testing on Thor because the Android emulator does not reproduce Thor font metrics.
 
+## Localization Workflow From 0.4.0
+
+Review the English and Simplified-Chinese strings together whenever a feature changes. The 0.3.0 pass is the baseline; audit every new or changed resource and the affected user journey, then revisit older copy only when that journey exposes a real defect. Include README, privacy text, release notes, and any planned community post in a separate editorial pass.
+
+1. Identify the screen, control width, line count, dynamic values, and action behind each changed string. Check the real behavior, especially draft versus Save, unavailable capabilities, and import versus install.
+2. Run `python tools/audit_localization.py --base <previous-public-ref>`. It checks resource-key parity, plural fallbacks, and format placeholders and lists changed copy for review. Resolve structural errors before building. Chinese can legitimately have only the `other` plural form.
+3. Read both languages in context. Apply the canonical terms below, lead with the action or state, and remove repeated context. Review status/error recovery, dialog consequences, accessibility descriptions, and all new feature entry points. Keep necessary meaning even when the text is longer.
+4. Use the compact-copy targets below to flag likely layout trouble. A ratio such as English character count greater than Chinese count times 1.5 is only a search filter. It cannot be a maximum: `Portal` is six Latin characters but two Han characters, and font width, spaces, placeholders, and control geometry decide fit.
+5. On the exact candidate APK, inspect English and Simplified Chinese on Thor at 1240 x 1080 in one Heimdall-family and one Freya-family theme. Exercise the affected journeys at the owner's normal font scale, then check enlarged text where Android permits it. Include long Profile names, dates, percentages, and error states. Record clipping, unintended wrapping, ellipsis, and unclear meaning with screen and APK hash; fix the string or layout and repeat the affected view.
+6. Before publication, verify release notes and README against the shipped behavior. If posting to Reddit, make one short English post from verified claims and review its title, screenshots, and links separately. A Reddit post does not require a blind rewrite of all previously accepted strings.
+
+Structural checks and an emulator build do not replace the Thor pass. A clipped action, reversed Save implication, misleading capability, or broken placeholder is a release blocker; stylistic preferences without a user-visible defect can be handled in a later copy pass.
+
 ## Voice
 
 - Lead with the action or state: `Save`, `Stopped`, `Add File`, `No maps yet`.
@@ -61,7 +74,8 @@ If a compact label exceeds its target, first remove repeated context, then choos
 | `Full Keyboard` | Temporary full US ANSI surface | Virtual Keyboard |
 | `Keypad` | Compact Grid keyboard module | Keyboard Pad in visible UI |
 | `Quick Actions` | Structured action module | shortcuts |
-| `Magnifier` | Live upper-screen reference module | Zoom except the compact Grid add label |
+| `Portal` | Live upper-screen View Only or Interactive module; legacy stored type remains magnifier | Magnifier as the current feature name |
+| `Community Profiles` | Curated Profile catalog and import entry | templates as a second Profile format |
 | `Canvas` | Profile-owned local media module | image widget |
 | `Translation` | OCR translation feature and editor title | Translation Widget as a page title |
 | `Hardware Monitor` | Passive CPU/RAM module | Monitor except the compact Grid add label |
@@ -108,7 +122,7 @@ Compact Grid add labels are deliberate exceptions: `Pad`, `Zoom`, `Translate`, `
 6. Does the copy remain honest about unavailable capabilities and save boundaries?
 7. Does the English UI fit on Thor in both Heimdall and Freya families at the owner's normal font scale?
 
-## Required Thor Pass Before 0.3.0
+## Candidate Thor Pass
 
 Check the English UI on the exact candidate APK at 1240 x 1080, in at least one Heimdall-family and one Freya-family colorway:
 
@@ -117,7 +131,7 @@ Check the English UI on the exact candidate APK at 1240 x 1080, in at least one 
 - Edit Grid, Grid draft bar, and add-module labels.
 - Macro picker/editor and controller composer.
 - Connections and Profile management.
-- Map, Guide, Magnifier, Translation, Canvas, Quick Actions, Keypad, and Full Keyboard.
+- Map, Guide, Portal, Translation, Community Profiles, Canvas, Quick Actions, Keypad, and Full Keyboard.
 - Dialog titles/actions, long dynamic Profile names, and long macro labels.
 
 Record visual overflow, unintended wrapping, clipped baselines, and forced two-line buttons separately. Build or emulator success is not Thor text-fit acceptance.

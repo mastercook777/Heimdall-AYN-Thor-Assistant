@@ -82,7 +82,6 @@ final class DebugPerformanceDiagnostics {
                 + "adb shell am start -n " + BuildConfig.APPLICATION_ID + "/"
                 + AssistantActivity.class.getName() + " --es "
                 + EXTRA_MODE + " " + mode.code);
-        startReporter();
     }
 
     static Mode mode() {
@@ -225,13 +224,25 @@ final class DebugPerformanceDiagnostics {
     }
 
     static void shutdown() {
+        pauseReporting();
+        tasks.clear();
+        counters.clear();
+        activeAnimators.clear();
+    }
+
+    static void pauseReporting() {
         if (reporter != null) {
             reporter.shutdownNow();
             reporter = null;
         }
-        tasks.clear();
+    }
+
+    static void resumeReporting() {
+        if (!debugEnabled || reporter != null) return;
         counters.clear();
-        activeAnimators.clear();
+        lastProcessCpuMs = Process.getElapsedCpuTime();
+        lastMainCpuMs = readThreadCpuMs(mainTid);
+        startReporter();
     }
 
     private static void startReporter() {

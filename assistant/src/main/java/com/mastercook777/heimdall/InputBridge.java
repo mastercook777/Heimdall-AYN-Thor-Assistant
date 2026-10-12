@@ -335,6 +335,35 @@ public final class InputBridge {
         SHIZUKU_BACKEND.cancelNativeTouchDrag(context);
     }
 
+    static boolean portalInteractiveReady(Context context) {
+        return advancedControlsReady(context) && ShizukuNativeController.isServiceBound();
+    }
+
+    static void preparePortalInteractive(Context context) {
+        if (context != null && advancedControlsEnabled(context)
+                && ShizukuNativeController.isPermissionGranted()) {
+            ShizukuNativeController.requestServiceBinding(context);
+        }
+    }
+
+    static boolean startPortalTouch(Context context, int width, int height,
+            float x, float y, Callback callback) {
+        return SHIZUKU_BACKEND.startPortalTouch(
+                context, width, height, x, y, callback);
+    }
+
+    static boolean movePortalTouch(Context context, float x, float y) {
+        return SHIZUKU_BACKEND.movePortalTouch(context, x, y);
+    }
+
+    static boolean endPortalTouch(Context context, float x, float y) {
+        return SHIZUKU_BACKEND.endPortalTouch(context, x, y);
+    }
+
+    static void cancelPortalTouch(Context context) {
+        SHIZUKU_BACKEND.cancelPortalTouch(context);
+    }
+
     public static boolean supportsMouseMode() {
         return ACCESSIBILITY_BACKEND.supportsMouseMode();
     }

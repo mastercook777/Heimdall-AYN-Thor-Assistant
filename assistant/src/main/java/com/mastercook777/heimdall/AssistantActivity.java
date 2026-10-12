@@ -87,6 +87,7 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
@@ -173,6 +174,7 @@ public class AssistantActivity extends Activity {
     private static final String STATE_MACRO_MAPPING_PROTECTION_DRAFT =
             "heimdall.macro_mapping_protection_draft";
     private static final String STATE_MAGNIFIER_DRAFT = "heimdall.magnifier_draft";
+    private static final String STATE_MAGNIFIER_DIRTY_MASK = "heimdall.magnifier_dirty_mask";
     private static final String STATE_TRANSLATION_DRAFT = "heimdall.translation_draft";
     private static final String STATE_THEME_DRAFT = "heimdall.theme_draft";
     private static final String STATE_COMPATIBILITY_DRAFT = "heimdall.compatibility_draft";
@@ -185,6 +187,11 @@ public class AssistantActivity extends Activity {
     private static final String STATE_PROFILE_CONTEXT_BINDING_DRAFT =
             "heimdall.profile_context_binding_draft";
     private static final String STATE_PROFILE_DEFAULT_DRAFT = "heimdall.profile_default_draft";
+    private static final int MAGNIFIER_DIRTY_REGION = 1;
+    private static final int MAGNIFIER_DIRTY_ZOOM = 1 << 1;
+    private static final int MAGNIFIER_DIRTY_SHAPE = 1 << 2;
+    private static final int MAGNIFIER_DIRTY_MODE = 1 << 3;
+    private static final int MAGNIFIER_DIRTY_FPS = 1 << 4;
 
     private List<GameProfile> profiles;
     private GameProfile selectedProfile;
@@ -248,6 +255,8 @@ public class AssistantActivity extends Activity {
     private Button settingsBindPlatformButton;
     private CheckBox settingsProfileDefaultInput;
     private WidgetLayout.Item settingsMagnifierDraft;
+    private String settingsMagnifierItemId;
+    private int settingsMagnifierDirtyMask;
     private WidgetLayout.Item translationEditorDraft;
     private TranslationProviderConfig settingsTranslationProviderDraft;
     private Runnable translationEditorRefresh;
@@ -311,6 +320,16 @@ public class AssistantActivity extends Activity {
     private List<GameProfile> pendingProfileExportProfiles;
     private ProfileBundleStore.PreparedImport pendingProfileImport;
     private ProfileBundleStore.Request pendingProfileBundleRequest;
+    private CommunityProfileRepository.Request pendingCommunityProfileDownload;
+    private CommunityProfileRepository.Request pendingCommunityProfileSummary;
+    private CommunityProfileGalleryView communityProfileGalleryView;
+    private PanelOverlay communityProfileGalleryOverlay;
+    private File pendingCommunityProfileFile;
+    private boolean communityProfileFlowActive;
+    private boolean communityProfileSummaryLoaded;
+    private int communityProfileSummaryCount = -1;
+    private LinearLayout settingsCommunityProfileEntry;
+    private TextView settingsCommunityProfileCount;
     private int pendingProfileIconIndex = -1;
     private String[] pendingMacroIconKey;
     private ImageView pendingMacroIconPreview;
@@ -353,6 +372,7 @@ public class AssistantActivity extends Activity {
     private GuideTextDocument cachedGuideTextDocument;
     private GuideEntry cachedGuideTextEntry;
     private int guideTextLoadGeneration;
+    private int guideTextImportGeneration;
     private boolean guideReaderFullscreen;
     private EditText pendingGuideTextInput;
     private List<MacroStep> activeDraftSteps;
@@ -383,6 +403,7 @@ public class AssistantActivity extends Activity {
             new ManualProfileSelectionGuard();
     private final ForegroundAppTracker.Listener foregroundAppListener = snapshot ->
             uiHandler.post(() -> {
+                if (!isProfileAwarenessRunning()) return;
                 if (gameContextController != null) gameContextController.refresh(snapshot);
                 maybeAutoSwitchProfile(snapshot);
             });
@@ -390,12 +411,13 @@ public class AssistantActivity extends Activity {
     private String lastProfileAutoSwitchDiagnostic = "";
     private boolean activityStarted;
     private boolean activityResumed;
+    private ScreenPowerObserver screenPowerObserver;
     private final UpperDisplayStartedLifecycleHandoff upperDisplayStartedHandoff =
             new UpperDisplayStartedLifecycleHandoff();
     private final Runnable profileAwarenessTicker = new Runnable() {
         @Override
         public void run() {
-            if (!profileAwarenessActive) {
+            if (!profileAwarenessActive || !ScreenPowerObserver.isInteractive(AssistantActivity.this)) {
                 return;
             }
             long started = DebugPerformanceDiagnostics.beginTask("App-aware upper-window scan");
@@ -415,6 +437,7 @@ public class AssistantActivity extends Activity {
     private final List<QuickActionButtonView> quickScreenshotButtons = new ArrayList<>();
     private final List<QuickActionButtonView> quickRecordButtons = new ArrayList<>();
     private final List<UpperScreenMagnifierView> magnifierViews = new ArrayList<>();
+    private final Map<String, Float> magnifierRenderedAspectRatios = new HashMap<>();
     private final List<CanvasWidgetView> canvasViews = new ArrayList<>();
     private final List<TranslationWidgetView> translationViews = new ArrayList<>();
     private final List<HardwareMonitorWidgetView> hardwareMonitorViews = new ArrayList<>();
@@ -426,11 +449,13 @@ public class AssistantActivity extends Activity {
     private WidgetLayout.Item pendingMagnifierProjectionItem;
     private WidgetLayout.Item pendingMagnifierRegionAfterProjectionItem;
     private float pendingMagnifierRegionAfterProjectionAspectRatio;
+    private boolean pendingMagnifierRegionAfterProjectionUsesSettingsDraft;
     private int pendingMagnifierRegionStartAttempts;
     private WidgetLayout.Item pendingMagnifierRegionItem;
     private GameProfile pendingMagnifierRegionProfile;
     private boolean magnifierRegionCaptureInProgress;
     private boolean pendingMagnifierRegionUsesDraft;
+    private boolean pendingMagnifierRegionUsesSettingsDraft;
     private boolean magnifierWasFrozenBeforeRegionCapture;
     private boolean translationRegionCaptureInProgress;
     private GameProfile pendingCanvasImportProfile;
@@ -520,6 +545,7 @@ public class AssistantActivity extends Activity {
         thorGameFocusProtection.apply(this, true);
         super.onCreate(savedInstanceState);
         DebugPerformanceDiagnostics.initialize(this);
+        screenPowerObserver = new ScreenPowerObserver(this, this::onScreenPowerChanged);
         gameContextController = new ShizukuGameContextController(this, snapshot -> {
             updateSettingsDetectedGameStatus(snapshot);
             maybeAutoSwitchProfile(ForegroundAppTracker.latest());
@@ -552,11 +578,10 @@ public class AssistantActivity extends Activity {
         renderProfiles();
         renderSelectedProfile();
         startStartupReadiness();
-        systemStatusController.start();
+        if (isVisibleRuntimeAllowed()) systemStatusController.start();
         DebugPerformanceDiagnostics.attachRootObservers(this);
         installTextInputCompatibilityObservers();
-        getWindow().getDecorView().post(() -> thorPerformanceCompatibility.apply(
-                this, DebugPerformanceDiagnostics.isCompositionProbe()));
+        getWindow().getDecorView().post(this::updateStartedRuntime);
         if (activeScreen == SCREEN_SETTINGS && settingsContentScroll != null) {
             int restoreY = Math.max(0, settingsContentScrollY);
             settingsContentScroll.post(() -> settingsContentScroll.scrollTo(0, restoreY));
@@ -580,13 +605,14 @@ public class AssistantActivity extends Activity {
         outState.putInt(STATE_ACTIVE_SCREEN, activeScreen);
         outState.putInt(STATE_SETTINGS_SECTION, activeSettingsSection);
         outState.putInt(STATE_SETTINGS_SCROLL_Y, settingsContentScrollY);
-        putJsonState(outState, STATE_LAYOUT_DRAFT, draftWidgetLayout);
+        putJsonState(outState, STATE_LAYOUT_DRAFT, widgetLayoutDraftForInstanceState());
         putJsonState(outState, STATE_TOUCHPAD_DRAFT, settingsTouchpadDraft);
         if (settingsMacroMappingProtectionDraft != null) {
             outState.putBoolean(STATE_MACRO_MAPPING_PROTECTION_DRAFT,
                     settingsMacroMappingProtectionDraft);
         }
         putJsonState(outState, STATE_MAGNIFIER_DRAFT, settingsMagnifierDraft);
+        outState.putInt(STATE_MAGNIFIER_DIRTY_MASK, settingsMagnifierDirtyMask);
         putJsonState(outState, STATE_TRANSLATION_DRAFT, translationEditorDraft);
         if (settingsThemeDraft != null) {
             outState.putString(STATE_THEME_DRAFT, settingsThemeDraft);
@@ -634,6 +660,7 @@ public class AssistantActivity extends Activity {
         activeScreen = state.getInt(STATE_ACTIVE_SCREEN, SCREEN_MAIN);
         activeSettingsSection = state.getInt(STATE_SETTINGS_SECTION, SETTINGS_TOUCHPAD);
         settingsContentScrollY = state.getInt(STATE_SETTINGS_SCROLL_Y, 0);
+        settingsMagnifierDirtyMask = state.getInt(STATE_MAGNIFIER_DIRTY_MASK, 0);
         try {
             String layoutJson = state.getString(STATE_LAYOUT_DRAFT);
             if (layoutJson != null) {
@@ -649,6 +676,7 @@ public class AssistantActivity extends Activity {
             if (magnifierJson != null) {
                 settingsMagnifierDraft = WidgetLayout.Item.fromJson(
                         new JSONObject(magnifierJson));
+                settingsMagnifierItemId = settingsMagnifierDraft.itemId;
             }
             String translationJson = state.getString(STATE_TRANSLATION_DRAFT);
             if (translationJson != null) {
@@ -724,12 +752,15 @@ public class AssistantActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        if (screenPowerObserver != null) screenPowerObserver.close();
         uiHandler.removeCallbacks(hideStartupReadiness);
         StartupReadinessCoordinator readinessCoordinator = startupReadinessCoordinator;
         startupReadinessCoordinator = null;
         if (readinessCoordinator != null) readinessCoordinator.close();
         dismissStartupReadiness(false);
         dismissFirstSetup(false);
+        guideTextImportGeneration++;
+        pendingGuideTextInput = null;
         flushGuideReadingPosition();
         dismissFullVirtualKeyboard(false);
         parkVirtualMouseDispatcher();
@@ -745,6 +776,8 @@ public class AssistantActivity extends Activity {
         releaseCanvasViews();
         releaseHardwareMonitorViews();
         cancelPendingCanvasImport();
+        cancelCommunityProfileSummary();
+        cancelCommunityProfileFlow();
         cancelPendingProfileBundleWork();
         stopMagnifierProjection();
         releaseMapWebView();
@@ -773,13 +806,8 @@ public class AssistantActivity extends Activity {
         super.onStart();
         activityStarted = true;
         recordFocusBoundary("start");
-        stabilityDiagnostics.start(this);
-        getWindow().getDecorView().post(() -> {
-            if (activityStarted && !isFinishing() && !isDestroyed()) {
-                thorPerformanceCompatibility.apply(this,
-                        DebugPerformanceDiagnostics.isCompositionProbe());
-            }
-        });
+        screenPowerObserver.refresh();
+        updateStartedRuntime();
         if (DebugPerformanceDiagnostics.isStaticUi()) {
             ThorAccessibilityService.setDiagnosticScanningSuspended(true);
             return;
@@ -789,7 +817,6 @@ public class AssistantActivity extends Activity {
         if (accessibilityService != null) {
             accessibilityService.refreshForegroundApp();
         }
-        systemStatusController.start();
         updateProfileAwarenessRegistration();
     }
 
@@ -797,6 +824,7 @@ public class AssistantActivity extends Activity {
     protected void onResume() {
         super.onResume();
         activityResumed = true;
+        screenPowerObserver.refresh();
         updateGameFocusProtection(true);
         recordFocusBoundary("resume-protected");
         requestUpperDisplayFocusHandoffForStartedLifecycle();
@@ -806,7 +834,7 @@ public class AssistantActivity extends Activity {
             resumeHardwareMonitorViews();
         }
         updateCanvasPlayback();
-        if (activeMapWebView != null) {
+        if (activeMapWebView != null && isVisibleRuntimeAllowed()) {
             activeMapWebView.onResume();
         }
         if (touchPadView != null) {
@@ -830,6 +858,7 @@ public class AssistantActivity extends Activity {
         resetRightStickIfNeeded();
         parkVirtualMouseDispatcher();
         parkKeyboardInputSession();
+        InputBridge.cancelPortalTouch(this);
         InputBridge.cancelShizukuTouchpadDrag(this);
         if (activeMapWebView != null) {
             activeMapWebView.onPause();
@@ -852,7 +881,64 @@ public class AssistantActivity extends Activity {
         ForegroundAppTracker.clearListener(foregroundAppListener);
         if (gameContextController != null) gameContextController.suspend();
         systemStatusController.stop();
+        DebugPerformanceDiagnostics.pauseReporting();
+        if (!ScreenPowerObserver.isInteractive(this) && gameContextController != null) {
+            gameContextController.suspendForStandby();
+        }
         super.onStop();
+    }
+
+    private boolean isProfileAwarenessRunning() {
+        return profileAwarenessActive && ScreenPowerObserver.isInteractive(this);
+    }
+
+    private boolean isVisibleRuntimeAllowed() {
+        return screenPowerObserver == null || screenPowerObserver.isVisibleRuntimeAllowed();
+    }
+
+    private void updateStartedRuntime() {
+        if (activityStarted && isVisibleRuntimeAllowed() && !isFinishing() && !isDestroyed()) {
+            stabilityDiagnostics.start(this);
+            DebugPerformanceDiagnostics.resumeReporting();
+            if (!DebugPerformanceDiagnostics.isStaticUi()) systemStatusController.start();
+            getWindow().getDecorView().post(() -> {
+                if (activityStarted && isVisibleRuntimeAllowed() && !isFinishing() && !isDestroyed()) {
+                    thorPerformanceCompatibility.apply(this,
+                            DebugPerformanceDiagnostics.isCompositionProbe());
+                }
+            });
+        } else {
+            stabilityDiagnostics.stop();
+            systemStatusController.stop();
+            DebugPerformanceDiagnostics.pauseReporting();
+            thorPerformanceCompatibility.release();
+        }
+    }
+
+    private void onScreenPowerChanged(boolean interactive, boolean displayOn) {
+        updateStartedRuntime();
+        if (activityStarted) updateProfileAwarenessRegistration();
+        else if (!interactive && gameContextController != null) gameContextController.suspendForStandby();
+        if (!isVisibleRuntimeAllowed()) {
+            pauseMagnifierViews();
+            pauseTranslationViews();
+            pauseCanvasPlayback();
+            pauseHardwareMonitorViews();
+            resetRightStickIfNeeded();
+            parkVirtualMouseDispatcher();
+            parkKeyboardInputSession();
+            InputBridge.cancelPortalTouch(this);
+            InputBridge.cancelShizukuTouchpadDrag(this);
+            if (activeMapWebView != null) activeMapWebView.onPause();
+        } else if (activityResumed) {
+            if (!DebugPerformanceDiagnostics.isStaticUi()) {
+                resumeMagnifierViews();
+                resumeTranslationViews();
+                resumeHardwareMonitorViews();
+            }
+            updateCanvasPlayback();
+            if (activeMapWebView != null) activeMapWebView.onResume();
+        }
     }
 
     @Override
@@ -1053,6 +1139,7 @@ public class AssistantActivity extends Activity {
 
     private void requestUpperDisplayFocusHandoffForStartedLifecycle() {
         if (!activityStarted
+                || !isVisibleRuntimeAllowed()
                 || !activityResumed
                 || DebugPerformanceDiagnostics.isStaticUi()
                 || isFinishing()
@@ -1086,10 +1173,12 @@ public class AssistantActivity extends Activity {
                 "App-aware upper-window scan");
         ForegroundAppTracker.clearListener(foregroundAppListener);
         profileAwarenessActive = activityStarted
+                && ScreenPowerObserver.isInteractive(this)
                 && !DebugPerformanceDiagnostics.isStaticUi()
                 && ForegroundAppTracker.isEnabled(this);
         if (gameContextController != null) {
-            gameContextController.setEnabled(profileAwarenessActive
+            if (!ScreenPowerObserver.isInteractive(this)) gameContextController.suspendForStandby();
+            else gameContextController.setEnabled(profileAwarenessActive
                     && InputBridge.advancedControlsEnabled(this)
                     && ShizukuNativeController.isPermissionGranted());
         }
@@ -1264,6 +1353,9 @@ public class AssistantActivity extends Activity {
             return;
         }
         if (requestCode == REQUEST_GUIDE_TEXT_FILE) {
+            EditText targetInput = pendingGuideTextInput;
+            pendingGuideTextInput = null;
+            int importGeneration = guideTextImportGeneration;
             if (resultCode == RESULT_OK && data != null && data.getData() != null) {
                 Uri uri = data.getData();
                 try {
@@ -1271,17 +1363,26 @@ public class AssistantActivity extends Activity {
                             Intent.FLAG_GRANT_READ_URI_PERMISSION);
                 } catch (Exception ignored) {
                 }
-                String imported = readTextDocument(uri, 60000);
-                if (pendingGuideTextInput != null && imported.length() > 0) {
-                    pendingGuideTextInput.setText(imported);
-                    pendingGuideTextInput.setSelection(Math.min(
-                            pendingGuideTextInput.getText().length(), imported.length()));
-                    showAction(getString(R.string.action_note_file_imported));
-                } else {
-                    showErrorAction(getString(R.string.error_note_file_read));
+                if (targetInput != null) {
+                    GuideTextLoader.loadUri(this, uri, result -> {
+                        if (importGeneration != guideTextImportGeneration
+                                || !targetInput.isAttachedToWindow()) {
+                            return;
+                        }
+                        if (result.document != null && result.document.text.length() > 0) {
+                            String imported = result.document.text;
+                            targetInput.setText(imported);
+                            targetInput.setSelection(imported.length());
+                            showAction(getString(R.string.action_note_file_imported));
+                        } else {
+                            int message = result.failure == GuideTextLoader.Failure.TOO_LARGE
+                                    ? R.string.guide_text_too_large
+                                    : R.string.error_note_file_read;
+                            showErrorAction(getString(message));
+                        }
+                    });
                 }
             }
-            pendingGuideTextInput = null;
             return;
         }
         if (requestCode == REQUEST_MAP_FILE && resultCode == RESULT_OK
@@ -1723,7 +1824,8 @@ public class AssistantActivity extends Activity {
         updateBridgeStatus();
         refreshFirstSetupSurfaces();
         if (activeScreen == SCREEN_SETTINGS
-                && activeSettingsSection == SETTINGS_INPUT
+                && (activeSettingsSection == SETTINGS_INPUT
+                        || activeSettingsSection == SETTINGS_MAGNIFIER)
                 && settingsContentContainer != null) {
             refreshSettingsContent();
         }
@@ -2199,6 +2301,8 @@ public class AssistantActivity extends Activity {
         quickRecordButtons.clear();
         touchPadView = null;
         statusText = null;
+        UpperScreenProjectionService.setPortalViewCount(
+                layout.findItems(WidgetLayout.TYPE_MAGNIFIER).size());
         for (WidgetLayout.Item item : layout.items) {
             View widget = createWidget(item);
             if (widget == null) {
@@ -2257,7 +2361,7 @@ public class AssistantActivity extends Activity {
                             showErrorAction(getString(R.string.canvas_save_layout_first));
                         }
                     });
-            view.setPlaybackAllowed(activityResumed && activeScreen == SCREEN_MAIN
+            view.setPlaybackAllowed(activityResumed && isVisibleRuntimeAllowed() && activeScreen == SCREEN_MAIN
                     && !canvasOverlayActive);
             canvasViews.add(view);
             return view;
@@ -2276,7 +2380,8 @@ public class AssistantActivity extends Activity {
                         @Override
                         public void onRegionRequested(WidgetLayout.Item requestedItem,
                                 float targetAspectRatio) {
-                            startMagnifierRegionCapture(requestedItem, targetAspectRatio);
+                            startMagnifierRegionCapture(
+                                    requestedItem, targetAspectRatio, false);
                         }
 
                         @Override
@@ -2285,7 +2390,48 @@ public class AssistantActivity extends Activity {
                                 return;
                             }
                             stopMagnifierProjection();
-            showAction(getString(R.string.action_magnifier_stopped));
+                            showAction(getString(R.string.action_magnifier_stopped));
+                        }
+
+                        @Override
+                        public void onInteractivePreparationRequested() {
+                            InputBridge.preparePortalInteractive(AssistantActivity.this);
+                        }
+
+                        @Override
+                        public boolean isInteractiveReady() {
+                            return InputBridge.portalInteractiveReady(AssistantActivity.this);
+                        }
+
+                        @Override
+                        public boolean onInteractiveTouchStart(float sourceX, float sourceY,
+                                int sourceWidth, int sourceHeight) {
+                            return InputBridge.startPortalTouch(AssistantActivity.this,
+                                    sourceWidth, sourceHeight, sourceX, sourceY,
+                                    inputStatusCallback);
+                        }
+
+                        @Override
+                        public boolean onInteractiveTouchMove(float sourceX, float sourceY) {
+                            return InputBridge.movePortalTouch(
+                                    AssistantActivity.this, sourceX, sourceY);
+                        }
+
+                        @Override
+                        public boolean onInteractiveTouchEnd(float sourceX, float sourceY) {
+                            return InputBridge.endPortalTouch(
+                                    AssistantActivity.this, sourceX, sourceY);
+                        }
+
+                        @Override
+                        public void onInteractiveTouchCancel() {
+                            InputBridge.cancelPortalTouch(AssistantActivity.this);
+                        }
+
+                        @Override
+                        public void onInteractiveUnavailable() {
+                            showErrorAction(getString(
+                                    R.string.portal_interactive_unavailable));
                         }
                     });
             magnifierViews.add(view);
@@ -2335,7 +2481,7 @@ public class AssistantActivity extends Activity {
                         }
                     });
             translationViews.add(view);
-            if (activityResumed && activeScreen == SCREEN_MAIN && !hasUnsavedWidgetLayout()) {
+            if (activityResumed && isVisibleRuntimeAllowed() && activeScreen == SCREEN_MAIN && !hasUnsavedWidgetLayout()) {
                 view.resume();
             }
             return view;
@@ -2343,7 +2489,7 @@ public class AssistantActivity extends Activity {
         if (WidgetLayout.TYPE_HARDWARE_MONITOR.equals(type)) {
             HardwareMonitorWidgetView view = new HardwareMonitorWidgetView(this);
             hardwareMonitorViews.add(view);
-            if (activityResumed && activeScreen == SCREEN_MAIN && !hasUnsavedWidgetLayout()) {
+            if (activityResumed && isVisibleRuntimeAllowed() && activeScreen == SCREEN_MAIN && !hasUnsavedWidgetLayout()) {
                 view.resume();
             }
             return view;
@@ -2879,11 +3025,13 @@ public class AssistantActivity extends Activity {
             showErrorAction(getString(R.string.error_magnifier_default_display_only));
             return;
         }
-        UpperScreenProjectionService.setRegion(item.magnifierLeft, item.magnifierTop,
-                item.magnifierRight, item.magnifierBottom);
-        UpperScreenProjectionService.setTuning(
-                WidgetLayout.magnifierTargetAspectRatio(item),
-                item.magnifierFps, item.magnifierZoom);
+        if (!UpperScreenProjectionService.isMultiPortalMode()) {
+            UpperScreenProjectionService.setRegion(item.magnifierLeft, item.magnifierTop,
+                    item.magnifierRight, item.magnifierBottom);
+            UpperScreenProjectionService.setTuning(
+                    WidgetLayout.magnifierTargetAspectRatio(item),
+                    item.magnifierFps, item.magnifierZoom);
+        }
         if (UpperScreenProjectionService.isActiveOrStarting()) {
             resumeMagnifierViews();
             schedulePendingMagnifierRegionAfterProjection();
@@ -2910,11 +3058,13 @@ public class AssistantActivity extends Activity {
     private void startApprovedMagnifierProjection(int resultCode, Intent resultData,
             WidgetLayout.Item item) {
         updateTargetDisplayInfo();
-        UpperScreenProjectionService.setRegion(item.magnifierLeft, item.magnifierTop,
-                item.magnifierRight, item.magnifierBottom);
-        UpperScreenProjectionService.setTuning(
-                WidgetLayout.magnifierTargetAspectRatio(item),
-                item.magnifierFps, item.magnifierZoom);
+        if (!UpperScreenProjectionService.isMultiPortalMode()) {
+            UpperScreenProjectionService.setRegion(item.magnifierLeft, item.magnifierTop,
+                    item.magnifierRight, item.magnifierBottom);
+            UpperScreenProjectionService.setTuning(
+                    WidgetLayout.magnifierTargetAspectRatio(item),
+                    item.magnifierFps, item.magnifierZoom);
+        }
         Intent start = new Intent(this, UpperScreenProjectionService.class);
         start.setAction(UpperScreenProjectionService.ACTION_START);
         start.putExtra(UpperScreenProjectionService.EXTRA_RESULT_CODE, resultCode);
@@ -2944,6 +3094,7 @@ public class AssistantActivity extends Activity {
     }
 
     private void stopMagnifierProjection() {
+        InputBridge.cancelPortalTouch(this);
         if (!UpperScreenProjectionService.isActiveOrStarting()) {
             return;
         }
@@ -2953,20 +3104,37 @@ public class AssistantActivity extends Activity {
         uiHandler.postDelayed(this::updateQuickRecordButtons, 350L);
     }
 
-    private void startMagnifierRegionCapture(WidgetLayout.Item item, float targetAspectRatio) {
+    private void startMagnifierRegionCapture(WidgetLayout.Item item, float targetAspectRatio,
+            boolean settingsDraftOrigin) {
+        if (settingsDraftOrigin) {
+            WidgetLayout.Item currentSettingsDraft = ensureSettingsMagnifierDraft();
+            if (activeScreen != SCREEN_SETTINGS
+                    || activeSettingsSection != SETTINGS_MAGNIFIER
+                    || currentSettingsDraft == null
+                    || item == null
+                    || item.itemId == null
+                    || !item.itemId.equals(currentSettingsDraft.itemId)) {
+                clearPendingMagnifierRegionAfterProjection();
+                return;
+            }
+            item = currentSettingsDraft;
+        }
         if (!UpperScreenProjectionService.isRunning()) {
             pendingMagnifierRegionAfterProjectionItem = item;
             pendingMagnifierRegionAfterProjectionAspectRatio =
                     Math.max(0.2f, Math.min(5f, targetAspectRatio));
+            pendingMagnifierRegionAfterProjectionUsesSettingsDraft = settingsDraftOrigin;
             pendingMagnifierRegionStartAttempts = 0;
             requestMagnifierProjection(item);
             return;
         }
         pendingMagnifierRegionItem = item;
         pendingMagnifierRegionProfile = selectedProfile;
-        pendingMagnifierRegionUsesDraft = draftWidgetLayout != null
+        pendingMagnifierRegionUsesDraft = !settingsDraftOrigin && draftWidgetLayout != null
                 && draftWidgetLayout.items.contains(item);
-        magnifierWasFrozenBeforeRegionCapture = UpperScreenProjectionService.isFrozen();
+        pendingMagnifierRegionUsesSettingsDraft = settingsDraftOrigin;
+        magnifierWasFrozenBeforeRegionCapture = UpperScreenProjectionService.isPortalFrozen(
+                item.itemId);
         magnifierRegionCaptureInProgress = true;
         captureInProgress = true;
         Intent intent = CoordinateCaptureActivity.createIntent(
@@ -2985,25 +3153,36 @@ public class AssistantActivity extends Activity {
             pendingMagnifierRegionItem = null;
             pendingMagnifierRegionProfile = null;
             pendingMagnifierRegionUsesDraft = false;
+            pendingMagnifierRegionUsesSettingsDraft = false;
             magnifierWasFrozenBeforeRegionCapture = false;
             showErrorAction(getString(R.string.error_upper_screen_not_found));
             return;
         }
         ActivityOptions options = ActivityOptions.makeBasic();
         options.setLaunchDisplayId(targetDisplay.getDisplayId());
-        UpperScreenProjectionService.setTuning(
-                Math.max(0.2f, Math.min(5f, targetAspectRatio)), item.magnifierFps, 1f);
-        UpperScreenProjectionService.setFrozen(true);
+        if (UpperScreenProjectionService.isMultiPortalMode()) {
+            UpperScreenProjectionService.setPortalFrozen(item.itemId, true);
+        } else {
+            UpperScreenProjectionService.setTuning(
+                    Math.max(0.2f, Math.min(5f, targetAspectRatio)), item.magnifierFps, 1f);
+            UpperScreenProjectionService.setFrozen(true);
+        }
         try {
             startActivity(intent, options.toBundle());
         } catch (Throwable t) {
-            UpperScreenProjectionService.setFrozen(magnifierWasFrozenBeforeRegionCapture);
+            if (UpperScreenProjectionService.isMultiPortalMode()) {
+                UpperScreenProjectionService.setPortalFrozen(
+                        item.itemId, magnifierWasFrozenBeforeRegionCapture);
+            } else {
+                UpperScreenProjectionService.setFrozen(magnifierWasFrozenBeforeRegionCapture);
+            }
             magnifierWasFrozenBeforeRegionCapture = false;
             magnifierRegionCaptureInProgress = false;
             captureInProgress = false;
             pendingMagnifierRegionItem = null;
             pendingMagnifierRegionProfile = null;
             pendingMagnifierRegionUsesDraft = false;
+            pendingMagnifierRegionUsesSettingsDraft = false;
             String reason = t.getClass().getSimpleName();
             String detail = t.getMessage();
             if (detail != null && !detail.trim().isEmpty()) {
@@ -3040,13 +3219,16 @@ public class AssistantActivity extends Activity {
             return;
         }
         float targetAspectRatio = pendingMagnifierRegionAfterProjectionAspectRatio;
+        boolean settingsDraftOrigin =
+                pendingMagnifierRegionAfterProjectionUsesSettingsDraft;
         clearPendingMagnifierRegionAfterProjection();
-        startMagnifierRegionCapture(item, targetAspectRatio);
+        startMagnifierRegionCapture(item, targetAspectRatio, settingsDraftOrigin);
     }
 
     private void clearPendingMagnifierRegionAfterProjection() {
         pendingMagnifierRegionAfterProjectionItem = null;
         pendingMagnifierRegionAfterProjectionAspectRatio = 0f;
+        pendingMagnifierRegionAfterProjectionUsesSettingsDraft = false;
         pendingMagnifierRegionStartAttempts = 0;
     }
 
@@ -3066,18 +3248,33 @@ public class AssistantActivity extends Activity {
         float aspect = intent.getFloatExtra(
                 CoordinateCaptureActivity.EXTRA_TARGET_ASPECT,
                 WidgetLayout.magnifierTargetAspectRatio(item));
-        UpperScreenProjectionService.setRegion(left, top, right, bottom);
-        UpperScreenProjectionService.setTuning(aspect, item.magnifierFps, 1f);
+        if (UpperScreenProjectionService.isMultiPortalMode()) {
+            WidgetLayout.Item preview = item.copy();
+            preview.magnifierLeft = left;
+            preview.magnifierTop = top;
+            preview.magnifierRight = right;
+            preview.magnifierBottom = bottom;
+            preview.magnifierAspectRatio = aspect;
+            preview.magnifierZoom = 1f;
+            UpperScreenProjectionService.updatePortalSpec(item.itemId, preview);
+        } else {
+            UpperScreenProjectionService.setRegion(left, top, right, bottom);
+            UpperScreenProjectionService.setTuning(aspect, item.magnifierFps, 1f);
+        }
     }
 
     private void cancelMagnifierRegionCapture() {
         WidgetLayout.Item item = pendingMagnifierRegionItem;
         if (item != null) {
-            UpperScreenProjectionService.setRegion(item.magnifierLeft, item.magnifierTop,
-                    item.magnifierRight, item.magnifierBottom);
-            UpperScreenProjectionService.setTuning(
-                    WidgetLayout.magnifierTargetAspectRatio(item),
-                    item.magnifierFps, item.magnifierZoom);
+            if (UpperScreenProjectionService.isMultiPortalMode()) {
+                UpperScreenProjectionService.updatePortalSpec(item.itemId, item);
+            } else {
+                UpperScreenProjectionService.setRegion(item.magnifierLeft, item.magnifierTop,
+                        item.magnifierRight, item.magnifierBottom);
+                UpperScreenProjectionService.setTuning(
+                        WidgetLayout.magnifierTargetAspectRatio(item),
+                        item.magnifierFps, item.magnifierZoom);
+            }
         }
         finishMagnifierRegionCapture();
     }
@@ -3113,28 +3310,55 @@ public class AssistantActivity extends Activity {
         item.magnifierRight = right;
         item.magnifierBottom = bottom;
         item.magnifierAspectRatio = aspectRatio;
-        if (pendingMagnifierRegionUsesDraft) {
+        if (pendingMagnifierRegionUsesSettingsDraft) {
+            item.magnifierLeft = Math.max(0f, Math.min(0.98f, item.magnifierLeft));
+            item.magnifierTop = Math.max(0f, Math.min(0.98f, item.magnifierTop));
+            item.magnifierRight = Math.max(item.magnifierLeft + 0.02f,
+                    Math.min(1f, item.magnifierRight));
+            item.magnifierBottom = Math.max(item.magnifierTop + 0.02f,
+                    Math.min(1f, item.magnifierBottom));
+            item.magnifierAspectRatio = Math.max(0.2f,
+                    Math.min(5f, item.magnifierAspectRatio));
+            settingsMagnifierDirtyMask |= MAGNIFIER_DIRTY_REGION;
+        } else if (pendingMagnifierRegionUsesDraft) {
             draftWidgetLayout.sanitize();
         } else {
             profile.safeWidgetLayout().sanitize();
             ProfileStore.saveProfiles(this, profiles);
         }
-        UpperScreenProjectionService.setRegion(item.magnifierLeft, item.magnifierTop,
-                item.magnifierRight, item.magnifierBottom);
-        UpperScreenProjectionService.setTuning(
-                WidgetLayout.magnifierTargetAspectRatio(item),
-                item.magnifierFps, item.magnifierZoom);
+        if (UpperScreenProjectionService.isMultiPortalMode()) {
+            UpperScreenProjectionService.updatePortalSpec(item.itemId, item);
+        } else {
+            UpperScreenProjectionService.setRegion(item.magnifierLeft, item.magnifierTop,
+                    item.magnifierRight, item.magnifierBottom);
+            UpperScreenProjectionService.setTuning(
+                    WidgetLayout.magnifierTargetAspectRatio(item),
+                    item.magnifierFps, item.magnifierZoom);
+        }
+        boolean settingsDraftCapture = pendingMagnifierRegionUsesSettingsDraft;
         finishMagnifierRegionCapture();
-        rebuildContent();
+        if (settingsDraftCapture && activeScreen == SCREEN_SETTINGS
+                && activeSettingsSection == SETTINGS_MAGNIFIER) {
+            refreshSettingsContent();
+        } else {
+            rebuildContent();
+        }
     }
 
     private void finishMagnifierRegionCapture() {
-        UpperScreenProjectionService.setFrozen(magnifierWasFrozenBeforeRegionCapture);
+        WidgetLayout.Item item = pendingMagnifierRegionItem;
+        if (UpperScreenProjectionService.isMultiPortalMode() && item != null) {
+            UpperScreenProjectionService.setPortalFrozen(
+                    item.itemId, magnifierWasFrozenBeforeRegionCapture);
+        } else {
+            UpperScreenProjectionService.setFrozen(magnifierWasFrozenBeforeRegionCapture);
+        }
         magnifierWasFrozenBeforeRegionCapture = false;
         magnifierRegionCaptureInProgress = false;
         pendingMagnifierRegionItem = null;
         pendingMagnifierRegionProfile = null;
         pendingMagnifierRegionUsesDraft = false;
+        pendingMagnifierRegionUsesSettingsDraft = false;
         captureInProgress = false;
         resumeMagnifierViews();
     }
@@ -3244,6 +3468,7 @@ public class AssistantActivity extends Activity {
     }
 
     private void resumeMagnifierViews() {
+        if (!isVisibleRuntimeAllowed()) return;
         for (UpperScreenMagnifierView view : magnifierViews) {
             view.resume();
         }
@@ -3257,12 +3482,25 @@ public class AssistantActivity extends Activity {
 
     private void releaseMagnifierViews() {
         for (UpperScreenMagnifierView view : magnifierViews) {
+            String itemId = view.itemId();
+            float aspectRatio = view.renderedContentAspectRatio();
+            if (!itemId.isEmpty() && Float.isFinite(aspectRatio) && aspectRatio > 0f) {
+                magnifierRenderedAspectRatios.put(itemId, aspectRatio);
+            }
             view.release();
         }
         magnifierViews.clear();
     }
 
+    private float magnifierRegionSelectionAspectRatio(WidgetLayout.Item item) {
+        Float renderedAspectRatio = item == null || item.itemId == null
+                ? null : magnifierRenderedAspectRatios.get(item.itemId);
+        return WidgetLayout.magnifierRegionSelectionAspectRatio(item,
+                renderedAspectRatio == null ? 0f : renderedAspectRatio);
+    }
+
     private void resumeTranslationViews() {
+        if (!isVisibleRuntimeAllowed()) return;
         for (TranslationWidgetView view : translationViews) view.resume();
     }
 
@@ -3276,7 +3514,8 @@ public class AssistantActivity extends Activity {
     }
 
     private void resumeHardwareMonitorViews() {
-        if (activeScreen != SCREEN_MAIN || hasUnsavedWidgetLayout()) return;
+        if (!activityResumed || !isVisibleRuntimeAllowed()
+                || activeScreen != SCREEN_MAIN || hasUnsavedWidgetLayout()) return;
         for (HardwareMonitorWidgetView view : hardwareMonitorViews) view.resume();
     }
 
@@ -3309,18 +3548,18 @@ public class AssistantActivity extends Activity {
     }
 
     private void updateCanvasPlayback() {
-        boolean runtimeAllowed = activityResumed && activeScreen == SCREEN_MAIN
+        boolean runtimeAllowed = activityResumed && isVisibleRuntimeAllowed() && activeScreen == SCREEN_MAIN
                 && !canvasOverlayActive && panelOverlays.isEmpty();
         for (CanvasWidgetView view : canvasViews) {
             view.setPlaybackAllowed(runtimeAllowed);
         }
         if (activeCanvasCompositionEditor != null) {
             activeCanvasCompositionEditor.setPlaybackAllowed(
-                    activityResumed && canvasOverlayActive);
+                    activityResumed && isVisibleRuntimeAllowed() && canvasOverlayActive);
         }
         if (activeCanvasFullscreenViewer != null) {
             activeCanvasFullscreenViewer.setPlaybackAllowed(
-                    activityResumed && canvasOverlayActive);
+                    activityResumed && isVisibleRuntimeAllowed() && canvasOverlayActive);
         }
     }
 
@@ -3842,6 +4081,7 @@ public class AssistantActivity extends Activity {
         if (index < 0 || index >= profiles.size()) {
             return;
         }
+        InputBridge.cancelPortalTouch(this);
         if (userInitiated) {
             manualProfileSelectionGuard.record(
                     ForegroundAppTracker.latest(), GameContextTracker.latest());
@@ -3851,6 +4091,8 @@ public class AssistantActivity extends Activity {
         draftWidgetLayout = null;
         settingsTouchpadDraft = null;
         settingsMagnifierDraft = null;
+        settingsMagnifierItemId = null;
+        settingsMagnifierDirtyMask = 0;
         translationEditorDraft = null;
         settingsTranslationProviderDraft = null;
         settingsGameContextBindingDraft = null;
@@ -3960,6 +4202,14 @@ public class AssistantActivity extends Activity {
             return false;
         }
         return true;
+    }
+
+    private WidgetLayout widgetLayoutDraftForInstanceState() {
+        if (draftWidgetLayout == null || selectedProfile == null) {
+            return draftWidgetLayout;
+        }
+        return draftWidgetLayout.hasSameContent(selectedProfile.safeWidgetLayout())
+                ? null : draftWidgetLayout;
     }
 
     private void renderSelectedProfile() {
@@ -4883,6 +5133,8 @@ public class AssistantActivity extends Activity {
         }
         if (activeSettingsSection != section && activeSettingsSection == SETTINGS_MAGNIFIER) {
             settingsMagnifierDraft = null;
+            settingsMagnifierItemId = null;
+            settingsMagnifierDirtyMask = 0;
         }
         if (activeSettingsSection != section && activeSettingsSection == SETTINGS_TRANSLATION) {
             settingsTranslationProviderDraft = null;
@@ -4936,6 +5188,8 @@ public class AssistantActivity extends Activity {
 
         nav.addView(settingsCategoryButton(getString(R.string.settings_category_getting_started),
                 R.drawable.ic_heimdall_header_mark_blue, SETTINGS_GETTING_STARTED));
+        nav.addView(settingsCategoryButton(getString(R.string.settings_category_profile_center),
+                R.drawable.ic_profile, SETTINGS_PROFILE));
         nav.addView(settingsCategoryButton(getString(R.string.settings_category_main),
                 R.drawable.ic_overview, SETTINGS_LAYOUT));
         nav.addView(settingsCategoryButton(getString(R.string.settings_category_controls),
@@ -4950,8 +5204,6 @@ public class AssistantActivity extends Activity {
                 R.drawable.ic_settings, SETTINGS_APPEARANCE));
         nav.addView(settingsCategoryButton(getString(R.string.settings_category_connection),
                 R.drawable.ic_bridge, SETTINGS_INPUT));
-        nav.addView(settingsCategoryButton(getString(R.string.common_profile_fallback),
-                R.drawable.ic_profile, SETTINGS_PROFILE));
         nav.addView(settingsCategoryButton(getString(R.string.settings_category_diagnostics),
                 R.drawable.ic_guide, SETTINGS_DIAGNOSTICS));
 
@@ -5130,6 +5382,8 @@ public class AssistantActivity extends Activity {
     private void populateSettingsContent(LinearLayout content) {
         settingsDetectedGameStatus = null;
         settingsBindPlatformButton = null;
+        settingsCommunityProfileEntry = null;
+        settingsCommunityProfileCount = null;
         TextView title = text(settingsSectionTitle(), 16, TEXT, true);
         title.setGravity(Gravity.CENTER_VERTICAL | Gravity.LEFT);
         content.addView(title, new LinearLayout.LayoutParams(-1, dp(32)));
@@ -5665,6 +5919,8 @@ public class AssistantActivity extends Activity {
     }
 
     private void populateProfileSettingsContent(LinearLayout content) {
+        addCommunityProfileSettingsEntry(content);
+
         if (settingsGameContextBindingDraft == null) {
             settingsGameContextBindingDraft = selectedProfile.safeGameContextBinding().copy();
         }
@@ -5850,6 +6106,136 @@ public class AssistantActivity extends Activity {
             content.addView(settingsProfileRow(profiles.get(i), i));
         }
         addProfileSnapshotSettings(content);
+    }
+
+    private void addCommunityProfileSettingsEntry(LinearLayout content) {
+        LinearLayout entry = new LinearLayout(this);
+        settingsCommunityProfileEntry = entry;
+        entry.setOrientation(LinearLayout.HORIZONTAL);
+        entry.setGravity(Gravity.CENTER_VERTICAL);
+        entry.setPadding(dp(10), dp(8), dp(9), dp(8));
+        entry.setMinimumHeight(dp(78));
+        entry.setClickable(true);
+        entry.setFocusable(true);
+        entry.setBackground(HeimdallUi.isFreyaFamily(this)
+                ? HeimdallUi.cncMenuControl(this, HeimdallUi.RADIUS_BUTTON, false, false)
+                : HeimdallUi.glassSurface(this, ThemeGlassColors.LIST_CONTROL,
+                        HeimdallUi.RADIUS_BUTTON, 1));
+        entry.setOnClickListener(view -> showCommunityProfiles());
+
+        ImageView icon = new ImageView(this);
+        icon.setImageResource(R.drawable.ic_community_profiles);
+        icon.setColorFilter(HeimdallUi.accent(this));
+        icon.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
+        entry.addView(icon, new LinearLayout.LayoutParams(dp(32), dp(32)));
+
+        LinearLayout copy = new LinearLayout(this);
+        copy.setOrientation(LinearLayout.VERTICAL);
+        copy.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout.LayoutParams copyParams = new LinearLayout.LayoutParams(0, -1, 1);
+        copyParams.setMargins(dp(8), 0, dp(4), 0);
+        entry.addView(copy, copyParams);
+
+        String title = getString(R.string.community_profiles_featured);
+        String summary = getString(R.string.community_profiles_entry_summary);
+        TextView titleView = text(title, 14, TEXT, true);
+        titleView.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
+        titleView.setSingleLine(true);
+        copy.addView(titleView, new LinearLayout.LayoutParams(-1, -2));
+
+        TextView summaryView = text(summary, 11, MUTED, false);
+        summaryView.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
+        summaryView.setSingleLine(false);
+        summaryView.setMaxLines(2);
+        LinearLayout.LayoutParams summaryParams = new LinearLayout.LayoutParams(-1, -2);
+        summaryParams.setMargins(0, dp(2), 0, 0);
+        copy.addView(summaryView, summaryParams);
+
+        settingsCommunityProfileCount = text("", 11, MUTED, false);
+        settingsCommunityProfileCount.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
+        settingsCommunityProfileCount.setSingleLine(true);
+        LinearLayout.LayoutParams countParams = new LinearLayout.LayoutParams(-1, -2);
+        countParams.setMargins(0, dp(3), 0, 0);
+        copy.addView(settingsCommunityProfileCount, countParams);
+
+        ImageView arrow = new ImageView(this);
+        arrow.setImageResource(R.drawable.ic_chevron_forward);
+        arrow.setColorFilter(HeimdallUi.mutedTextColor(this));
+        arrow.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
+        entry.addView(arrow, new LinearLayout.LayoutParams(dp(14), dp(24)));
+
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2);
+        params.setMargins(0, dp(2), 0, dp(12));
+        content.addView(entry, params);
+        renderCommunityProfileSummary();
+        loadCommunityProfileSummaryIfNeeded();
+    }
+
+    private void loadCommunityProfileSummaryIfNeeded() {
+        if (communityProfileSummaryLoaded || pendingCommunityProfileSummary != null) {
+            return;
+        }
+        final CommunityProfileRepository.Request[] holder =
+                new CommunityProfileRepository.Request[1];
+        holder[0] = CommunityProfileRepository.loadCatalogAsync(this,
+                BuildConfig.COMMUNITY_PROFILE_CATALOG_URL,
+                new CommunityProfileRepository.CatalogCallback() {
+                    @Override
+                    public void onCatalog(CommunityProfileCatalog catalog,
+                            boolean cached, long fetchedAt) {
+                        if (pendingCommunityProfileSummary != holder[0]) {
+                            return;
+                        }
+                        communityProfileSummaryCount = catalog.profiles.size();
+                        if (!cached) {
+                            communityProfileSummaryLoaded = true;
+                            pendingCommunityProfileSummary = null;
+                        }
+                        renderCommunityProfileSummary();
+                    }
+
+                    @Override
+                    public void onFailure(boolean cachedAvailable, String detail) {
+                        if (pendingCommunityProfileSummary != holder[0]) {
+                            return;
+                        }
+                        communityProfileSummaryLoaded = true;
+                        pendingCommunityProfileSummary = null;
+                        renderCommunityProfileSummary();
+                    }
+                });
+        pendingCommunityProfileSummary = holder[0];
+    }
+
+    private void renderCommunityProfileSummary() {
+        if (settingsCommunityProfileCount == null || settingsCommunityProfileEntry == null) {
+            return;
+        }
+        String countText;
+        if (communityProfileSummaryCount >= 0) {
+            countText = getResources().getQuantityString(
+                    R.plurals.community_profiles_featured_count,
+                    communityProfileSummaryCount, communityProfileSummaryCount);
+            settingsCommunityProfileCount.setTextColor(HeimdallUi.accent(this));
+        } else if (communityProfileSummaryLoaded) {
+            countText = getString(R.string.community_profiles_count_unavailable);
+            settingsCommunityProfileCount.setTextColor(HeimdallUi.mutedTextColor(this));
+        } else {
+            countText = getString(R.string.community_profiles_count_loading);
+            settingsCommunityProfileCount.setTextColor(HeimdallUi.mutedTextColor(this));
+        }
+        settingsCommunityProfileCount.setText(countText);
+        settingsCommunityProfileEntry.setContentDescription(
+                getString(R.string.community_profiles_featured) + ". "
+                        + getString(R.string.community_profiles_entry_summary) + " "
+                        + countText);
+    }
+
+    private void cancelCommunityProfileSummary() {
+        if (pendingCommunityProfileSummary != null) {
+            pendingCommunityProfileSummary.cancel();
+            pendingCommunityProfileSummary = null;
+        }
     }
 
     private void toggleProfileDetectionDetails() {
@@ -6052,20 +6438,39 @@ public class AssistantActivity extends Activity {
             return;
         }
 
-        addSettingsLabel(content, getString(R.string.magnifier_shape));
-        LinearLayout shapeRow = settingsActionRow(content);
-        shapeRow.addView(magnifierShapeButton(
-                getString(R.string.magnifier_shape_rectangle),
-                WidgetLayout.MAGNIFIER_SHAPE_RECTANGLE));
-        shapeRow.addView(magnifierShapeButton(
-                getString(R.string.magnifier_shape_circle),
-                WidgetLayout.MAGNIFIER_SHAPE_CIRCLE));
+        java.util.List<WidgetLayout.Item> portals =
+                selectedProfile.safeWidgetLayout().findItems(WidgetLayout.TYPE_MAGNIFIER);
+        if (portals.size() > 1) {
+            addSettingsLabel(content, getString(R.string.portal_instance_label));
+            LinearLayout portalRow = settingsActionRow(content);
+            for (int index = 0; index < portals.size(); index++) {
+                WidgetLayout.Item portal = portals.get(index);
+                portalRow.addView(magnifierInstanceButton(
+                        getString(index == 0
+                                ? R.string.portal_instance_1 : R.string.portal_instance_2),
+                        portal));
+            }
+            addSettingsHelp(content, getString(R.string.portal_dual_help));
+        }
 
-        addSettingsLabel(content, getString(R.string.magnifier_frame_rate));
-        LinearLayout fpsRow = settingsActionRow(content);
-        fpsRow.addView(magnifierFpsButton("15 FPS", 15));
-        fpsRow.addView(magnifierFpsButton("30 FPS", 30));
-        fpsRow.addView(magnifierFpsButton("60 FPS", 60));
+        addSettingsLabel(content, getString(R.string.portal_mode));
+        LinearLayout modeRow = settingsActionRow(content);
+        modeRow.addView(magnifierModeButton(
+                getString(R.string.portal_mode_view),
+                WidgetLayout.MAGNIFIER_MODE_VIEW));
+        modeRow.addView(magnifierModeButton(
+                getString(R.string.portal_mode_interactive),
+                WidgetLayout.MAGNIFIER_MODE_INTERACTIVE));
+
+        addSettingsLabel(content, getString(R.string.portal_region));
+        LinearLayout regionRow = settingsActionRow(content);
+        regionRow.addView(editorButton(getString(R.string.portal_reselect_region), () -> {
+            WidgetLayout.Item currentDraft = ensureSettingsMagnifierDraft();
+            if (currentDraft != null) {
+                startMagnifierRegionCapture(currentDraft,
+                        magnifierRegionSelectionAspectRatio(currentDraft), true);
+            }
+        }));
 
         addSettingsLabel(content, getString(R.string.magnifier_zoom));
         LinearLayout zoomRow = settingsActionRow(content);
@@ -6074,8 +6479,24 @@ public class AssistantActivity extends Activity {
         zoomRow.addView(magnifierZoomButton("1.5x", 1.5f));
         zoomRow.addView(magnifierZoomButton("2.0x", 2f));
 
+        boolean interactive = WidgetLayout.isInteractiveMagnifier(draft);
+        addSettingsLabel(content, getString(R.string.magnifier_shape));
+        LinearLayout shapeRow = settingsActionRow(content);
+        shapeRow.addView(magnifierShapeButton(
+                getString(R.string.magnifier_shape_rectangle),
+                WidgetLayout.MAGNIFIER_SHAPE_RECTANGLE, true));
+        shapeRow.addView(magnifierShapeButton(
+                getString(R.string.magnifier_shape_circle),
+                WidgetLayout.MAGNIFIER_SHAPE_CIRCLE, true));
+
+        addSettingsLabel(content, getString(R.string.magnifier_frame_rate));
+        LinearLayout fpsRow = settingsActionRow(content);
+        fpsRow.addView(magnifierFpsButton("15 FPS", 15));
+        fpsRow.addView(magnifierFpsButton("30 FPS", 30));
+        fpsRow.addView(magnifierFpsButton("60 FPS", 60));
+
         String projectionStatus = getString(UpperScreenProjectionService.isRunning()
-                ? (UpperScreenProjectionService.isFrozen()
+                ? (UpperScreenProjectionService.isPortalFrozen(draft.itemId)
                         ? R.string.magnifier_status_paused
                         : R.string.magnifier_status_running)
                 : R.string.magnifier_status_stopped);
@@ -6085,6 +6506,14 @@ public class AssistantActivity extends Activity {
                 UpperScreenProjectionService.isRunning()
                         ? HeimdallUi.SEMANTIC_SUCCESS : HeimdallUi.SEMANTIC_NEUTRAL);
 
+        boolean interactiveReady = InputBridge.portalInteractiveReady(this);
+        addSettingsInfoCard(content, getString(R.string.portal_interactive_status),
+                getString(interactiveReady
+                        ? R.string.portal_interactive_ready
+                        : R.string.portal_interactive_unavailable),
+                interactiveReady
+                        ? HeimdallUi.SEMANTIC_SUCCESS : HeimdallUi.SEMANTIC_WARNING);
+
         if (UpperScreenProjectionService.isActiveOrStarting()) {
             LinearLayout actionRow = settingsActionRow(content);
             actionRow.addView(editorButton(getString(R.string.magnifier_stop), () -> {
@@ -6093,19 +6522,40 @@ public class AssistantActivity extends Activity {
             }));
         }
 
-        addSettingsHelp(content, getString(WidgetLayout.isCircularMagnifier(draft)
-                ? R.string.magnifier_settings_help_circle
-                : R.string.magnifier_settings_help_rectangle));
+        addSettingsHelp(content, getString(interactive
+                ? R.string.portal_settings_help_interactive
+                : WidgetLayout.isCircularMagnifier(draft)
+                        ? R.string.magnifier_settings_help_circle
+                        : R.string.magnifier_settings_help_rectangle));
     }
 
     private WidgetLayout.Item ensureSettingsMagnifierDraft() {
         if (settingsMagnifierDraft == null) {
-            WidgetLayout.Item current = currentWidgetLayout().findItem(WidgetLayout.TYPE_MAGNIFIER);
+            WidgetLayout layout = selectedProfile.safeWidgetLayout();
+            WidgetLayout.Item current = settingsMagnifierItemId == null
+                    ? null : layout.findItemById(settingsMagnifierItemId);
+            if (current == null || !WidgetLayout.TYPE_MAGNIFIER.equals(current.type)) {
+                current = layout.findItem(WidgetLayout.TYPE_MAGNIFIER);
+            }
             if (current != null) {
+                settingsMagnifierItemId = current.itemId;
                 settingsMagnifierDraft = current.copy();
+                settingsMagnifierDirtyMask = 0;
             }
         }
         return settingsMagnifierDraft;
+    }
+
+    private Button magnifierInstanceButton(String label, WidgetLayout.Item item) {
+        Button button = editorButton(label, () -> {
+            settingsMagnifierItemId = item.itemId;
+            settingsMagnifierDraft = item.copy();
+            settingsMagnifierDirtyMask = 0;
+            refreshSettingsContent();
+        });
+        HeimdallUi.applyChoiceButton(this, button,
+                item.itemId != null && item.itemId.equals(settingsMagnifierItemId));
+        return button;
     }
 
     private Button magnifierFpsButton(String label, int fps) {
@@ -6113,6 +6563,7 @@ public class AssistantActivity extends Activity {
             WidgetLayout.Item draft = ensureSettingsMagnifierDraft();
             if (draft != null) {
                 draft.magnifierFps = WidgetLayout.normalizeMagnifierFps(fps);
+                settingsMagnifierDirtyMask |= MAGNIFIER_DIRTY_FPS;
                 refreshSettingsContent();
             }
         });
@@ -6122,12 +6573,33 @@ public class AssistantActivity extends Activity {
         return button;
     }
 
-    private Button magnifierShapeButton(String label, String shape) {
+    private Button magnifierModeButton(String label, String mode) {
+        String normalizedMode = WidgetLayout.normalizeMagnifierMode(mode);
+        Button button = editorButton(label, () -> {
+            WidgetLayout.Item draft = ensureSettingsMagnifierDraft();
+            if (draft != null) {
+                draft.magnifierMode = normalizedMode;
+                settingsMagnifierDirtyMask |= MAGNIFIER_DIRTY_MODE;
+                if (WidgetLayout.MAGNIFIER_MODE_INTERACTIVE.equals(normalizedMode)) {
+                    InputBridge.preparePortalInteractive(this);
+                }
+                refreshSettingsContent();
+            }
+        });
+        WidgetLayout.Item draft = ensureSettingsMagnifierDraft();
+        HeimdallUi.applyChoiceButton(this, button, draft != null
+                && normalizedMode.equals(
+                        WidgetLayout.normalizeMagnifierMode(draft.magnifierMode)));
+        return button;
+    }
+
+    private Button magnifierShapeButton(String label, String shape, boolean enabled) {
         String normalizedShape = WidgetLayout.normalizeMagnifierShape(shape);
         Button button = editorButton(label, () -> {
             WidgetLayout.Item draft = ensureSettingsMagnifierDraft();
             if (draft != null) {
                 draft.magnifierShape = normalizedShape;
+                settingsMagnifierDirtyMask |= MAGNIFIER_DIRTY_SHAPE;
                 refreshSettingsContent();
             }
         });
@@ -6135,6 +6607,8 @@ public class AssistantActivity extends Activity {
         HeimdallUi.applyChoiceButton(this, button, draft != null
                 && normalizedShape.equals(
                         WidgetLayout.normalizeMagnifierShape(draft.magnifierShape)));
+        button.setEnabled(enabled);
+        button.setAlpha(enabled ? 1f : 0.45f);
         return button;
     }
 
@@ -6143,6 +6617,7 @@ public class AssistantActivity extends Activity {
             WidgetLayout.Item draft = ensureSettingsMagnifierDraft();
             if (draft != null) {
                 draft.magnifierZoom = WidgetLayout.normalizeMagnifierZoom(zoom);
+                settingsMagnifierDirtyMask |= MAGNIFIER_DIRTY_ZOOM;
                 refreshSettingsContent();
             }
         });
@@ -6161,28 +6636,108 @@ public class AssistantActivity extends Activity {
         if (settingsMagnifierDraft == null) {
             return false;
         }
-        WidgetLayout.Item target = currentWidgetLayout().findItem(WidgetLayout.TYPE_MAGNIFIER);
+        WidgetLayout.Item target = selectedProfile.safeWidgetLayout().findItemById(
+                settingsMagnifierDraft.itemId);
         if (target == null) {
             return false;
         }
+        int dirtyMask = settingsMagnifierDirtyMask;
+        int oldFps = WidgetLayout.normalizeMagnifierFps(target.magnifierFps);
+        float oldZoom = WidgetLayout.normalizeMagnifierZoom(target.magnifierZoom);
+        float oldLeft = target.magnifierLeft;
+        float oldTop = target.magnifierTop;
+        float oldRight = target.magnifierRight;
+        float oldBottom = target.magnifierBottom;
+        float oldAspect = target.magnifierAspectRatio;
         String oldShape = WidgetLayout.normalizeMagnifierShape(target.magnifierShape);
-        String newShape = WidgetLayout.normalizeMagnifierShape(
-                settingsMagnifierDraft.magnifierShape);
-        target.magnifierFps = WidgetLayout.normalizeMagnifierFps(
-                settingsMagnifierDraft.magnifierFps);
-        target.magnifierZoom = WidgetLayout.normalizeMagnifierZoom(
-                settingsMagnifierDraft.magnifierZoom);
-        target.magnifierShape = newShape;
-        boolean shapeChanged = !oldShape.equals(newShape);
-        if (shapeChanged && WidgetLayout.MAGNIFIER_SHAPE_CIRCLE.equals(newShape)
-                && UpperScreenProjectionService.isFrozen()
-                && !magnifierRegionCaptureInProgress) {
-            UpperScreenProjectionService.setFrozen(false);
+        String oldMode = WidgetLayout.normalizeMagnifierMode(target.magnifierMode);
+
+        if ((dirtyMask & MAGNIFIER_DIRTY_FPS) != 0) {
+            target.magnifierFps = WidgetLayout.normalizeMagnifierFps(
+                    settingsMagnifierDraft.magnifierFps);
         }
-        UpperScreenProjectionService.setTuning(
-                WidgetLayout.magnifierTargetAspectRatio(target),
-                target.magnifierFps, target.magnifierZoom);
-        return shapeChanged;
+        if ((dirtyMask & MAGNIFIER_DIRTY_ZOOM) != 0) {
+            target.magnifierZoom = WidgetLayout.normalizeMagnifierZoom(
+                    settingsMagnifierDraft.magnifierZoom);
+        }
+        if ((dirtyMask & MAGNIFIER_DIRTY_REGION) != 0) {
+            target.magnifierLeft = settingsMagnifierDraft.magnifierLeft;
+            target.magnifierTop = settingsMagnifierDraft.magnifierTop;
+            target.magnifierRight = settingsMagnifierDraft.magnifierRight;
+            target.magnifierBottom = settingsMagnifierDraft.magnifierBottom;
+            target.magnifierAspectRatio = settingsMagnifierDraft.magnifierAspectRatio;
+        }
+        if ((dirtyMask & MAGNIFIER_DIRTY_MODE) != 0) {
+            target.magnifierMode = WidgetLayout.normalizeMagnifierMode(
+                    settingsMagnifierDraft.magnifierMode);
+        }
+        if ((dirtyMask & MAGNIFIER_DIRTY_SHAPE) != 0) {
+            target.magnifierShape = WidgetLayout.normalizeMagnifierShape(
+                    settingsMagnifierDraft.magnifierShape);
+        }
+
+        int newFps = WidgetLayout.normalizeMagnifierFps(target.magnifierFps);
+        float newZoom = WidgetLayout.normalizeMagnifierZoom(target.magnifierZoom);
+        String newShape = WidgetLayout.normalizeMagnifierShape(target.magnifierShape);
+        String newMode = WidgetLayout.normalizeMagnifierMode(target.magnifierMode);
+        boolean fpsChanged = oldFps != newFps;
+        boolean shapeChanged = !oldShape.equals(newShape);
+        boolean modeChanged = !oldMode.equals(newMode);
+        boolean renderSpecChanged = shapeChanged
+                || Math.abs(oldZoom - newZoom) > 0.0001f
+                || Math.abs(oldLeft - target.magnifierLeft) > 0.0001f
+                || Math.abs(oldTop - target.magnifierTop) > 0.0001f
+                || Math.abs(oldRight - target.magnifierRight) > 0.0001f
+                || Math.abs(oldBottom - target.magnifierBottom) > 0.0001f
+                || Math.abs(oldAspect - target.magnifierAspectRatio) > 0.0001f;
+        if (fpsChanged || renderSpecChanged || modeChanged) {
+            mirrorMagnifierIntoEquivalentDraft(target);
+        }
+        if ((shapeChanged || modeChanged)
+                && (WidgetLayout.MAGNIFIER_MODE_INTERACTIVE.equals(newMode)
+                        || WidgetLayout.MAGNIFIER_SHAPE_CIRCLE.equals(newShape))
+                && UpperScreenProjectionService.isPortalFrozen(target.itemId)
+                && !magnifierRegionCaptureInProgress) {
+            UpperScreenProjectionService.setPortalFrozen(target.itemId, false);
+        }
+        if (UpperScreenProjectionService.isMultiPortalMode()) {
+            if (renderSpecChanged) {
+                UpperScreenProjectionService.updatePortalSpec(target.itemId, target);
+            } else if (fpsChanged) {
+                UpperScreenProjectionService.updatePortalFps(target.itemId, newFps);
+            }
+        } else {
+            if (renderSpecChanged) {
+                UpperScreenProjectionService.setRegion(target.magnifierLeft, target.magnifierTop,
+                        target.magnifierRight, target.magnifierBottom);
+                UpperScreenProjectionService.setTuning(
+                        WidgetLayout.magnifierTargetAspectRatio(target),
+                        target.magnifierFps, target.magnifierZoom);
+            } else if (fpsChanged) {
+                UpperScreenProjectionService.setFrameRate(newFps);
+            }
+        }
+        if (modeChanged) {
+            InputBridge.cancelPortalTouch(this);
+        }
+        return shapeChanged || modeChanged;
+    }
+
+    private void mirrorMagnifierIntoEquivalentDraft(WidgetLayout.Item profileItem) {
+        WidgetLayout.Item draftItem = equivalentDraftWidgetItem(
+                profileItem, WidgetLayout.TYPE_MAGNIFIER);
+        if (draftItem == null) {
+            return;
+        }
+        draftItem.magnifierFps = profileItem.magnifierFps;
+        draftItem.magnifierZoom = profileItem.magnifierZoom;
+        draftItem.magnifierLeft = profileItem.magnifierLeft;
+        draftItem.magnifierTop = profileItem.magnifierTop;
+        draftItem.magnifierRight = profileItem.magnifierRight;
+        draftItem.magnifierBottom = profileItem.magnifierBottom;
+        draftItem.magnifierAspectRatio = profileItem.magnifierAspectRatio;
+        draftItem.magnifierMode = profileItem.magnifierMode;
+        draftItem.magnifierShape = profileItem.magnifierShape;
     }
 
     private void populateTranslationSettingsContent(LinearLayout content) {
@@ -6227,11 +6782,11 @@ public class AssistantActivity extends Activity {
         }
 
         addSettingsLabel(content, getString(R.string.translation_api_key));
-        EditText apiKey = settingsEditText(provider.apiKey);
+        EditText apiKey = settingsEditText(provider.activeApiKey());
         apiKey.setInputType(android.text.InputType.TYPE_CLASS_TEXT
                 | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
         apiKey.setHint("sk-...");
-        watchTranslationText(apiKey, value -> provider.apiKey = value);
+        watchTranslationText(apiKey, provider::setActiveApiKey);
         content.addView(apiKey, translationInputParams());
         LinearLayout testRow = settingsActionRow(content);
         testRow.addView(editorButton(getString(R.string.translation_test_connection),
@@ -6740,7 +7295,7 @@ public class AssistantActivity extends Activity {
         if (activeSettingsSection == SETTINGS_DIAGNOSTICS) {
             return getString(R.string.settings_category_diagnostics);
         }
-        return "Profile";
+        return getString(R.string.settings_category_profile_center);
     }
 
     private String settingsSectionSummary() {
@@ -6801,14 +7356,22 @@ public class AssistantActivity extends Activity {
             refreshSettingsContent();
             return;
         } else if (activeSettingsSection == SETTINGS_MAGNIFIER) {
-            WidgetLayout.Item current = currentWidgetLayout().findItem(WidgetLayout.TYPE_MAGNIFIER);
+            WidgetLayout.Item current = settingsMagnifierItemId == null
+                    ? selectedProfile.safeWidgetLayout().findItem(WidgetLayout.TYPE_MAGNIFIER)
+                    : selectedProfile.safeWidgetLayout().findItemById(settingsMagnifierItemId);
             settingsMagnifierDraft = current == null ? null : current.copy();
+            settingsMagnifierDirtyMask = 0;
             if (settingsMagnifierDraft != null) {
                 settingsMagnifierDraft.magnifierFps = 30;
                 settingsMagnifierDraft.magnifierScaleMode = WidgetLayout.MAGNIFIER_SCALE_FILL;
+                settingsMagnifierDraft.magnifierMode = WidgetLayout.MAGNIFIER_MODE_VIEW;
                 settingsMagnifierDraft.magnifierShape =
                         WidgetLayout.MAGNIFIER_SHAPE_RECTANGLE;
                 settingsMagnifierDraft.magnifierZoom = 1f;
+                settingsMagnifierDirtyMask = MAGNIFIER_DIRTY_FPS
+                        | MAGNIFIER_DIRTY_MODE
+                        | MAGNIFIER_DIRTY_SHAPE
+                        | MAGNIFIER_DIRTY_ZOOM;
             }
             showDebugAction(getString(R.string.settings_reset_magnifier_draft));
             refreshSettingsContent();
@@ -6868,6 +7431,7 @@ public class AssistantActivity extends Activity {
         if (activeSettingsSection == SETTINGS_MAGNIFIER) {
             magnifierShapeChanged = applySettingsMagnifierDraft();
             settingsMagnifierDraft = null;
+            settingsMagnifierDirtyMask = 0;
         }
         if (activeSettingsSection == SETTINGS_TRANSLATION) {
             if (!applySettingsTranslationDraft()) return;
@@ -8166,10 +8730,11 @@ public class AssistantActivity extends Activity {
                 null,
                 getString(R.string.common_delete),
                 () -> {
-                    selectedProfile.safeMaps().remove(activeLocalMapIndex);
+                    if (!selectedProfile.removeMapAt(activeLocalMapIndex)) {
+                        return;
+                    }
                     activeLocalMapIndex = Math.max(0,
-                            Math.min(activeLocalMapIndex, selectedProfile.safeMaps().size() - 1));
-                    selectedProfile.syncLegacyMapFields();
+                            Math.min(activeLocalMapIndex, selectedProfile.maps.size() - 1));
                     ProfileStore.saveProfiles(this, profiles);
                     rebuildContent();
                 });
@@ -8632,6 +9197,7 @@ public class AssistantActivity extends Activity {
         if (releaseTextInputFocusThen(() -> chooseGuideTextFile(targetInput))) {
             return;
         }
+        guideTextImportGeneration++;
         pendingGuideTextInput = targetInput;
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         intent.addCategory(Intent.CATEGORY_OPENABLE);
@@ -9722,6 +10288,195 @@ public class AssistantActivity extends Activity {
                     }
                 });
         pendingProfileBundleRequest = holder[0];
+    }
+
+    private void showCommunityProfiles() {
+        if (communityProfileGalleryOverlay != null) {
+            return;
+        }
+        CommunityProfileGalleryView gallery = new CommunityProfileGalleryView(this,
+                BuildConfig.COMMUNITY_PROFILE_CATALOG_URL, BuildConfig.VERSION_CODE,
+                new CommunityProfileGalleryView.Listener() {
+                    @Override
+                    public void onCloseRequested() {
+                        if (communityProfileGalleryOverlay != null) {
+                            dismissPanelAnimated(communityProfileGalleryOverlay);
+                        }
+                    }
+
+                    @Override
+                    public void onImportRequested(CommunityProfileCatalog.Entry entry) {
+                        downloadCommunityProfile(entry);
+                    }
+                });
+        communityProfileGalleryView = gallery;
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
+                settingsOverlayWidth(1160), settingsOverlayHeight(900), Gravity.CENTER);
+        params.setMargins(dp(12), dp(12), dp(12), dp(12));
+        communityProfileGalleryOverlay = showPanelOverlay(gallery, params, () -> {
+            if (communityProfileGalleryView != null) {
+                communityProfileGalleryView.close();
+                communityProfileGalleryView = null;
+            }
+            communityProfileGalleryOverlay = null;
+            if (communityProfileFlowActive) {
+                cancelCommunityProfileFlow();
+                cancelPendingProfileBundleWork();
+            }
+        });
+        gallery.start();
+    }
+
+    private void downloadCommunityProfile(CommunityProfileCatalog.Entry entry) {
+        if (entry == null || communityProfileFlowActive
+                || !entry.supportsVersion(BuildConfig.VERSION_CODE)) {
+            return;
+        }
+        cancelPendingProfileBundleWork();
+        cancelCommunityProfileFlow();
+        communityProfileFlowActive = true;
+        if (communityProfileGalleryView != null) {
+            communityProfileGalleryView.startDownload(
+                    getString(R.string.community_profile_downloading));
+        }
+        final CommunityProfileRepository.Request[] holder =
+                new CommunityProfileRepository.Request[1];
+        holder[0] = CommunityProfileRepository.downloadProfileAsync(this, entry,
+                new CommunityProfileRepository.DownloadCallback() {
+                    @Override
+                    public void onProgress(long downloadedBytes, long totalBytes) {
+                        if (pendingCommunityProfileDownload != holder[0]) {
+                            return;
+                        }
+                        if (communityProfileGalleryView != null) {
+                            communityProfileGalleryView.updateDownloadProgress(
+                                    downloadedBytes, totalBytes);
+                        }
+                    }
+
+                    @Override
+                    public void onDownloaded(File file, String source) {
+                        if (pendingCommunityProfileDownload != holder[0]) {
+                            CommunityProfileRepository.deleteDownloadedProfile(file);
+                            return;
+                        }
+                        pendingCommunityProfileDownload = null;
+                        pendingCommunityProfileFile = file;
+                        prepareCommunityProfileImport(entry, file);
+                    }
+
+                    @Override
+                    public void onFailure(String detail) {
+                        if (pendingCommunityProfileDownload != holder[0]) {
+                            return;
+                        }
+                        pendingCommunityProfileDownload = null;
+                        communityProfileFlowActive = false;
+                        if (communityProfileGalleryView != null) {
+                            communityProfileGalleryView.setOperationState(false,
+                                    getString(R.string.error_community_profile_download));
+                        } else {
+                            showErrorAction(getString(R.string.error_community_profile_download));
+                        }
+                    }
+                });
+        pendingCommunityProfileDownload = holder[0];
+    }
+
+    private void prepareCommunityProfileImport(CommunityProfileCatalog.Entry entry, File file) {
+        if (communityProfileGalleryView != null) {
+            communityProfileGalleryView.setOperationState(true,
+                    getString(R.string.community_profile_validating));
+        }
+        final ProfileBundleStore.Request[] holder = new ProfileBundleStore.Request[1];
+        holder[0] = ProfileBundleStore.prepareImportAsync(this, Uri.fromFile(file),
+                new ProfileBundleStore.ImportCallback() {
+                    @Override
+                    public void onPrepared(ProfileBundleStore.PreparedImport preparedImport) {
+                        deletePendingCommunityProfileFile();
+                        if (pendingProfileBundleRequest != holder[0]) {
+                            preparedImport.close();
+                            return;
+                        }
+                        pendingProfileBundleRequest = null;
+                        if (preparedImport.legacyJson || preparedImport.profiles.size() != 1) {
+                            preparedImport.close();
+                            communityProfileFlowActive = false;
+                            if (communityProfileGalleryView != null) {
+                                communityProfileGalleryView.setOperationState(false,
+                                        getString(R.string.error_community_profile_bundle));
+                            } else {
+                                showErrorAction(getString(R.string.error_community_profile_bundle));
+                            }
+                            return;
+                        }
+                        pendingProfileImport = preparedImport;
+                        showCommunityProfileImportConfirm(entry, preparedImport);
+                    }
+
+                    @Override
+                    public void onError(ProfileBundleStore.Failure failure) {
+                        deletePendingCommunityProfileFile();
+                        if (pendingProfileBundleRequest != holder[0]) {
+                            return;
+                        }
+                        pendingProfileBundleRequest = null;
+                        communityProfileFlowActive = false;
+                        if (communityProfileGalleryView != null) {
+                            communityProfileGalleryView.setOperationState(false,
+                                    profileBundleFailureMessage(failure));
+                        } else {
+                            showErrorAction(profileBundleFailureMessage(failure));
+                        }
+                    }
+                });
+        pendingProfileBundleRequest = holder[0];
+    }
+
+    private void showCommunityProfileImportConfirm(CommunityProfileCatalog.Entry entry,
+            ProfileBundleStore.PreparedImport preparedImport) {
+        String assetSummary = getResources().getQuantityString(
+                R.plurals.community_profile_asset_summary, preparedImport.assetCount,
+                preparedImport.assetCount,
+                android.text.format.Formatter.formatShortFileSize(this,
+                        preparedImport.assetBytes));
+        String message = getString(R.string.community_profile_import_confirm_message,
+                entry.name, entry.author, assetSummary);
+        showSettingsDecisionPanel(getString(R.string.community_profile_import_confirm_title),
+                message, null, null,
+                getString(R.string.community_profile_import_as_new), () -> {
+                    communityProfileFlowActive = false;
+                    PanelOverlay galleryOverlay = communityProfileGalleryOverlay;
+                    if (galleryOverlay != null) {
+                        dismissPanelAnimated(galleryOverlay,
+                                () -> installPreparedProfiles(preparedImport, false));
+                    } else {
+                        installPreparedProfiles(preparedImport, false);
+                    }
+                }, () -> uiHandler.post(() -> {
+                    if (pendingProfileImport == preparedImport && communityProfileFlowActive) {
+                        preparedImport.close();
+                        pendingProfileImport = null;
+                        communityProfileFlowActive = false;
+                        if (communityProfileGalleryView != null) {
+                            communityProfileGalleryView.finishOperation();
+                        }
+                    }
+                }));
+    }
+
+    private void cancelCommunityProfileFlow() {
+        communityProfileFlowActive = false;
+        if (pendingCommunityProfileDownload != null) {
+            pendingCommunityProfileDownload.cancel();
+            pendingCommunityProfileDownload = null;
+        }
+        deletePendingCommunityProfileFile();
+    }
+
+    private void deletePendingCommunityProfileFile() {
+        CommunityProfileRepository.deleteDownloadedProfile(pendingCommunityProfileFile);
+        pendingCommunityProfileFile = null;
     }
 
     private void showProfileImportConfirm(ProfileBundleStore.PreparedImport preparedImport) {
@@ -11183,6 +11938,62 @@ public class AssistantActivity extends Activity {
         targetRowTwo.addView(targetJapanese);
         targetRowTwo.addView(targetKorean);
 
+        addSettingsLabel(body, getString(R.string.translation_text_size));
+        LinearLayout textSizeRow = settingsActionRow(body);
+        Button textCompact = editorButton(
+                getString(R.string.translation_text_size_compact), () -> {
+                    draft.textSizePreset = TranslationConfig.TEXT_SIZE_COMPACT;
+                    if (translationEditorRefresh != null) translationEditorRefresh.run();
+                });
+        Button textStandard = editorButton(
+                getString(R.string.translation_text_size_standard), () -> {
+                    draft.textSizePreset = TranslationConfig.TEXT_SIZE_STANDARD;
+                    if (translationEditorRefresh != null) translationEditorRefresh.run();
+                });
+        Button textLarge = editorButton(
+                getString(R.string.translation_text_size_large), () -> {
+                    draft.textSizePreset = TranslationConfig.TEXT_SIZE_LARGE;
+                    if (translationEditorRefresh != null) translationEditorRefresh.run();
+                });
+        Button textExtraLarge = editorButton(
+                getString(R.string.translation_text_size_extra_large), () -> {
+                    draft.textSizePreset = TranslationConfig.TEXT_SIZE_EXTRA_LARGE;
+                    if (translationEditorRefresh != null) translationEditorRefresh.run();
+                });
+        textSizeRow.addView(textCompact);
+        textSizeRow.addView(textStandard);
+        textSizeRow.addView(textLarge);
+        textSizeRow.addView(textExtraLarge);
+
+        addSettingsLabel(body, getString(R.string.translation_line_spacing));
+        LinearLayout lineSpacingRow = settingsActionRow(body);
+        Button spacingCompact = editorButton(
+                getString(R.string.translation_line_spacing_compact), () -> {
+                    draft.lineSpacingPreset = TranslationConfig.LINE_SPACING_COMPACT;
+                    if (translationEditorRefresh != null) translationEditorRefresh.run();
+                });
+        Button spacingStandard = editorButton(
+                getString(R.string.translation_line_spacing_standard), () -> {
+                    draft.lineSpacingPreset = TranslationConfig.LINE_SPACING_STANDARD;
+                    if (translationEditorRefresh != null) translationEditorRefresh.run();
+                });
+        Button spacingRelaxed = editorButton(
+                getString(R.string.translation_line_spacing_relaxed), () -> {
+                    draft.lineSpacingPreset = TranslationConfig.LINE_SPACING_RELAXED;
+                    if (translationEditorRefresh != null) translationEditorRefresh.run();
+                });
+        lineSpacingRow.addView(spacingCompact);
+        lineSpacingRow.addView(spacingStandard);
+        lineSpacingRow.addView(spacingRelaxed);
+
+        addSettingsLabel(body, getString(R.string.translation_layout_preview));
+        TextView layoutPreview = text(getString(R.string.translation_layout_preview_text),
+                draft.textSizeSp(), HeimdallUi.translationTextColor(this), true);
+        layoutPreview.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
+        layoutPreview.setPadding(dp(12), dp(8), dp(12), dp(8));
+        layoutPreview.setBackground(HeimdallUi.translationContentPanel(this, 8));
+        body.addView(layoutPreview, new LinearLayout.LayoutParams(-1, dp(104)));
+
         translationEditorRefresh = () -> {
             regionSummary.setText(getString(R.string.translation_region_summary,
                     Math.round(draft.regionLeft * 100f),
@@ -11209,6 +12020,25 @@ public class AssistantActivity extends Activity {
                     TranslationConfig.LANGUAGE_JAPANESE.equals(draft.targetLanguage));
             HeimdallUi.applyChoiceButton(this, targetKorean,
                     TranslationConfig.LANGUAGE_KOREAN.equals(draft.targetLanguage));
+            HeimdallUi.applyChoiceButton(this, textCompact,
+                    TranslationConfig.TEXT_SIZE_COMPACT.equals(draft.textSizePreset));
+            HeimdallUi.applyChoiceButton(this, textStandard,
+                    TranslationConfig.TEXT_SIZE_STANDARD.equals(draft.textSizePreset));
+            HeimdallUi.applyChoiceButton(this, textLarge,
+                    TranslationConfig.TEXT_SIZE_LARGE.equals(draft.textSizePreset));
+            HeimdallUi.applyChoiceButton(this, textExtraLarge,
+                    TranslationConfig.TEXT_SIZE_EXTRA_LARGE.equals(draft.textSizePreset));
+            HeimdallUi.applyChoiceButton(this, spacingCompact,
+                    TranslationConfig.LINE_SPACING_COMPACT.equals(
+                            draft.lineSpacingPreset));
+            HeimdallUi.applyChoiceButton(this, spacingStandard,
+                    TranslationConfig.LINE_SPACING_STANDARD.equals(
+                            draft.lineSpacingPreset));
+            HeimdallUi.applyChoiceButton(this, spacingRelaxed,
+                    TranslationConfig.LINE_SPACING_RELAXED.equals(
+                            draft.lineSpacingPreset));
+            layoutPreview.setTextSize(draft.textSizeSp());
+            layoutPreview.setLineSpacing(dp(draft.lineSpacingExtraDp()), 1f);
         };
         translationEditorRefresh.run();
 

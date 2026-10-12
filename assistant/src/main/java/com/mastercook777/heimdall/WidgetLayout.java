@@ -29,6 +29,8 @@ public final class WidgetLayout {
     public static final String MAGNIFIER_SCALE_FIT = "fit";
     public static final String MAGNIFIER_SHAPE_RECTANGLE = "rectangle";
     public static final String MAGNIFIER_SHAPE_CIRCLE = "circle";
+    public static final String MAGNIFIER_MODE_VIEW = "view";
+    public static final String MAGNIFIER_MODE_INTERACTIVE = "interactive";
 
     private static final int DEFAULT_COLUMNS = 12;
     private static final int DEFAULT_ROWS = 8;
@@ -192,12 +194,28 @@ public final class WidgetLayout {
         return null;
     }
 
+    public List<Item> findItems(String type) {
+        List<Item> matches = new ArrayList<>();
+        for (Item item : items) {
+            if (type.equals(item.type)) matches.add(item);
+        }
+        return matches;
+    }
+
     public void sanitize() {
         schemaVersion = CURRENT_SCHEMA_VERSION;
         migrateToCurrentGrid();
         boolean foundTranslation = false;
         boolean foundHardwareMonitor = false;
+        int portalCount = 0;
         for (int i = 0; i < items.size();) {
+            if (TYPE_MAGNIFIER.equals(items.get(i).type)) {
+                portalCount++;
+                if (portalCount > 2) {
+                    items.remove(i);
+                    continue;
+                }
+            }
             if (TYPE_TRANSLATION.equals(items.get(i).type)) {
                 if (foundTranslation) {
                     items.remove(i);
@@ -246,6 +264,7 @@ public final class WidgetLayout {
                 item.magnifierAspectRatio = clamp(item.magnifierAspectRatio, 0.2f, 5f);
                 item.magnifierFps = normalizeMagnifierFps(item.magnifierFps);
                 item.magnifierScaleMode = normalizeMagnifierScaleMode(item.magnifierScaleMode);
+                item.magnifierMode = normalizeMagnifierMode(item.magnifierMode);
                 item.magnifierShape = normalizeMagnifierShape(item.magnifierShape);
                 item.magnifierZoom = normalizeMagnifierZoom(item.magnifierZoom);
             }
@@ -345,6 +364,16 @@ public final class WidgetLayout {
                 ? MAGNIFIER_SHAPE_CIRCLE : MAGNIFIER_SHAPE_RECTANGLE;
     }
 
+    public static String normalizeMagnifierMode(String value) {
+        return MAGNIFIER_MODE_INTERACTIVE.equals(value)
+                ? MAGNIFIER_MODE_INTERACTIVE : MAGNIFIER_MODE_VIEW;
+    }
+
+    public static boolean isInteractiveMagnifier(Item item) {
+        return item != null && MAGNIFIER_MODE_INTERACTIVE.equals(
+                normalizeMagnifierMode(item.magnifierMode));
+    }
+
     public static boolean isCircularMagnifier(Item item) {
         return item != null
                 && MAGNIFIER_SHAPE_CIRCLE.equals(normalizeMagnifierShape(item.magnifierShape));
@@ -355,6 +384,17 @@ public final class WidgetLayout {
             return 1f;
         }
         return item == null ? 1f : clamp(item.magnifierAspectRatio, 0.2f, 5f);
+    }
+
+    public static float magnifierRegionSelectionAspectRatio(Item item,
+            float renderedContentAspectRatio) {
+        if (isCircularMagnifier(item)) {
+            return 1f;
+        }
+        if (Float.isFinite(renderedContentAspectRatio) && renderedContentAspectRatio > 0f) {
+            return clamp(renderedContentAspectRatio, 0.2f, 5f);
+        }
+        return magnifierTargetAspectRatio(item);
     }
 
     public static float normalizeMagnifierZoom(float value) {
@@ -393,6 +433,7 @@ public final class WidgetLayout {
         public float magnifierAspectRatio = 1f;
         public int magnifierFps = 30;
         public String magnifierScaleMode = MAGNIFIER_SCALE_FILL;
+        public String magnifierMode = MAGNIFIER_MODE_VIEW;
         public String magnifierShape = MAGNIFIER_SHAPE_RECTANGLE;
         public float magnifierZoom = 1f;
         public CanvasConfig canvasConfig = new CanvasConfig();
@@ -426,6 +467,7 @@ public final class WidgetLayout {
             item.magnifierAspectRatio = magnifierAspectRatio;
             item.magnifierFps = magnifierFps;
             item.magnifierScaleMode = magnifierScaleMode;
+            item.magnifierMode = magnifierMode;
             item.magnifierShape = magnifierShape;
             item.magnifierZoom = magnifierZoom;
             item.canvasConfig = canvasConfig == null
@@ -470,6 +512,7 @@ public final class WidgetLayout {
                 object.put("magnifierAspectRatio", magnifierAspectRatio);
                 object.put("magnifierFps", magnifierFps);
                 object.put("magnifierScaleMode", magnifierScaleMode);
+                object.put("magnifierMode", normalizeMagnifierMode(magnifierMode));
                 object.put("magnifierShape", normalizeMagnifierShape(magnifierShape));
                 object.put("magnifierZoom", magnifierZoom);
             }
@@ -513,6 +556,8 @@ public final class WidgetLayout {
             item.magnifierFps = object.optInt("magnifierFps", 30);
             item.magnifierScaleMode = object.optString(
                     "magnifierScaleMode", MAGNIFIER_SCALE_FILL);
+            item.magnifierMode = object.optString(
+                    "magnifierMode", MAGNIFIER_MODE_VIEW);
             item.magnifierShape = object.optString(
                     "magnifierShape", MAGNIFIER_SHAPE_RECTANGLE);
             item.magnifierZoom = (float) object.optDouble("magnifierZoom", 1d);

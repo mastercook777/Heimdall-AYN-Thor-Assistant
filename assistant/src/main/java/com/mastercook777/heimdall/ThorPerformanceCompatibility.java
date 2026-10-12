@@ -42,7 +42,9 @@ final class ThorPerformanceCompatibility {
     void apply(Activity activity, boolean forceForDiagnostics) {
         lastForceForDiagnostics = forceForDiagnostics;
         boolean enabled = isSupported() && (forceForDiagnostics || isEnabled(activity));
-        if (pausedForTextInput || suspendedForResourcePressure) {
+        if (pausedForTextInput || suspendedForResourcePressure
+                || !ScreenPowerObserver.isInteractive(activity)
+                || !ScreenPowerObserver.isDisplayOn(activity)) {
             release();
             return;
         }

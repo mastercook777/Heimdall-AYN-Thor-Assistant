@@ -23,6 +23,7 @@ import java.util.concurrent.TimeUnit;
 public final class ShizukuGameContextUserService extends Binder {
     static final String DESCRIPTOR = BuildConfig.APPLICATION_ID + ".IGameContext";
     static final int TRANSACTION_QUERY_CONTEXT = IBinder.FIRST_CALL_TRANSACTION;
+    static final int TRANSACTION_SET_MONITOR_PAUSED = TRANSACTION_QUERY_CONTEXT + 1;
 
     private static final long EDEN_LABEL_PAIR_WINDOW_MS = 15_000L;
     private static final long STREAM_PID_CHECK_INTERVAL_MS = 750L;
@@ -32,6 +33,8 @@ public final class ShizukuGameContextUserService extends Binder {
 
     private final Object lock = new Object();
     private volatile boolean destroyed;
+    private boolean monitorPaused;
+    private long resumeReplayFrom;
     private Process logcatProcess;
     private String requestedPackage = "";
     private String monitoredPackage = "";
@@ -74,6 +77,11 @@ public final class ShizukuGameContextUserService extends Binder {
             return true;
         }
         data.enforceInterface(DESCRIPTOR);
+        if (code == TRANSACTION_SET_MONITOR_PAUSED) {
+            setMonitorPaused(data.readInt() != 0);
+            reply.writeNoException();
+            return true;
+        }
         if (code == TRANSACTION_QUERY_CONTEXT) {
             String packageName = safe(data.readString());
             if (!ShizukuGameContextController.isSupportedPackage(packageName)) {
@@ -81,13 +89,15 @@ public final class ShizukuGameContextUserService extends Binder {
                         -1, "", "", 0L, "", "", false);
                 return true;
             }
+            setMonitorPaused(false);
             selectTarget(packageName);
             int activityState = GameNativeGameContext.supportsPackage(packageName)
                     || isPositiveLaunchPackage(packageName)
                     ? AetherSx2GameContext.ACTIVITY_UNKNOWN
                     : currentActivityState(packageName);
             synchronized (lock) {
-                boolean ready = packageName.equals(monitoredPackage);
+                boolean ready = packageName.equals(monitoredPackage)
+                        && streamProcessIsCurrent(packageName, monitoredPid);
                 if (GameNativeGameContext.supportsPackage(packageName)) {
                     activityState = gameNativeState;
                 } else if (ready && shouldClearForPackage(packageName, activityState,
@@ -110,6 +120,7 @@ public final class ShizukuGameContextUserService extends Binder {
 
     public void destroy() {
         destroyed = true;
+        synchronized (lock) { lock.notifyAll(); }
         stopLogcat();
         monitorThread.interrupt();
         System.exit(0);
@@ -141,26 +152,59 @@ public final class ShizukuGameContextUserService extends Binder {
                 cachedActivityState = AetherSx2GameContext.ACTIVITY_UNKNOWN;
                 cachedActivityCheckedAt = 0L;
             }
+            lock.notifyAll();
         }
         if (changed) stopLogcat();
     }
 
+    private void setMonitorPaused(boolean paused) {
+        synchronized (lock) {
+            if (monitorPaused == paused) return;
+            monitorPaused = paused;
+            if (paused) resumeReplayFrom = System.currentTimeMillis();
+            else cachedActivityCheckedAt = 0L;
+            // Destroy while holding the lock so a concurrent wake/query cannot
+            // attach a new stream between changing the state and stopping it.
+            if (paused) stopLogcat();
+            lock.notifyAll();
+        }
+    }
+
+    private boolean awaitMonitoringTarget() {
+        synchronized (lock) {
+            while (!destroyed && (monitorPaused || requestedPackage.isEmpty())) {
+                try { lock.wait(); }
+                catch (InterruptedException error) {
+                    Thread.currentThread().interrupt();
+                    return false;
+                }
+            }
+            return !destroyed;
+        }
+    }
+
     private void monitorLoop() {
         while (!destroyed) {
+            if (!awaitMonitoringTarget()) return;
             String packageName = currentRequestedPackage();
             if (packageName.length() == 0) {
                 pause(500L);
                 continue;
             }
             long streamFrom = System.currentTimeMillis();
+            synchronized (lock) {
+                if (resumeReplayFrom > 0L) {
+                    streamFrom = Math.min(streamFrom, resumeReplayFrom);
+                }
+            }
             int pid = resolvePid(packageName);
             if (pid <= 0) {
-                resetForTarget(packageName, -1);
+                if (!resetForTarget(packageName, -1)) continue;
                 pause(1000L);
                 continue;
             }
             if (!isCurrentTarget(packageName, pid)) {
-                resetForTarget(packageName, pid);
+                if (!resetForTarget(packageName, pid)) continue;
                 if (GameNativeGameContext.supportsPackage(packageName)) {
                     long processStartedAt = processStartEpochMillis(pid);
                     if (processStartedAt > 0L) {
@@ -259,6 +303,7 @@ public final class ShizukuGameContextUserService extends Binder {
                     return;
                 }
                 logcatProcess = process;
+                resumeReplayFrom = 0L;
             }
             Process watchedProcess = process;
             pidWatcher = new Thread(() -> watchStreamPid(
@@ -501,9 +546,11 @@ public final class ShizukuGameContextUserService extends Binder {
         }
     }
 
-    private void resetForTarget(String packageName, int pid) {
-        stopLogcat();
+    private boolean resetForTarget(String packageName, int pid) {
         synchronized (lock) {
+            if (destroyed || monitorPaused || !packageName.equals(requestedPackage)) return false;
+            stopLogcat();
+            resumeReplayFrom = 0L;
             monitoredPackage = packageName;
             monitoredPid = pid;
             activeValue = "";
@@ -516,6 +563,7 @@ public final class ShizukuGameContextUserService extends Binder {
             pendingEdenLabel = "";
             pendingEdenLabelAt = 0L;
             gameNativeState = GameNativeGameContext.STATE_UNKNOWN;
+            return true;
         }
     }
 
@@ -636,7 +684,7 @@ public final class ShizukuGameContextUserService extends Binder {
     }
 
     private boolean isCurrentTargetLocked(String packageName, int pid) {
-        return packageName.equals(requestedPackage)
+        return !monitorPaused && packageName.equals(requestedPackage)
                 && packageName.equals(monitoredPackage)
                 && pid == monitoredPid;
     }

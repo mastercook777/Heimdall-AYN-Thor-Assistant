@@ -2,6 +2,7 @@ package com.mastercook777.heimdall;
 
 import android.os.Handler;
 import android.os.Looper;
+import android.util.Log;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -19,6 +20,8 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
 final class TranslationApiClient {
+    private static final String TAG = "HeimdallTranslation";
+
     interface Callback {
         void onSuccess(String translatedText);
         void onError(String message);
@@ -83,24 +86,16 @@ final class TranslationApiClient {
             connection.setConnectTimeout(10000);
             connection.setReadTimeout(20000);
             connection.setDoOutput(true);
-            connection.setRequestProperty("Authorization", "Bearer " + config.apiKey);
+            connection.setRequestProperty("Authorization", "Bearer " + config.activeApiKey());
             connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
 
-            JSONObject body = new JSONObject();
-            body.put("model", config.resolvedModel());
-            body.put("temperature", 0.1d);
-            body.put("max_tokens", 768);
-            body.put("stream", false);
-            if (TranslationProviderConfig.SILICONFLOW_GLOBAL_MODEL.equals(config.resolvedModel())) {
-                body.put("enable_thinking", false);
+            JSONObject body = createRequestBody(config, sourceText, targetLanguage);
+            if (BuildConfig.DEBUG) {
+                Log.d(TAG, "request provider=" + config.provider
+                        + " model=" + config.resolvedModel()
+                        + " sourceChars=" + sourceText.length()
+                        + " deepSeekThinkingDisabled=" + config.isOfficialDeepSeekEndpoint());
             }
-            JSONArray messages = new JSONArray();
-            messages.put(new JSONObject().put("role", "system").put("content",
-                    "Translate the following game UI text into "
-                            + TranslationConfig.targetPromptName(targetLanguage)
-                            + ". Return only the translation and preserve names and tone."));
-            messages.put(new JSONObject().put("role", "user").put("content", sourceText));
-            body.put("messages", messages);
 
             byte[] bytes = body.toString().getBytes(StandardCharsets.UTF_8);
             connection.setFixedLengthStreamingMode(bytes.length);
@@ -113,6 +108,7 @@ final class TranslationApiClient {
             String response = readBody(stream);
             if (request.cancelled) return;
             if (status < 200 || status >= 300) {
+                if (BuildConfig.DEBUG) Log.d(TAG, "response http=" + status);
                 postError(request, callback, friendlyHttpError(status, response));
                 return;
             }
@@ -121,6 +117,7 @@ final class TranslationApiClient {
             JSONObject first = choices == null ? null : choices.optJSONObject(0);
             JSONObject message = first == null ? null : first.optJSONObject("message");
             String translated = message == null ? "" : message.optString("content", "").trim();
+            logResponseMetadata(status, result, first, message, translated);
             if (translated.length() == 0) {
                 postError(request, callback, "Translation response was empty");
                 return;
@@ -129,13 +126,59 @@ final class TranslationApiClient {
                 if (!request.cancelled) callback.onSuccess(translated);
             });
         } catch (java.net.SocketTimeoutException ignored) {
+            if (BuildConfig.DEBUG) Log.d(TAG, "request timeout");
             postError(request, callback, "Translation request timed out");
-        } catch (Exception ignored) {
+        } catch (Exception error) {
+            if (BuildConfig.DEBUG) Log.d(TAG, "request failed type="
+                    + error.getClass().getSimpleName());
             postError(request, callback, "Translation request failed");
         } finally {
             if (connection != null) connection.disconnect();
             if (request.connection == connection) request.connection = null;
         }
+    }
+
+    static JSONObject createRequestBody(TranslationProviderConfig config, String sourceText,
+            String targetLanguage) throws Exception {
+        JSONObject body = new JSONObject();
+        body.put("model", config.resolvedModel());
+        body.put("temperature", 0.1d);
+        body.put("max_tokens", 768);
+        body.put("stream", false);
+        if (config.isOfficialDeepSeekEndpoint()) {
+            body.put("thinking", new JSONObject().put("type", "disabled"));
+        } else if (TranslationProviderConfig.SILICONFLOW_GLOBAL_MODEL.equals(
+                config.resolvedModel())) {
+            body.put("enable_thinking", false);
+        }
+        JSONArray messages = new JSONArray();
+        messages.put(new JSONObject().put("role", "system").put("content",
+                "Translate the following game UI text into "
+                        + TranslationConfig.targetPromptName(targetLanguage)
+                        + ". Return only the translation and preserve names and tone."));
+        messages.put(new JSONObject().put("role", "user").put("content", sourceText));
+        body.put("messages", messages);
+        return body;
+    }
+
+    private static void logResponseMetadata(int status, JSONObject result, JSONObject first,
+            JSONObject message, String translated) {
+        if (!BuildConfig.DEBUG) return;
+        String finishReason = first == null ? "" : first.optString("finish_reason", "");
+        String reasoning = message == null ? ""
+                : message.optString("reasoning_content", "");
+        JSONObject usage = result.optJSONObject("usage");
+        JSONObject details = usage == null ? null
+                : usage.optJSONObject("completion_tokens_details");
+        Log.d(TAG, "response http=" + status
+                + " finishReason=" + finishReason
+                + " contentChars=" + translated.length()
+                + " reasoningChars=" + reasoning.length()
+                + " promptTokens=" + (usage == null ? -1 : usage.optInt("prompt_tokens", -1))
+                + " completionTokens="
+                + (usage == null ? -1 : usage.optInt("completion_tokens", -1))
+                + " reasoningTokens="
+                + (details == null ? -1 : details.optInt("reasoning_tokens", -1)));
     }
 
     private void postError(Request request, Callback callback, String message) {

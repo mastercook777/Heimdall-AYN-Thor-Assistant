@@ -74,7 +74,15 @@ android {
         targetSdk 35
         versionCode heimdallVersionCode
         versionName heimdallVersionName
+        buildConfigField "String", "COMMUNITY_PROFILE_CATALOG_URL",
+                '"https://raw.githubusercontent.com/mastercook777/heimdall-community-profiles/main/catalog.json"'
         testInstrumentationRunner "com.mastercook777.heimdall.ProfileBundleStoreInstrumentationTest"
+
+        // Thor uses ARM. Keep both ARM routes; opt into Intel emulator builds explicitly.
+        ndk {
+            abiFilters.addAll((project.findProperty("heimdallAbis")
+                    ?: "arm64-v8a,armeabi-v7a").split(",").collect { it.trim() })
+        }
 
         externalNativeBuild {
             cmake {
@@ -126,7 +134,10 @@ android {
             }
         }
         release {
-            minifyEnabled false
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"),
+                    "proguard-rules.pro"
             if (hasCompleteReleaseSigning) {
                 signingConfig signingConfigs.heimdallRelease
             }

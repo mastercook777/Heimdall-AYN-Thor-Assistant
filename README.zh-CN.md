@@ -17,7 +17,7 @@
 
 [English](README.md) | 简体中文
 
-Heimdall 让游戏继续显示在 Thor 上屏，同时把下屏变成常驻控制与资料中心：Profile、宏、触摸控制、实时翻译、硬件状态、地图、攻略、本地媒体 Canvas、放大镜、录屏和快捷操作都在拇指可及的位置。
+Heimdall 让游戏继续显示在 Thor 上屏，同时把下屏变成常驻控制与资料中心：Profile、宏、触摸控制、实时翻译、硬件状态、地图、攻略、本地媒体 Canvas、界门、录屏和快捷操作都在拇指可及的位置。
 
 > **Alpha 软件：** Heimdall 以 AYN Thor 为目标设备，不承诺兼容所有 Thor 固件、手柄模式、游戏、模拟器或其他双屏设备。
 
@@ -30,7 +30,7 @@ Heimdall 让游戏继续显示在 Thor 上屏，同时把下屏变成常驻控�
   </tr>
   <tr>
     <td align="center"><strong>主动操作：</strong>精准瞄准与圆形放大</td>
-    <td align="center"><strong>Profile 控制：</strong>放大镜、触摸板与宏</td>
+    <td align="center"><strong>Profile 控制：</strong>界门、触摸板与宏</td>
   </tr>
   <tr>
     <td width="50%"><img src="docs/assets/readme/thor-guide-reader.jpg" alt="AYN Thor 上屏运行游戏，下屏 Heimdall 打开本地文字 Guide"></td>
@@ -46,12 +46,12 @@ Heimdall 让游戏继续显示在 Thor 上屏，同时把下屏变成常驻控�
 
 | 功能 | 用途 |
 | --- | --- |
-| Profile 与 Grid | 为不同游戏分别保存布局、App 绑定、主题、触摸设置、地图、攻略和 Canvas。直接在 12 × 8 Grid 上拖动、缩放模块，再明确保存。 |
+| Profile 与 Grid | 为不同游戏分别保存布局、App 绑定、主题、触摸设置、地图、攻略和 Canvas。直接在 12 × 8 Grid 上拖动、缩放模块，再明确保存；还可以浏览精选社区 Profile，逐个作为新 Profile 导入。 |
 | 宏 | 通过结构化编辑器添加点击、长按、滑动、等待和实体手柄步骤；手柄编辑器支持组合键、蓄力、无损重新编辑、镜像、克隆和有边界取消，不需要手写命令。 |
 | 触摸与瞄准 | 基础触控、触摸板拖动、虚拟右摇杆、精准瞄准、真实相对虚拟鼠标，以及条件满足时可与 Thor 自带映射共存的 Shizuku 触控。 |
 | PC 键盘 | 经 Shizuku/uinput 提供临时完整 US ANSI 键盘和 Profile 级可配置小键盘；这是游戏中的 PC 输入，不是 Android IME 文字输入。 |
 | 游戏资料 | 本地地图、PDF、攻略、Interactive Map 链接，以及 Profile 级图片或静音循环视频 Canvas。 |
-| 上屏工具 | 上屏截图、录屏，以及每个 Profile 一个实时局部放大镜。 |
+| 上屏工具 | 上屏截图、录屏，以及每个 Profile 最多两个实时界门；界门可显示上屏选区，也可向该区域发送单指触控。 |
 | 翻译与状态 | 用本地 OCR 识别上屏选区并按 Profile 实时翻译；在 Thor 向普通 App 暴露所需传感器时，被动显示 CPU 温度和内存占用。 |
 | 外观 | 六个已注册的 Heimdall/Freya 配色、可选的 Profile 主题绑定，以及让受支持 Thor 摇杆灯跟随当前主题的全局开关。 |
 
@@ -68,15 +68,15 @@ Heimdall 让游戏继续显示在 Thor 上屏，同时把下屏变成常驻控�
 
 ## 先看结论：安装 Heimdall 不需要开发者模式
 
-**安装 Heimdall 不需要 Root，也不需要先进入开发者模式。** 只有玩家要使用 Shizuku 的手柄增强功能时，才需要为无线调试打开开发者选项。
+**安装 Heimdall 不需要 Root，也不需要先进入开发者模式。** 只有玩家要使用 Shizuku 的高级控制功能时，才需要为无线调试打开开发者选项。
 
 | 你想使用的功能 | 需要做什么 |
 | --- | --- |
-| Profile、Grid、地图、攻略、Canvas 和普通界面 | 只安装 Heimdall；不需要开发者模式，也不需要 Shizuku。 |
+| Profile、Grid、地图、攻略、Canvas、浏览社区 Profile 和普通界面 | 只安装 Heimdall；浏览目录和下载社区 Profile 需要网络连接。 |
 | 向上屏发送点击、长按、滑动或兼容触摸板拖动 | 为“基础触控”启用 Heimdall 无障碍服务。 |
 | 实时翻译 | 为上屏截图启用 Heimdall 无障碍服务，再配置受支持的 HTTPS 翻译服务和 API Key。本地完成 OCR，识别出的文字会发送给所选服务。 |
 | 实体手柄录制/回放、虚拟右摇杆、精准瞄准、虚拟鼠标、PC 键盘或映射兼容的增强触控 | 安装、启动并授权 Shizuku；通过无线调试启动时才需要开发者模式。 |
-| 实时放大镜或录屏 | 功能首次启动时，按 Android 系统提示允许屏幕捕获。 |
+| 仅观看或可交互界门、录屏 | 功能首次启动时，按 Android 系统提示允许屏幕捕获；可交互界门还需要 Shizuku 和可用的增强触控路线。 |
 
 第一次打开 Heimdall 时不需要把所有权限一次开完。先创建一个 Profile，只配置马上要用的一条路线，测试成功后再增加功能。
 
@@ -123,7 +123,7 @@ Heimdall 让游戏继续显示在 Thor 上屏，同时把下屏变成常驻控�
 
 基础触控通过 Android 无障碍服务，把兼容的点击、长按、滑动和触摸板拖动发送到上屏。它不需要 Shizuku，也不需要开发者模式。
 
-1. 在 Heimdall 中打开 **设置 > 连接**。
+1. 在 Heimdall 中打开 **设置 > 连接与权限**。
 2. 找到 **基础触控**，点击启用操作。
 3. 在 Android 无障碍设置中找到 Heimdall，阅读系统提示后开启服务。
 4. 返回 Heimdall，确认基础触控显示可用。
@@ -131,7 +131,7 @@ Heimdall 让游戏继续显示在 Thor 上屏，同时把下屏变成常驻控�
 
 > 基础无障碍触控和 Thor 自带按键映射使用不同的触摸流，同时操作时可能互相取消。需要共存时，只在 Heimdall 明确显示可用的情况下使用映射兼容的增强触控路线。
 
-## 4. 为控制器增强配置 Shizuku（可选）
+## 4. 为高级控制配置 Shizuku（可选）
 
 实体手柄录制/回放、虚拟右摇杆、精准瞄准和映射兼容的增强触控需要 Shizuku。Heimdall 本身不需要 Root。
 
@@ -161,9 +161,9 @@ Heimdall 让游戏继续显示在 Thor 上屏，同时把下屏变成常驻控�
 4. 选择 **使用配对码配对设备**。
 5. 把系统显示的配对码输入 Shizuku 通知或配对页面。
 6. 返回 Shizuku，点击 **启动**，等待状态显示 Shizuku 正在运行。
-7. 打开 **Heimdall > 设置 > 连接 > 控制器增强**。
+7. 打开 **Heimdall > 设置 > 连接与权限 > 高级控制**。
 8. 点击授权/连接，在 Shizuku 授权窗口中允许 Heimdall。
-9. 返回 Heimdall，确认控制器增强显示可用。
+9. 返回 Heimdall，确认高级控制显示可用。
 
 Thor 重启后，在使用控制器功能前先检查 Shizuku 状态。如果服务已经停止，需要重新点击启动；通常不需要再次配对。
 
@@ -185,19 +185,20 @@ Thor 重启后，在使用控制器功能前先检查 Shizuku 状态。如果服
 
 ### 实体手柄宏
 
-控制器录制和回放需要 Shizuku 与可用的控制器增强路线。Thor 自带映射可能使已经映射的物理按键无法进入 Heimdall 录制流。遇到这种情况时，可以开始录制后暂时回到 Android 桌面按下目标按键，再返回 Heimdall 检查并保存序列。
+控制器录制和回放需要 Shizuku 与可用的高级控制路线。Thor 自带映射可能使已经映射的物理按键无法进入 Heimdall 录制流。遇到这种情况时，可以开始录制后暂时回到 Android 桌面按下目标按键，再返回 Heimdall 检查并保存序列。
 
 增强触控默认保护 Thor 自带映射，并会在回放前拒绝包含实体手柄步骤的宏。如果当前游戏没有启用自带映射，可以为当前 Profile 主动关闭该保护；屏幕步骤仍严格使用映射兼容触控路线，不会回退到无障碍。
 
 ### 触摸板、虚拟右摇杆与精准瞄准
 
 - **触摸拖动：** 把下屏手指移动转换为上屏拖动。
-- **虚拟右摇杆：** 通过控制器增强发送 Thor 右摇杆输入；松手后应立即回中。
+- **虚拟右摇杆：** 通过高级控制发送 Thor 右摇杆输入；松手后应立即回中。
 - **精准瞄准：** 用于小幅视角修正。建议从低灵敏度开始，大幅转向继续使用物理摇杆。
 
-### 放大镜、地图、攻略与 Canvas
+### 界门、社区 Profile、地图、攻略与 Canvas
 
-- 在 Grid 中添加放大镜，按 Android 提示允许屏幕捕获，然后选择上屏区域。长按模块可以重新选区。每个 Profile 当前支持一个实时放大镜，且不能与录屏同时运行。
+- 一个 Profile 的 Grid 最多可放两个界门。每个界门分别保存上屏区域、缩放、形状、帧率及“仅观看”或“可交互”模式，共用一次屏幕捕获。可交互模式经可用的 Shizuku 增强触控路线发送单指输入，同时只能有一个界门手势。界门与录屏不能同时运行。在界门设置中选区后按“保存”；Grid 位置另行保存。
+- 在 Profile 管理中打开**社区 Profile**，浏览精选目录。下载内容会按目录记录的大小和 SHA-256 校验，再作为 `.heimdall-profile` 迁移包验证并追加为新 Profile，不会替换已有 Profile。目录和迁移包来自[社区仓库](https://github.com/mastercook777/heimdall-community-profiles)。
 - 地图与攻略属于当前 Profile，可以保存本地图片、PDF、文本或 Interactive Map 地址。
 - Canvas 支持本地 JPG、PNG、GIF、WebP 和 MP4。GIF 与动态 WebP 需要 Android 9 或更高版本；MP4 始终静音并循环播放。一个 Profile 可以添加多个独立静态 Canvas，但 GIF、动态 WebP 和 MP4 合计最多一个动态 Canvas。文件不超过 50 MiB；图片不超过 4096 × 4096，MP4 最长边不超过 2048；不支持 APNG。双击进入全屏查看，长按更换媒体或调整构图。
 
@@ -206,6 +207,7 @@ Thor 重启后，在使用控制器功能前先检查 Shizuku 状态。如果服
 - 在 Profile 中添加一个翻译模块，长按选择上屏区域、OCR 文字类型和目标语言，再保存组件。运行中的快速选区只提交确认过的区域，不会顺带保存无关的 Grid 位置变化。
 - 翻译使用 Heimdall 无障碍截图和内置 ML Kit 在本机完成 OCR，不占用 MediaProjection。只有识别出的文字会通过 HTTPS 发送给已配置的 SiliconFlow 或自定义 OpenAI 兼容 `/chat/completions` 接口。
 - 翻译服务与 API Key 属于 App 全局设置。API Key 使用 Android Keystore 加密，不会写入 Profile JSON 或 `.heimdall-profile` 导出。
+- “测试连接”只检查当前设置草稿；测试成功后，仍需点击设置页底部的“保存”，该服务配置才会生效。
 - 每个 Profile 可以添加一个硬件监控模块，显示 CPU 温度和已用/总内存。它不需要 Shizuku；当普通 App 无法唯一读取 Thor 的已验证 CPU 传感器时会显示不可用，不会猜测数值。
 
 ### 主题与摇杆灯光
@@ -227,13 +229,13 @@ Alpha 默认关闭 Android 平台备份。卸载应用会删除 Heimdall 本地�
 - 映射兼容的 Shizuku 触控只在已测试的 Thor、固件、游戏和映射组合上完成验证；其他固件可能显示不可用。
 - 基础无障碍触控与 Thor 自带按键映射同时操作时可能互相取消。
 - Thor 映射可能隐藏宏录制需要的已映射实体按键。
-- 每个 Profile 当前只支持一个实时放大镜；放大镜不能与录屏共享 MediaProjection。
-- 从其他下屏 Tab 返回 Main 后，冻结画面的 Stop 标记偶尔可能不显示；停止后也可能保留最后一帧。这是已知显示状态问题，不代表画面仍在实时更新。
+- 每个 Profile 最多支持两个实时界门；可交互输入仅支持单指，且同一时间只能有一个界门手势。界门不能与录屏共享 MediaProjection。
+- 从其他下屏 Tab 返回 Main 后，冻结界门的 Stop 标记偶尔可能不显示；停止后也可能保留最后一帧。这是已知显示状态问题，不代表画面仍在实时更新。
 - 翻译质量、延迟和服务可用性取决于 OCR 文字类型、网络、模型与服务商。机主已验证的是 SiliconFlow 中国区配合 Hunyuan-MT-7B；其他列出的服务或自定义 OpenAI 兼容接口属于协议兼容，并非都完成 Thor 实机验证。
 - 硬件监控只有在 Thor 向普通 App 暴露唯一、可读的 `cpu-0-1` 温度源时才显示 CPU 温度；它不会拿电池温度代替，也不会估算风扇转速。
-- 主题匹配摇杆灯依赖 Thor 固件服务，并且默认关闭。已接受的主题/亮度/开关即时操作路径不能代替每一种重启或自动 Profile 切换场景的验证。
+- 主题匹配摇杆灯为可选功能，默认关闭，使用 Thor 原厂灯光协议；如固件表现不同，请使用 Thor 原厂灯光设置恢复或关闭。
 
-完整测试范围、迁移说明和限制请阅读 [v0.3.0-alpha.1 发行说明](docs/releases/v0.3.0-alpha.1.md)。经过版式检查的 0.2.0 [English](docs/guides/Heimdall-0.2.0-alpha.1-User-Guide-en.pdf) 与[简体中文](docs/guides/Heimdall-0.2.0-alpha.1-User-Guide-zh-CN.pdf) PDF 继续作为历史参考保留；0.3.0 的当前设置说明以本 README 为准。
+本版内容和已知限制请阅读 [v0.4.0-alpha.1 发行说明](docs/releases/v0.4.0-alpha.1.md)。经过版式检查的 0.2.0 [English](docs/guides/Heimdall-0.2.0-alpha.1-User-Guide-en.pdf) 与[简体中文](docs/guides/Heimdall-0.2.0-alpha.1-User-Guide-zh-CN.pdf) PDF 继续作为历史参考保留；当前设置说明以本 README 为准。
 
 ## 如何提供有效反馈
 

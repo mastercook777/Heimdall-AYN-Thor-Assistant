@@ -10,6 +10,10 @@ import android.view.InputDevice;
 import android.view.MotionEvent;
 
 import java.lang.reflect.Method;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 
 public final class ShizukuNativeUserService extends Binder {
     private static final String THOR_TOUCH_UNSUPPORTED = "THOR_TOUCH_UNSUPPORTED";
@@ -31,9 +35,20 @@ public final class ShizukuNativeUserService extends Binder {
             IBinder.FIRST_CALL_TRANSACTION + 12;
     public static final int TRANSACTION_RELEASE_VIRTUAL_KEYBOARD =
             IBinder.FIRST_CALL_TRANSACTION + 13;
+    public static final int TRANSACTION_INJECT_PORTAL_TOUCH_EVENT =
+            IBinder.FIRST_CALL_TRANSACTION + 14;
+    private static final long PORTAL_TOUCH_LEASE_MS = 1200L;
     private long touchDownTime;
     private boolean touchSessionActive;
     private boolean touchUsesThorMappedDevice;
+    private final ScheduledExecutorService portalTouchLeaseExecutor =
+            Executors.newSingleThreadScheduledExecutor(runnable -> {
+                Thread thread = new Thread(runnable, "portal-touch-lease");
+                thread.setDaemon(true);
+                return thread;
+            });
+    private ScheduledFuture<?> portalTouchLease;
+    private int portalTouchLeaseGeneration;
 
     public ShizukuNativeUserService() {
         attachInterface(null, DESCRIPTOR);
@@ -85,6 +100,19 @@ public final class ShizukuNativeUserService extends Binder {
             int width, int height, int rotation) {
         return injectTouchEventInternal(displayId, action, x, y, width, height,
                 rotation, true);
+    }
+
+    public synchronized String injectPortalTouchEvent(int displayId, int action, int x, int y,
+            int width, int height, int rotation) {
+        String result = injectTouchEventInternal(displayId, action, x, y, width, height,
+                rotation, true);
+        if (!"ok".equals(result)
+                || action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+            clearPortalTouchLeaseLocked();
+        } else if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_MOVE) {
+            armPortalTouchLeaseLocked();
+        }
+        return result;
     }
 
     private String injectTouchEventInternal(int displayId, int action, int x, int y,
@@ -151,6 +179,7 @@ public final class ShizukuNativeUserService extends Binder {
     }
 
     public synchronized String releaseMappedTouch() {
+        clearPortalTouchLeaseLocked();
         try {
             UinputNativeProbe.releaseThorMappedTouch();
             touchDownTime = 0L;
@@ -162,6 +191,35 @@ public final class ShizukuNativeUserService extends Binder {
             touchSessionActive = false;
             touchUsesThorMappedDevice = false;
             return "Thor mapped touch release failed";
+        }
+    }
+
+    private void armPortalTouchLeaseLocked() {
+        clearPortalTouchLeaseLocked();
+        int generation = portalTouchLeaseGeneration;
+        portalTouchLease = portalTouchLeaseExecutor.schedule(() -> {
+            synchronized (ShizukuNativeUserService.this) {
+                if (generation != portalTouchLeaseGeneration) {
+                    return;
+                }
+                portalTouchLease = null;
+                try {
+                    UinputNativeProbe.releaseThorMappedTouch();
+                } catch (Throwable ignored) {
+                }
+                touchDownTime = 0L;
+                touchSessionActive = false;
+                touchUsesThorMappedDevice = false;
+                portalTouchLeaseGeneration++;
+            }
+        }, PORTAL_TOUCH_LEASE_MS, TimeUnit.MILLISECONDS);
+    }
+
+    private void clearPortalTouchLeaseLocked() {
+        portalTouchLeaseGeneration++;
+        if (portalTouchLease != null) {
+            portalTouchLease.cancel(false);
+            portalTouchLease = null;
         }
     }
 
@@ -349,6 +407,19 @@ public final class ShizukuNativeUserService extends Binder {
                     displayId, action, x, y, width, height, rotation));
             return true;
         }
+        if (code == TRANSACTION_INJECT_PORTAL_TOUCH_EVENT) {
+            int displayId = data.readInt();
+            int action = data.readInt();
+            int x = data.readInt();
+            int y = data.readInt();
+            int width = data.readInt();
+            int height = data.readInt();
+            int rotation = data.readInt();
+            reply.writeNoException();
+            reply.writeString(injectPortalTouchEvent(
+                    displayId, action, x, y, width, height, rotation));
+            return true;
+        }
         if (code == TRANSACTION_RELEASE_MAPPED_TOUCH) {
             reply.writeNoException();
             reply.writeString(releaseMappedTouch());
@@ -400,6 +471,10 @@ public final class ShizukuNativeUserService extends Binder {
     }
 
     public void destroy() {
+        synchronized (this) {
+            clearPortalTouchLeaseLocked();
+        }
+        portalTouchLeaseExecutor.shutdownNow();
         try {
             UinputNativeProbe.releaseThorMappedTouch();
         } catch (Throwable ignored) {
