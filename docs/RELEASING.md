@@ -10,13 +10,18 @@ No script, workflow, or review result grants permission to publish. Creating or
 pushing a version tag and approving the protected publish environment always
 requires an explicit owner decision.
 
+The release invariant is exact-artifact promotion: the APK accepted on AYN
+Thor and the APK attached to the GitHub Release must have the same SHA-256.
+The publish workflow must never rebuild, re-sign, zipalign, or otherwise mutate
+the APK after owner acceptance.
+
 ## Build Channels
 
 | Channel | Identity | Distribution | Purpose |
 | --- | --- | --- | --- |
 | Pull request CI | `com.mastercook777.heimdall.debug`, ordinary CI signing | Workflow result only | Compile and Lint gate for proposed changes. |
 | Tester Debug | `com.mastercook777.heimdall.debug`, stable tester-only key | 14-day Actions artifact | Repeatable owner testing from a commit already contained in `main`. |
-| Local Alpha candidate | `com.mastercook777.heimdall`, protected Alpha key | Outside the repository, never public | Exact package/update/signing and AYN Thor acceptance. |
+| CI Alpha candidate | `com.mastercook777.heimdall`, protected Alpha key | 30-day immutable Actions artifact | Exact package/update/signing and AYN Thor acceptance. |
 | Public Alpha | `com.mastercook777.heimdall`, protected Alpha key | Immutable versioned GitHub prerelease | Player download and update channel. |
 
 Tester Debug and public Alpha use different package names and different signing
@@ -65,6 +70,12 @@ Keep these protected environments:
 
 The protected fingerprint must equal `RELEASE_CERT_SHA256` in
 `release.properties`.
+
+`Build Heimdall Alpha Candidate` and `Promote Heimdall Alpha Candidate` both
+use this environment. They are separate runs with separate approvals. Approving
+candidate signing does not authorize publication; approving the promotion run
+after Thor acceptance is the publication gate. The promotion run reads no
+private signing key and never invokes Gradle.
 
 ### `tester-debug`
 
@@ -133,36 +144,60 @@ the change's stated non-device gates have passed.
 6. Review the exact pull-request diff and merge only after CI passes.
 7. Confirm the release commit is clean and already contained in `main`.
 
-## Build The Local Real-Signed Candidate
+## Build The Immutable CI Candidate
 
-Use the generic candidate builder from a clean checkout. Both the keystore and
-candidate output must remain outside the repository.
+1. From Actions, run `Build Heimdall Alpha Candidate` with:
 
-```powershell
-./scripts/build_alpha_candidate.ps1 `
-  -KeystorePath <outside-repository-keystore> `
-  -OutputDirectory <outside-repository-empty-output-directory>
-```
+   - `release_tag`: the planned `vX.Y.Z-alpha.N` tag;
+   - `source_commit`: the full 40-character commit already contained in public
+     `main`.
 
-The script derives the tag, package, version code, version name, and expected
-certificate from the repository. It refuses dirty source and output overwrite,
-runs Release Build/Lint, verifies package metadata, APK signature, certificate,
-zip alignment, and SHA-256, and writes a candidate metadata record.
+2. Approve the protected signing job. This approves candidate creation only;
+   it does not authorize a tag or Release.
+3. The workflow builds and signs once, runs Release Lint, and verifies:
 
-Do not create a version tag yet. Install the exact candidate on AYN Thor and
-complete the release-specific acceptance matrix, including update/migration
-paths when the change affects persistence, permissions, signing, or install
-behavior.
+   - package, version code, and version name;
+   - exactly one approved signer and APK Signature Scheme v2;
+   - ZIP integrity, `extractNativeLibs=false`, and `zipalign -P 16`;
+   - every `lib/<abi>/*.so` is uncompressed and correctly aligned in the ZIP;
+   - 64-bit ELF load segments are 16K-compatible and 32-bit ELF load segments
+     retain valid 4K alignment.
+
+4. Download the exact Actions artifact named
+   `heimdall-alpha-candidate-<version>-<run-id>-<attempt>`. Record its workflow
+   run ID, artifact name, APK byte size, and SHA-256 from
+   `candidate-metadata.properties`.
+5. Install that exact APK on AYN Thor and complete the release-specific
+   acceptance matrix, including update/migration paths when the change affects
+   persistence, permissions, signing, or install behavior.
+
+Do not create a version tag before the exact candidate passes. Actions
+artifacts expire after 30 days. If the artifact expires, build a new candidate,
+treat its SHA-256 as new evidence, and repeat Thor acceptance.
+
+`scripts/build_alpha_candidate.ps1` remains available for local diagnostics or
+signing recovery, with keystore and output outside the repository. A local APK
+is not eligible for the automated promotion workflow because it is not bound to
+an immutable Actions run and artifact. Do not substitute it after acceptance.
 
 ## Publish The Immutable Alpha
 
 After the exact candidate is accepted and the owner explicitly authorizes
 publication:
 
-1. Reconfirm the approved source commit and candidate metadata.
-2. Create the annotated `vX.Y.Z-alpha.N` tag at that commit.
-3. Push only that tag.
-4. Review and approve the protected `alpha-release` environment.
+1. Reconfirm the accepted candidate's source commit, workflow run ID, artifact
+   name, byte size, and APK SHA-256.
+2. Create the annotated `vX.Y.Z-alpha.N` tag at that exact source commit.
+3. Push only that tag. Tag push no longer starts publication automatically.
+4. From Actions, run `Promote Heimdall Alpha Candidate` with the existing tag,
+   candidate run ID, exact candidate artifact name, and owner-accepted APK
+   SHA-256.
+5. Review and approve this separate protected `alpha-release` promotion.
+
+After approval, the job downloads that exact immutable Actions artifact. It
+does not restore the keystore, invoke Gradle, rebuild, re-sign, or rewrite the
+APK. Candidate metadata must bind the tag to the same source commit, package,
+version, signer, workflow run, artifact name, byte size, and approved SHA-256.
 
 The workflow refuses publication when:
 
@@ -170,10 +205,20 @@ The workflow refuses publication when:
 - the checked-out commit differs from the tag's peeled commit;
 - `version.properties` does not match the tag;
 - release notes are missing or contain `Draft` / `TBD`;
+- the candidate source commit differs from the tag commit;
+- the candidate run ID or artifact name differs from its immutable metadata;
+- the supplied owner-approved SHA-256 differs from the candidate APK;
 - package, version code, or version name differs from repository metadata;
-- the secret certificate fingerprint differs from `release.properties`;
 - the APK signer differs from the approved Alpha certificate; or
+- ZIP integrity, native compression, 4K/16K alignment, or manifest packaging
+  checks fail; or
 - a GitHub Release with the same tag already exists.
+
+The workflow first uploads only the verified APK and checksum to a draft
+prerelease, downloads them again, and re-runs all artifact checks. It then makes
+the prerelease public, downloads the public assets again, verifies that the APK
+SHA-256 still equals the owner-approved candidate, and confirms that the asset
+set contains only the APK and checksum.
 
 On success it publishes only:
 
@@ -185,9 +230,19 @@ a higher version code.
 
 ## Recovery And Post-Publication Verification
 
-`workflow_dispatch` is recovery for an existing immutable Alpha tag only. It
-must verify that checkout `HEAD` equals the tag's peeled commit. Never move,
-delete, or recreate a published version tag to repair a workflow failure.
+Promotion is intentionally `workflow_dispatch` only. Recovery for an existing
+tag must reuse the same still-retained accepted candidate run, artifact name,
+and approved SHA-256. It verifies that checkout `HEAD`, the tag's peeled commit,
+and the candidate source commit are identical. Never move, delete, or recreate
+a published version tag to repair a workflow failure. Never rebuild after an
+approval and call the replacement artifact accepted.
+
+If verification fails after the draft prerelease is created, leave it
+unpublished while investigating. A retry deliberately refuses to overwrite
+even a draft. After confirming that no public Release exists, the maintainer may
+remove only that failed unpublished draft and retry with the same accepted
+candidate identity. A public prerelease is never deleted or overwritten by the
+workflow.
 
 After publication, independently download the public assets and verify:
 
@@ -197,5 +252,10 @@ After publication, independently download the public assets and verify:
 - package, version code, version name, signer count, and certificate match;
 - zip alignment and available GitHub attestations pass; and
 - the published source commit is the approved release commit.
+
+Then transfer that freshly downloaded public APK to Thor and complete a final
+install/update plus launch smoke. Record the public asset SHA-256 with that
+result. The workflow's post-publish checksum gate proves byte identity, but it
+does not claim device installation on the owner's behalf.
 
 Record build/static evidence separately from owner-operated Thor acceptance.

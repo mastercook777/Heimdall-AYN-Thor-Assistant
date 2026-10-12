@@ -1,0 +1,232 @@
+name: Build Heimdall Alpha Candidate
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Planned Alpha tag, for example v0.3.1-alpha.1
+        required: true
+        type: string
+      source_commit:
+        description: Full 40-character commit already contained in public main
+        required: true
+        type: string
+
+concurrency:
+  group: alpha-candidate-${{ inputs.release_tag }}-${{ inputs.source_commit }}
+  cancel-in-progress: false
+
+jobs:
+  candidate:
+    name: Build immutable signed candidate (not publication)
+    if: github.repository_owner == 'mastercook777'
+    runs-on: ubuntu-latest
+    environment: alpha-release
+
+    steps:
+      - name: Checkout exact candidate source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.source_commit }}
+
+      - name: Validate source, version, and notes
+        shell: bash
+        env:
+          REQUESTED_RELEASE_TAG: ${{ inputs.release_tag }}
+          REQUESTED_SOURCE_COMMIT: ${{ inputs.source_commit }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$REQUESTED_RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-alpha\.[0-9]+$ ]]; then
+            echo "Unsupported Alpha tag: $REQUESTED_RELEASE_TAG" >&2
+            exit 1
+          fi
+          if [[ ! "$REQUESTED_SOURCE_COMMIT" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "source_commit must be a full 40-character commit." >&2
+            exit 1
+          fi
+
+          git fetch --no-tags origin main
+          CHECKED_OUT_COMMIT="$(git rev-parse HEAD)"
+          if [[ "${CHECKED_OUT_COMMIT,,}" != "${REQUESTED_SOURCE_COMMIT,,}" ]]; then
+            echo "Checked-out source does not match source_commit." >&2
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$CHECKED_OUT_COMMIT" origin/main; then
+            echo "Candidate source is not contained in public main." >&2
+            exit 1
+          fi
+
+          VERSION="${REQUESTED_RELEASE_TAG#v}"
+          VERSION_CODE="$(sed -n 's/^VERSION_CODE=//p' version.properties)"
+          VERSION_NAME="$(sed -n 's/^VERSION_NAME=//p' version.properties)"
+          APPLICATION_ID="$(sed -n 's/^APPLICATION_ID=//p' release.properties)"
+          CONFIGURED_CERT="$(sed -n 's/^RELEASE_CERT_SHA256=//p' release.properties | tr '[:lower:]' '[:upper:]' | tr -d ':' | tr -d '[:space:]')"
+          if [[ ! "$VERSION_CODE" =~ ^[1-9][0-9]*$ ]]; then
+            echo "VERSION_CODE must be a positive integer." >&2
+            exit 1
+          fi
+          if [[ "$VERSION_NAME" != "$VERSION" ]]; then
+            echo "VERSION_NAME does not match $REQUESTED_RELEASE_TAG." >&2
+            exit 1
+          fi
+          if [[ "$APPLICATION_ID" != "com.mastercook777.heimdall" ]]; then
+            echo "Unexpected release application ID: $APPLICATION_ID" >&2
+            exit 1
+          fi
+          if [[ ! "$CONFIGURED_CERT" =~ ^[0-9A-F]{64}$ ]]; then
+            echo "The repository release certificate fingerprint is malformed." >&2
+            exit 1
+          fi
+
+          NOTES="docs/releases/${REQUESTED_RELEASE_TAG}.md"
+          test -f "$NOTES"
+          if grep -Eiq '\b(Draft|TBD)\b' "$NOTES"; then
+            echo "Release notes are not final: $NOTES" >&2
+            exit 1
+          fi
+          if gh release view "$REQUESTED_RELEASE_TAG" >/dev/null 2>&1; then
+            echo "A GitHub Release already exists for $REQUESTED_RELEASE_TAG." >&2
+            exit 1
+          fi
+          if git show-ref --verify --quiet "refs/tags/$REQUESTED_RELEASE_TAG"; then
+            TAG_COMMIT="$(git rev-parse "refs/tags/$REQUESTED_RELEASE_TAG^{commit}")"
+            if [[ "$TAG_COMMIT" != "$CHECKED_OUT_COMMIT" ]]; then
+              echo "Existing tag $REQUESTED_RELEASE_TAG points to a different commit." >&2
+              exit 1
+            fi
+          fi
+
+          echo "HEIMDALL_RELEASE_TAG=$REQUESTED_RELEASE_TAG" >> "$GITHUB_ENV"
+          echo "HEIMDALL_VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "HEIMDALL_VERSION_CODE=$VERSION_CODE" >> "$GITHUB_ENV"
+          echo "HEIMDALL_APPLICATION_ID=$APPLICATION_ID" >> "$GITHUB_ENV"
+          echo "HEIMDALL_CONFIGURED_CERT_SHA256=$CONFIGURED_CERT" >> "$GITHUB_ENV"
+          echo "HEIMDALL_RELEASE_NOTES=$NOTES" >> "$GITHUB_ENV"
+          echo "HEIMDALL_SOURCE_COMMIT=$CHECKED_OUT_COMMIT" >> "$GITHUB_ENV"
+
+      - name: Verify release readiness
+        shell: pwsh
+        run: ./scripts/verify_release_readiness.ps1 -ReleaseTag $env:HEIMDALL_RELEASE_TAG -RequireCleanTree
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Install Android build tools
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0" "cmake;3.22.1" "ndk;30.0.14904198"
+
+      - name: Verify public source boundary
+        shell: pwsh
+        run: ./scripts/verify_source_boundary.ps1
+
+      - name: Restore private Alpha keystore
+        shell: bash
+        env:
+          HEIMDALL_RELEASE_KEYSTORE_BASE64: ${{ secrets.HEIMDALL_RELEASE_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          test -n "$HEIMDALL_RELEASE_KEYSTORE_BASE64"
+          printf '%s' "$HEIMDALL_RELEASE_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/heimdall-alpha.jks"
+          chmod 600 "$RUNNER_TEMP/heimdall-alpha.jks"
+
+      - name: Build signed candidate and lint
+        env:
+          HEIMDALL_RELEASE_KEYSTORE: ${{ runner.temp }}/heimdall-alpha.jks
+          HEIMDALL_RELEASE_STORE_PASSWORD: ${{ secrets.HEIMDALL_RELEASE_STORE_PASSWORD }}
+          HEIMDALL_RELEASE_KEY_ALIAS: ${{ secrets.HEIMDALL_RELEASE_KEY_ALIAS }}
+          HEIMDALL_RELEASE_KEY_PASSWORD: ${{ secrets.HEIMDALL_RELEASE_KEY_PASSWORD }}
+        run: |
+          chmod +x ./gradlew
+          ./gradlew :assistant:assembleRelease :assistant:lintRelease -PheimdallRequireReleaseSigning=true --no-daemon
+
+      - name: Verify and package immutable candidate
+        shell: pwsh
+        env:
+          PROTECTED_CERT_SHA256: ${{ secrets.HEIMDALL_RELEASE_CERT_SHA256 }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $protectedCert = $env:PROTECTED_CERT_SHA256.Replace(":", "").Trim().ToUpperInvariant()
+          if ($protectedCert -ne $env:HEIMDALL_CONFIGURED_CERT_SHA256) {
+              throw "The protected certificate fingerprint does not match release.properties."
+          }
+
+          $builtApk = "assistant/build/outputs/apk/release/heimdall-release.apk"
+          ./scripts/verify_alpha_artifact.ps1 `
+              -ApkPath $builtApk `
+              -ExpectedPackage $env:HEIMDALL_APPLICATION_ID `
+              -ExpectedVersionCode $env:HEIMDALL_VERSION_CODE `
+              -ExpectedVersionName $env:HEIMDALL_VERSION `
+              -ExpectedCertificateSha256 $env:HEIMDALL_CONFIGURED_CERT_SHA256
+
+          $candidateDirectory = Join-Path $PWD "candidate"
+          New-Item -ItemType Directory -Path $candidateDirectory | Out-Null
+          $assetName = "heimdall-$($env:HEIMDALL_RELEASE_TAG).apk"
+          $candidateApk = Join-Path $candidateDirectory $assetName
+          Copy-Item -LiteralPath $builtApk -Destination $candidateApk
+          $apkSha256 = (Get-FileHash -LiteralPath $candidateApk -Algorithm SHA256).Hash.ToUpperInvariant()
+          $apkBytes = (Get-Item -LiteralPath $candidateApk).Length
+          $artifactName = "heimdall-alpha-candidate-$($env:HEIMDALL_VERSION)-$($env:GITHUB_RUN_ID)-$($env:GITHUB_RUN_ATTEMPT)"
+          $utf8 = [System.Text.UTF8Encoding]::new($false)
+          [System.IO.File]::WriteAllText(
+              (Join-Path $candidateDirectory "SHA256SUMS.txt"),
+              "$apkSha256  $assetName`n",
+              $utf8
+          )
+          $metadata = @(
+              "schemaVersion=1",
+              "status=IMMUTABLE_SIGNED_CANDIDATE_NOT_PUBLISHED",
+              "releaseTag=$($env:HEIMDALL_RELEASE_TAG)",
+              "sourceCommit=$($env:HEIMDALL_SOURCE_COMMIT)",
+              "package=$($env:HEIMDALL_APPLICATION_ID)",
+              "versionCode=$($env:HEIMDALL_VERSION_CODE)",
+              "versionName=$($env:HEIMDALL_VERSION)",
+              "certificateSha256=$($env:HEIMDALL_CONFIGURED_CERT_SHA256)",
+              "apkFile=$assetName",
+              "apkBytes=$apkBytes",
+              "apkSha256=$apkSha256",
+              "workflowRepository=$($env:GITHUB_REPOSITORY)",
+              "workflowRunId=$($env:GITHUB_RUN_ID)",
+              "workflowRunAttempt=$($env:GITHUB_RUN_ATTEMPT)",
+              "artifactName=$artifactName",
+              "builtAtUtc=$([DateTime]::UtcNow.ToString('o'))"
+          ) -join "`n"
+          [System.IO.File]::WriteAllText(
+              (Join-Path $candidateDirectory "candidate-metadata.properties"),
+              "$metadata`n",
+              $utf8
+          )
+          Copy-Item -LiteralPath $env:HEIMDALL_RELEASE_NOTES -Destination (
+              Join-Path $candidateDirectory "$($env:HEIMDALL_RELEASE_TAG)-release-notes.md"
+          )
+
+          "HEIMDALL_CANDIDATE_ARTIFACT=$artifactName" | Out-File -FilePath $env:GITHUB_ENV -Append
+          @(
+              "## Immutable Alpha candidate",
+              "",
+              "- Artifact: ``$artifactName``",
+              "- Source commit: ``$($env:HEIMDALL_SOURCE_COMMIT)``",
+              "- APK: ``$assetName``",
+              "- Bytes: ``$apkBytes``",
+              "- SHA-256: ``$apkSha256``",
+              "",
+              "This artifact is not published. Download this exact artifact for Thor acceptance."
+          ) | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+
+      - name: Upload immutable candidate artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.HEIMDALL_CANDIDATE_ARTIFACT }}
+          path: candidate/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30

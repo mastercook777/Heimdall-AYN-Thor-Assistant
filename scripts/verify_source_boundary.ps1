@@ -22,10 +22,14 @@ $requiredPaths = @(
     "assistant/build.gradle",
     "assistant/src",
     ".github/workflows/android-ci.yml",
+    ".github/workflows/alpha-candidate.yml",
     ".github/workflows/alpha-release.yml",
     ".github/workflows/tester-debug.yml",
     "scripts/verify_release_readiness.ps1",
-    "scripts/build_alpha_candidate.ps1"
+    "scripts/build_alpha_candidate.ps1",
+    "scripts/inspect_apk_native_alignment.py",
+    "scripts/verify_alpha_artifact.ps1",
+    "scripts/verify_alpha_candidate.ps1"
 )
 
 foreach ($relativePath in $requiredPaths) {
@@ -99,7 +103,7 @@ if (Test-Path -LiteralPath $settingsPath) {
 
 $textExtensions = @(
     ".gradle", ".properties", ".xml", ".java", ".cpp", ".h", ".md",
-    ".yml", ".yaml", ".ps1", ".txt", ".json", ".gitignore"
+    ".yml", ".yaml", ".ps1", ".py", ".txt", ".json", ".gitignore"
 )
 $textFiles = $sourceFiles |
     Where-Object {
