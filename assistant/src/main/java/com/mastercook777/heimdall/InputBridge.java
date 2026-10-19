@@ -233,7 +233,8 @@ public final class InputBridge {
             return MacroDispatchResult.REJECTED;
         }
         if (enhancedTouchMode) {
-            if (!advancedControlsEnabled(context)) {
+            if (!ThorDirectController.isReady(context)
+                    && !advancedControlsEnabled(context)) {
                 callback.onError(context.getString(
                         R.string.controller_enhancement_unavailable));
                 return MacroDispatchResult.REJECTED;
@@ -335,12 +336,45 @@ public final class InputBridge {
         SHIZUKU_BACKEND.cancelNativeTouchDrag(context);
     }
 
+    enum MappedTouchRoute { THOR_DIRECT, SHIZUKU, UNAVAILABLE }
+
+    static MappedTouchRoute mappedTouchRoute(Context context) {
+        if (ThorDirectController.isReady(context)) return MappedTouchRoute.THOR_DIRECT;
+        if (advancedControlsReady(context) && ShizukuNativeController.isServiceBound()) {
+            return MappedTouchRoute.SHIZUKU;
+        }
+        return MappedTouchRoute.UNAVAILABLE;
+    }
+
     static boolean portalInteractiveReady(Context context) {
-        return advancedControlsReady(context) && ShizukuNativeController.isServiceBound();
+        return mappedTouchRoute(context) != MappedTouchRoute.UNAVAILABLE;
+    }
+
+    enum VirtualMouseRoute { THOR_DIRECT, SHIZUKU, UNAVAILABLE }
+
+    static VirtualMouseRoute virtualMouseRoute(Context context) {
+        if (ThorDirectController.isReady(context)) return VirtualMouseRoute.THOR_DIRECT;
+        if (advancedControlsEnabled(context) && ShizukuNativeController.isReady()) {
+            return VirtualMouseRoute.SHIZUKU;
+        }
+        return VirtualMouseRoute.UNAVAILABLE;
+    }
+
+    enum KeyboardRoute { THOR_DIRECT, SHIZUKU, UNAVAILABLE }
+
+    static KeyboardRoute keyboardRoute(Context context) {
+        if (ThorDirectController.isReady(context)) return KeyboardRoute.THOR_DIRECT;
+        // Selection is separate from readiness: an explicit key press may still
+        // start the established Shizuku authorization/bind flow.
+        if (advancedControlsEnabled(context)) {
+            return KeyboardRoute.SHIZUKU;
+        }
+        return KeyboardRoute.UNAVAILABLE;
     }
 
     static void preparePortalInteractive(Context context) {
-        if (context != null && advancedControlsEnabled(context)
+        if (context != null && !ThorDirectController.isReady(context)
+                && advancedControlsEnabled(context)
                 && ShizukuNativeController.isPermissionGranted()) {
             ShizukuNativeController.requestServiceBinding(context);
         }
@@ -380,17 +414,41 @@ public final class InputBridge {
         return activeBackend(context).supportsRelativeMove();
     }
 
-    public static String emitNativeRightStick(Context context, NativeGamepadPath.Device device,
-            float x, float y) {
+    enum NativeStickRoute { THOR_DIRECT, SHIZUKU, APP_DIRECT, UNAVAILABLE }
+
+    static NativeStickRoute nativeStickRoute(Context context, boolean allowAppDirect) {
+        if (ThorDirectController.isReady(context)) return NativeStickRoute.THOR_DIRECT;
         if (advancedControlsEnabled(context) && ShizukuNativeController.isReady()) {
-            return ShizukuNativeController.emitRightStick(context, device, x, y);
+            return NativeStickRoute.SHIZUKU;
         }
-        String path = NativeGamepadPath.requireWritable();
-        return UinputNativeProbe.emitNativeRightStick(path, x, y,
-                device.rightStickAxisX, device.rightStickAxisY);
+        if (allowAppDirect) {
+            NativeGamepadPath.Device device = NativeGamepadPath.resolveDevice();
+            if (device != null && device.writable) return NativeStickRoute.APP_DIRECT;
+        }
+        return NativeStickRoute.UNAVAILABLE;
+    }
+
+    static String emitNativeRightStick(Context context, NativeStickRoute route,
+            NativeGamepadPath.Device device, float x, float y) {
+        switch (route) {
+            case THOR_DIRECT:
+                return ThorDirectController.emitRightStick(context, x, y);
+            case SHIZUKU:
+                return ShizukuNativeController.emitRightStick(context, device, x, y);
+            case APP_DIRECT:
+                String path = NativeGamepadPath.requireWritable();
+                return UinputNativeProbe.emitNativeRightStick(path, x, y,
+                        device.rightStickAxisX, device.rightStickAxisY);
+            case UNAVAILABLE:
+            default:
+                return context.getString(R.string.native_controller_write_failed);
+        }
     }
 
     public static String captureNativeGamepadSequence(Context context, String path, int durationMs) {
+        if (ThorDirectController.isReady(context)) {
+            return ThorDirectController.captureSequence(context, durationMs);
+        }
         if (advancedControlsEnabled(context)) {
             if (!ShizukuNativeController.isReady()) {
                 return context.getString(R.string.controller_enhancement_unavailable);
@@ -416,7 +474,9 @@ public final class InputBridge {
             return replay.get(inspection.replayTimeoutMs(), TimeUnit.MILLISECONDS);
         } catch (TimeoutException e) {
             replay.cancel(true);
-            if (advancedControlsEnabled(appContext)) {
+            if (ThorDirectController.isReady(appContext)) {
+                ThorDirectController.invalidate();
+            } else if (advancedControlsEnabled(appContext)) {
                 ShizukuNativeController.invalidateService();
             }
             return context.getString(R.string.native_controller_replay_timed_out);
@@ -430,6 +490,9 @@ public final class InputBridge {
     }
 
     private static String replayNativeGamepadSequenceBlocking(Context context, String sequence) {
+        if (ThorDirectController.isReady(context)) {
+            return ThorDirectController.replaySequence(context, sequence);
+        }
         if (advancedControlsEnabled(context)) {
             if (!ShizukuNativeController.isReady()) {
                 return context.getString(R.string.controller_enhancement_unavailable);

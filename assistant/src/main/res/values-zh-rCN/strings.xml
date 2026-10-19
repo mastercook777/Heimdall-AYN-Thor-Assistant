@@ -5,8 +5,8 @@
     <string name="touch_virtual_mouse_full_gesture_area">\u5b8c\u6574\u624b\u52bf\u89e6\u63a7\u533a</string>
     <string name="touch_virtual_mouse_full_gesture_area_help">\u9690\u85cf\u4e0b\u65b9\u5de6\u53f3\u952e\uff0c\u5c06\u6574\u4e2a\u89e6\u63a7\u677f\u7528\u4e8e\u79fb\u52a8\u548c\u624b\u52bf\u3002</string>
     <string name="touch_virtual_mouse_help">\u5355\u6307\u8f7b\u89e6\u53d1\u9001\u5de6\u952e\u70b9\u51fb\uff1b\u8fde\u7eed\u8f7b\u89e6\u4e24\u6b21\u8fdb\u884c\u53cc\u51fb\uff1b\u53cc\u51fb\u540e\u62d6\u52a8\u53ef\u6309\u4f4f\u5de6\u952e\uff1b\u53cc\u6307\u8f7b\u89e6\u53d1\u9001\u53f3\u952e\u70b9\u51fb\uff1b\u53cc\u6307\u7eb5\u5411\u6ed1\u52a8\u6eda\u8f6e\u3002\u4e0a\u5c4f\u5ba2\u6237\u7aef\u9700\u4fdd\u6301\u7126\u70b9\u5e76\u652f\u6301\u76f8\u5bf9\u9f20\u6807\u8f93\u5165\u3002</string>
-    <string name="virtual_mouse_unavailable">\u8bf7\u5148\u542f\u52a8\u5e76\u6388\u6743 Shizuku\uff0c\u518d\u4f7f\u7528\u865a\u62df\u9f20\u6807\u3002</string>
-    <string name="virtual_keyboard_unavailable">\u8bf7\u5148\u542f\u52a8\u5e76\u6388\u6743 Shizuku\uff0c\u518d\u4f7f\u7528\u952e\u76d8\u6620\u5c04\u3002</string>
+    <string name="virtual_mouse_unavailable">请先启动 Thor Direct 或授权 Shizuku，再使用虚拟鼠标。</string>
+    <string name="virtual_keyboard_unavailable">请先启动 Thor Direct 或授权 Shizuku，再使用键盘映射。</string>
     <string name="virtual_mouse_entry_hint">\u5355\u6307\u79fb\u52a8 \u00b7 \u53cc\u6307\u6eda\u52a8</string>
     <string name="app_name">Heimdall</string>
     <string name="startup_readiness_brand">HEIMDALL</string>
@@ -50,6 +50,8 @@
     <string name="first_setup_status_not_configured">\u25cb \u672a\u914d\u7f6e</string>
     <string name="first_setup_enable_open">\u542f\u7528 / \u6253\u5f00</string>
     <string name="first_setup_set_up_shizuku">\u8bbe\u7f6e Shizuku</string>
+    <string name="first_setup_enable_thor_direct">开启 Thor 直连</string>
+    <string name="first_setup_connection_options">查看连接方式</string>
     <string name="first_setup_manage">\u7ba1\u7406</string>
     <string name="first_setup_later">\u7a0d\u540e</string>
     <string name="first_setup_continue">\u8fdb\u5165 Heimdall</string>
@@ -335,6 +337,21 @@
 
     <string name="connection_capabilities">可用能力</string>
     <string name="connection_capability_summary">基础触控：%1$s\n高级控制：%2$s</string>
+    <string name="connection_capability_summary_direct">基础触控：%1$s\nThor 直连：已就绪 · Shizuku 回退：%2$s</string>
+    <string name="thor_direct_title">Thor 直连 · 实验性</string>
+    <string name="thor_direct_summary">在受支持的 Thor 固件上启用手柄录制与回放、右摇杆、精准瞄准、交互界门、Enhanced Touch、虚拟鼠标、PC 键盘及游戏识别。Shizuku 仍可作为回退，并支持其他设备。</string>
+    <string name="thor_direct_state_unsupported">此设备不支持</string>
+    <string name="thor_direct_state_disabled">未开启</string>
+    <string name="thor_direct_state_starting">连接中</string>
+    <string name="thor_direct_state_ready">Thor 直连已就绪</string>
+    <string name="thor_direct_state_unavailable">不可用 · 检查固件或重试</string>
+    <string name="thor_direct_enable">开启 Thor 直连</string>
+    <string name="thor_direct_disable">关闭</string>
+    <string name="thor_direct_retry">重试</string>
+    <string name="thor_direct_starting">连接中…</string>
+    <string name="thor_direct_unavailable">不可用</string>
+    <string name="thor_direct_diagnostic_route">Thor 直连手柄辅助进程已就绪</string>
+    <string name="thor_direct_diagnostic_access">手柄访问由 Thor 直连辅助进程提供；应用进程的文件权限可能不同。</string>
     <string name="connection_capabilities_setup">能力设置</string>
     <string name="connection_state_ready">已就绪</string>
     <string name="connection_state_not_enabled">未开启</string>
@@ -343,6 +360,8 @@
     <string name="connection_state_authorized">已授权 · 需准备</string>
     <string name="connection_state_preparing">准备中</string>
     <string name="connection_advanced_controls_summary">手柄宏、精准瞄准、虚拟鼠标、PC 键盘以及已支持的游戏或模拟器自动识别</string>
+    <string name="connection_shizuku_fallback_title">Shizuku 回退</string>
+    <string name="connection_shizuku_fallback_summary">在 Thor 上可选；Thor 直连不可用或已关闭时，可使用这条通道。</string>
     <string name="connection_open_shizuku">打开 Shizuku</string>
     <string name="connection_authorize">授权</string>
     <string name="connection_prepare_advanced_controls">准备高级控制</string>
@@ -404,10 +423,10 @@
     <string name="profile_platform_bound">已绑定主机：%1$s</string>
     <string name="profile_game_unknown_label">未命名游戏</string>
     <string name="profile_platform_unknown_label">未知主机</string>
-    <string name="profile_current_game_unavailable">当前未检测到受支持的游戏上下文。此版本通过 Shizuku 支持 AetherSX2、Eden、PPSSPP、RetroArch 候选适配和 GameNative。</string>
+    <string name="profile_current_game_unavailable">当前未检测到受支持的游戏上下文。此版本通过 Thor Direct 或 Shizuku 支持 AetherSX2、Eden、PPSSPP、RetroArch 候选适配和 GameNative。</string>
     <string name="profile_current_platform_unavailable">本次 RetroArch 启动没有提供无歧义的主机身份。你仍可只绑定游戏，或使用能识别主机的未压缩 ROM / 数据库条目。</string>
     <string name="profile_game_detection_requires_app_awareness">请先开启 Profile 自动切换，再绑定当前游戏。</string>
-    <string name="profile_game_detection_requires_shizuku">请先启动 Shizuku 并授权 Heimdall，再绑定当前游戏。</string>
+    <string name="profile_game_detection_requires_shizuku">请先启用 Thor Direct，或启动 Shizuku 并授权 Heimdall，再绑定当前游戏。</string>
     <string name="profile_game_bound_draft">已在草稿中绑定 %1$s，点击“保存”后生效。</string>
     <string name="profile_platform_bound_draft">已在草稿中绑定主机 %1$s，点击“保存”后生效。</string>
     <string name="profile_game_binding_cleared_draft">已在草稿中清除游戏绑定，点击“保存”后生效。</string>
@@ -504,9 +523,9 @@
     <string name="portal_reselect_region">重新选择区域</string>
     <string name="portal_interactive_status">交互状态</string>
     <string name="portal_interactive_ready">交互可用</string>
-    <string name="portal_interactive_unavailable">交互不可用。请启用高级控制并准备好 Shizuku。</string>
+    <string name="portal_interactive_unavailable">界门交互不可用。请准备好 Shizuku 高级控制；受支持的 Thor 固件也可使用 Thor 直连。</string>
     <string name="portal_touch_busy">界门交互正与另一个 Enhanced Touch 手势冲突。</string>
-    <string name="portal_touch_failed">界门交互失败，已释放上屏触点。</string>
+    <string name="portal_touch_failed">界门交互失败，已尝试释放上屏触点。</string>
     <string name="portal_settings_help_interactive">交互界门支持矩形或圆形显示和单指操作。触摸实时画面会操作上屏游戏。在设置中重选区域；可在设置或快捷操作中关闭界门。</string>
 
     <string name="settings_summary_layout_saved">选择预设或自定义模块位置，保存后写入当前 Profile。</string>
@@ -912,6 +931,7 @@
     <string name="macro_icon_custom_number">自定义 %1$d</string>
     <string name="touchpad_mode_route_unavailable">%1$s 尚未接入执行路径，请先使用触屏拖动。</string>
     <string name="shizuku_controller_route_required">请先启用高级控制</string>
+    <string name="native_stick_route_required">请先启用 Thor 直连或 Shizuku 高级控制</string>
     <string name="shizuku_controller_preparing">高级控制正在准备中，很快即可使用。</string>
     <string name="settings_reset_touchpad_draft">已重置触控设置草稿，保存后写入此 Profile。</string>
     <string name="settings_reset_macro_draft">已重置宏按钮布局草稿，保存后写入此 Profile。</string>

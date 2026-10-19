@@ -387,6 +387,11 @@ public class AssistantActivity extends Activity {
                     uiHandler.post(() -> handleShizukuPermissionResult(granted));
     private final Runnable shizukuServiceStateListener =
             () -> uiHandler.post(this::refreshConnectionCapabilitySurfaces);
+    private final Runnable thorDirectStateListener =
+            () -> uiHandler.post(() -> {
+                updateProfileAwarenessRegistration();
+                refreshConnectionCapabilitySurfaces();
+            });
     private final InputBridge.Callback inputStatusCallback = new InputBridge.Callback() {
         @Override
         public void onStatus(String message) {
@@ -554,6 +559,8 @@ public class AssistantActivity extends Activity {
                 shizukuPermissionResultListener);
         ShizukuNativeController.addServiceStateListener(
                 shizukuServiceStateListener);
+        ThorDirectController.addStateListener(thorDirectStateListener);
+        ThorDirectController.autoStart(this);
         HeimdallStabilityDiagnostics.reportPreviousExit(this);
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         recordFocusBoundary("create-protected");
@@ -798,6 +805,7 @@ public class AssistantActivity extends Activity {
                 shizukuPermissionResultListener);
         ShizukuNativeController.removeServiceStateListener(
                 shizukuServiceStateListener);
+        ThorDirectController.removeStateListener(thorDirectStateListener);
         super.onDestroy();
     }
 
@@ -1179,8 +1187,7 @@ public class AssistantActivity extends Activity {
         if (gameContextController != null) {
             if (!ScreenPowerObserver.isInteractive(this)) gameContextController.suspendForStandby();
             else gameContextController.setEnabled(profileAwarenessActive
-                    && InputBridge.advancedControlsEnabled(this)
-                    && ShizukuNativeController.isPermissionGranted());
+                    && gameContextRouteAvailable());
         }
         if (!profileAwarenessActive) {
             return;
@@ -1192,14 +1199,19 @@ public class AssistantActivity extends Activity {
         }
         ForegroundAppTracker.Snapshot foreground = ForegroundAppTracker.latest();
         if (gameContextController != null
-                && InputBridge.advancedControlsEnabled(this)
-                && ShizukuNativeController.isPermissionGranted()) {
+                && gameContextRouteAvailable()) {
             gameContextController.refresh(foreground);
         }
         maybeAutoSwitchProfile(foreground);
         DebugPerformanceDiagnostics.registerRepeatingTask(
                 "App-aware upper-window scan", 1200L);
         uiHandler.postDelayed(profileAwarenessTicker, 1200L);
+    }
+
+    private boolean gameContextRouteAvailable() {
+        return ThorDirectController.isReady(this)
+                || (InputBridge.advancedControlsEnabled(this)
+                        && ShizukuNativeController.isPermissionGranted());
     }
 
     private static boolean isDeterministicLowerFocusActivityResult(int requestCode) {
@@ -1656,7 +1668,8 @@ public class AssistantActivity extends Activity {
                 snapshot.accessibility == StartupReadinessCoordinator.Status.READY;
         boolean shizukuReady = snapshot.shizuku == StartupReadinessCoordinator.Status.READY;
         boolean shouldAutoEnable = ForegroundAppTracker.shouldAutoEnable(
-                explicitlyConfigured, accessibilityReady, shizukuReady);
+                explicitlyConfigured, accessibilityReady,
+                shizukuReady || ThorDirectController.isReady(this));
         boolean autoEnabled = shouldAutoEnable && ForegroundAppTracker.enableIfUnset(this);
         HeimdallStabilityDiagnostics.recordGameContextDiagnostic(this,
                 "startup-capabilities accessibility=" + snapshot.accessibility
@@ -1786,7 +1799,8 @@ public class AssistantActivity extends Activity {
         if (view == null) return;
         view.refresh(FirstSetupState.isProfileCreated(this),
                 ThorAccessibilityService.isReady(),
-                InputBridge.advancedControlsReady(this));
+                InputBridge.advancedControlsReady(this),
+                ThorDirectController.state(this));
     }
 
     private void refreshFirstSetupSurfaces() {
@@ -1832,6 +1846,12 @@ public class AssistantActivity extends Activity {
     }
 
     private void openAdvancedControlsFromFirstSetup() {
+        if (!InputBridge.advancedControlsReady(this)
+                && ThorDirectController.state(this) == ThorDirectController.State.DISABLED) {
+            ThorDirectController.enable(this);
+            refreshFirstSetupSurfaces();
+            return;
+        }
         FirstSetupState.markResolved(this);
         dismissFirstSetup(false);
         activeSettingsSection = SETTINGS_INPUT;
@@ -5439,12 +5459,20 @@ public class AssistantActivity extends Activity {
 
                     @Override
                     public void onOpenAdvancedControls() {
-                        openSettingsSection(SETTINGS_INPUT);
+                        if (!InputBridge.advancedControlsReady(AssistantActivity.this)
+                                && ThorDirectController.state(AssistantActivity.this)
+                                        == ThorDirectController.State.DISABLED) {
+                            ThorDirectController.enable(AssistantActivity.this);
+                            refreshSettingsContent();
+                        } else {
+                            openSettingsSection(SETTINGS_INPUT);
+                        }
                     }
                 });
         checklist.refresh(FirstSetupState.isProfileCreated(this),
                 ThorAccessibilityService.isReady(),
-                InputBridge.advancedControlsReady(this));
+                InputBridge.advancedControlsReady(this),
+                ThorDirectController.state(this));
         content.addView(checklist, new LinearLayout.LayoutParams(-1, -2));
     }
 
@@ -5714,18 +5742,21 @@ public class AssistantActivity extends Activity {
         NativeGamepadPath.Device nativeDevice = NativeGamepadPath.resolveDevice();
         boolean accessibilityReady = ThorAccessibilityService.isReady();
         boolean shizukuReady = ShizukuNativeController.isReady();
-        boolean nativeReady = nativeDevice != null && shizukuReady;
         InputBridge.AdvancedControlsState advancedState =
                 InputBridge.advancedControlsState(this);
         boolean advancedReady = advancedState == InputBridge.AdvancedControlsState.READY;
+        ThorDirectController.State directState = ThorDirectController.state(this);
+        boolean directReady = directState == ThorDirectController.State.READY;
+        boolean nativeReady = nativeDevice != null && (shizukuReady || directReady);
 
         addSettingsInfoCard(content, getString(R.string.connection_capabilities),
-                getString(R.string.connection_capability_summary,
+                getString(directReady ? R.string.connection_capability_summary_direct
+                                : R.string.connection_capability_summary,
                         getString(accessibilityReady
                                 ? R.string.connection_state_ready
                                 : R.string.connection_state_not_enabled),
                         getString(advancedControlsStateLabel(advancedState))),
-                advancedReady || accessibilityReady
+                advancedReady || directReady || accessibilityReady
                         ? HeimdallUi.SEMANTIC_NEUTRAL : HeimdallUi.SEMANTIC_WARNING);
 
         addSettingsLabel(content, getString(R.string.connection_capabilities_setup));
@@ -5746,8 +5777,21 @@ public class AssistantActivity extends Activity {
                     InputBridge.openAccessibilitySettings(this);
                 });
         addConnectionCapabilityOption(content,
-                getString(R.string.first_setup_advanced_controls_title),
-                getString(R.string.connection_advanced_controls_summary),
+                getString(R.string.thor_direct_title),
+                getString(R.string.thor_direct_summary),
+                getString(thorDirectStateLabel(directState)),
+                directReady,
+                getString(thorDirectActionLabel(directState)),
+                directState != ThorDirectController.State.STARTING
+                        && directState != ThorDirectController.State.UNSUPPORTED,
+                () -> handleThorDirectAction(directState));
+        addConnectionCapabilityOption(content,
+                getString(ThorDirectController.isSupported()
+                        ? R.string.connection_shizuku_fallback_title
+                        : R.string.first_setup_advanced_controls_title),
+                getString(ThorDirectController.isSupported()
+                        ? R.string.connection_shizuku_fallback_summary
+                        : R.string.connection_advanced_controls_summary),
                 getString(advancedControlsStateLabel(advancedState)),
                 advancedReady,
                 getString(advancedControlsActionLabel(advancedState)),
@@ -5766,11 +5810,14 @@ public class AssistantActivity extends Activity {
             addSettingsInfoCard(content, getString(R.string.connection_current_route),
                     getString(R.string.connection_route_summary,
                             InputBridge.backendName(this),
-                            NativeGamepadPath.statusLabel(this, shizukuReady)),
+                            directReady ? getString(R.string.thor_direct_diagnostic_route)
+                                    : NativeGamepadPath.statusLabel(this, shizukuReady)),
                     HeimdallUi.SEMANTIC_NEUTRAL);
             addSettingsInfoCard(content, getString(R.string.connection_controller_device),
                     NativeGamepadPath.debugLabel(this, shizukuReady)
-                            + "\n" + NativeGamepadPath.permissionHint(this, shizukuReady),
+                            + "\n" + (directReady
+                                    ? getString(R.string.thor_direct_diagnostic_access)
+                                    : NativeGamepadPath.permissionHint(this, shizukuReady)),
                     nativeReady ? HeimdallUi.SEMANTIC_NEUTRAL : HeimdallUi.SEMANTIC_WARNING);
             TextView diagnosticView = text(inputDiagnosticText(diagnostics), 11, TEXT, false);
             diagnosticView.setGravity(Gravity.TOP | Gravity.LEFT);
@@ -5785,6 +5832,39 @@ public class AssistantActivity extends Activity {
                 showDebugAction(getString(R.string.connection_details_refreshed));
             }));
         }
+    }
+
+    private int thorDirectStateLabel(ThorDirectController.State state) {
+        switch (state) {
+            case UNSUPPORTED: return R.string.thor_direct_state_unsupported;
+            case STARTING: return R.string.thor_direct_state_starting;
+            case READY: return R.string.thor_direct_state_ready;
+            case UNAVAILABLE: return R.string.thor_direct_state_unavailable;
+            case DISABLED:
+            default: return R.string.thor_direct_state_disabled;
+        }
+    }
+
+    private int thorDirectActionLabel(ThorDirectController.State state) {
+        switch (state) {
+            case STARTING: return R.string.thor_direct_starting;
+            case READY: return R.string.thor_direct_disable;
+            case UNAVAILABLE: return R.string.thor_direct_retry;
+            case UNSUPPORTED: return R.string.thor_direct_unavailable;
+            case DISABLED:
+            default: return R.string.thor_direct_enable;
+        }
+    }
+
+    private void handleThorDirectAction(ThorDirectController.State state) {
+        if (state == ThorDirectController.State.READY) {
+            ThorDirectController.disable(this);
+        } else if (state == ThorDirectController.State.DISABLED) {
+            ThorDirectController.enable(this);
+        } else if (state == ThorDirectController.State.UNAVAILABLE) {
+            ThorDirectController.requestStart(this);
+        }
+        refreshConnectionCapabilitySurfaces();
     }
 
     private int advancedControlsStateLabel(InputBridge.AdvancedControlsState state) {
@@ -6016,8 +6096,7 @@ public class AssistantActivity extends Activity {
                         R.string.profile_game_detection_requires_app_awareness));
                 return;
             }
-            if (!InputBridge.advancedControlsEnabled(this)
-                    || !ShizukuNativeController.isPermissionGranted()) {
+            if (!gameContextRouteAvailable()) {
                 showErrorAction(getString(
                         R.string.profile_game_detection_requires_shizuku));
                 return;
@@ -6044,8 +6123,7 @@ public class AssistantActivity extends Activity {
                         R.string.profile_game_detection_requires_app_awareness));
                 return;
             }
-            if (!InputBridge.advancedControlsEnabled(this)
-                    || !ShizukuNativeController.isPermissionGranted()) {
+            if (!gameContextRouteAvailable()) {
                 showErrorAction(getString(
                         R.string.profile_game_detection_requires_shizuku));
                 return;
@@ -10679,14 +10757,13 @@ public class AssistantActivity extends Activity {
             return true;
         }
         if (TouchpadSettings.MODE_RIGHT_STICK.equals(normalized)) {
-            NativeGamepadPath.Device device = NativeGamepadPath.resolveDevice();
-            return (InputBridge.advancedControlsEnabled(this)
-                    && ShizukuNativeController.isReady())
-                    || (device != null && device.writable);
+            return InputBridge.nativeStickRoute(this, true)
+                    != InputBridge.NativeStickRoute.UNAVAILABLE;
         }
         if (TouchpadSettings.MODE_SHIZUKU_TOUCH.equals(normalized)) {
-            return InputBridge.advancedControlsEnabled(this)
-                    && ShizukuNativeController.isReady();
+            return ThorDirectController.isReady(this)
+                    || (InputBridge.advancedControlsEnabled(this)
+                    && ShizukuNativeController.isReady());
         }
         if (TouchpadSettings.MODE_RELATIVE_MOUSE.equals(normalized)) {
             return relativeMouseBackendAvailable();
@@ -10698,16 +10775,17 @@ public class AssistantActivity extends Activity {
             return InputBridge.supportsMouseMode(this);
         }
         if (TouchpadSettings.MODE_VIRTUAL_MOUSE.equals(normalized)) {
-            return InputBridge.advancedControlsEnabled(this)
-                    && ShizukuNativeController.isReady();
+            return InputBridge.virtualMouseRoute(this)
+                    != InputBridge.VirtualMouseRoute.UNAVAILABLE;
         }
         return false;
     }
 
     private boolean relativeMouseBackendAvailable() {
-        return InputBridge.advancedControlsEnabled(this)
-                && ShizukuNativeController.isReady()
-                && NativeGamepadPath.resolveDevice() != null;
+        InputBridge.NativeStickRoute route = InputBridge.nativeStickRoute(this, false);
+        return route == InputBridge.NativeStickRoute.THOR_DIRECT
+                || (route == InputBridge.NativeStickRoute.SHIZUKU
+                        && NativeGamepadPath.resolveDevice() != null);
     }
 
     private void rebuildContent() {
@@ -13885,6 +13963,9 @@ public class AssistantActivity extends Activity {
         if (device == null) {
             return false;
         }
+        if (ThorDirectController.isReady(this)) {
+            return true;
+        }
         if (InputBridge.advancedControlsEnabled(this)) {
             return ShizukuNativeController.isReady();
         }
@@ -13912,6 +13993,10 @@ public class AssistantActivity extends Activity {
             title = getString(R.string.gamepad_no_controller_title);
             body = getString(R.string.gamepad_no_controller_body);
             semantic = HeimdallUi.SEMANTIC_WARNING;
+        } else if (ThorDirectController.isReady(this)) {
+            title = getString(R.string.gamepad_direct_ready_title, deviceName);
+            body = getString(R.string.gamepad_record_ready_body);
+            semantic = HeimdallUi.SEMANTIC_SUCCESS;
         } else if (InputBridge.advancedControlsEnabled(this)) {
             if (ready) {
             title = getString(R.string.gamepad_enhancement_ready_title, deviceName);
@@ -13954,6 +14039,9 @@ public class AssistantActivity extends Activity {
     private boolean gamepadCaptureRouteReady(NativeGamepadPath.Device device) {
         if (device == null) {
             return false;
+        }
+        if (ThorDirectController.isReady(this)) {
+            return true;
         }
         if (InputBridge.advancedControlsEnabled(this)) {
             return ShizukuNativeController.isReady();
@@ -14797,6 +14885,8 @@ public class AssistantActivity extends Activity {
         private float surfacePressProgress;
         private long lastDispatchTime;
         private boolean relativeMouseErrorShown;
+        private InputBridge.NativeStickRoute relativeMouseRoute =
+                InputBridge.NativeStickRoute.UNAVAILABLE;
         private long touchDragGestureToken;
         private boolean touchDragStarted;
         private boolean touchDragAcceptingMoves;
@@ -14805,6 +14895,8 @@ public class AssistantActivity extends Activity {
         private boolean rightStickGestureStarted;
         private boolean rightStickGestureActive;
         private boolean rightStickErrorShown;
+        private InputBridge.NativeStickRoute rightStickRoute =
+                InputBridge.NativeStickRoute.UNAVAILABLE;
         private ValueAnimator surfacePressAnimator;
         private int virtualMouseButton;
         private int virtualMouseButtonPointerId = -1;
@@ -14859,6 +14951,19 @@ public class AssistantActivity extends Activity {
                 invalidate();
             }
         };
+        private final Runnable rightStickKeepAlive = new Runnable() {
+            @Override
+            public void run() {
+                if (!rightStickGestureActive
+                        || rightStickRoute != InputBridge.NativeStickRoute.THOR_DIRECT) return;
+                if (emitRightStick(currentStickX, currentStickY, false)) {
+                    uiHandler.postDelayed(this, 200L);
+                } else {
+                    rightStickGestureActive = false;
+                    clearUnavailableGestureVisual();
+                }
+            }
+        };
         private final Runnable virtualMouseTapPulseUp =
                 this::finishVirtualMouseTapPulse;
 
@@ -14893,10 +14998,16 @@ public class AssistantActivity extends Activity {
 
         private void requestAdvancedInputPreparation() {
             String mode = TouchpadSettings.normalizeMode(touchpadSettings.mode);
+            if (TouchpadSettings.MODE_VIRTUAL_MOUSE.equals(mode)
+                    && ThorDirectController.isReady(AssistantActivity.this)) {
+                ensureVirtualMouseDispatcher(false);
+                return;
+            }
             boolean shizukuControllerMode = (TouchpadSettings.MODE_RELATIVE_MOUSE.equals(mode)
                     || TouchpadSettings.MODE_RIGHT_STICK.equals(mode))
                     && InputBridge.advancedControlsEnabled(AssistantActivity.this);
-            if ((TouchpadSettings.MODE_SHIZUKU_TOUCH.equals(mode)
+            if (((TouchpadSettings.MODE_SHIZUKU_TOUCH.equals(mode)
+                    && !ThorDirectController.isReady(AssistantActivity.this))
                     || TouchpadSettings.MODE_VIRTUAL_MOUSE.equals(mode)
                     || shizukuControllerMode)
                     && InputBridge.advancedControlsEnabled(AssistantActivity.this)
@@ -14925,6 +15036,21 @@ public class AssistantActivity extends Activity {
             return ShizukuNativeController.isServiceBound();
         }
 
+        private InputBridge.NativeStickRoute prepareNativeStickRoute(
+                boolean allowAppDirect) {
+            InputBridge.NativeStickRoute route = InputBridge.nativeStickRoute(
+                    AssistantActivity.this, allowAppDirect);
+            if (route == InputBridge.NativeStickRoute.UNAVAILABLE) {
+                if (InputBridge.advancedControlsEnabled(AssistantActivity.this)
+                        && ShizukuNativeController.isPermissionGranted()) {
+                    shizukuControllerServicePrepared();
+                } else {
+                    showErrorAction(getString(R.string.native_stick_route_required));
+                }
+            }
+            return route;
+        }
+
         @Override
         public void invalidate() {
             DebugPerformanceDiagnostics.countInvalidate("Touch surface");
@@ -14941,13 +15067,18 @@ public class AssistantActivity extends Activity {
             String mode = TouchpadSettings.normalizeMode(touchpadSettings.mode);
             if (TouchpadSettings.MODE_RELATIVE_MOUSE.equals(mode)) {
                 cancelRelativeMousePulse(true);
+                relativeMouseRoute = InputBridge.NativeStickRoute.UNAVAILABLE;
             } else if (TouchpadSettings.MODE_VIRTUAL_MOUSE.equals(mode)) {
                 if (virtualMouseDispatcher != null) {
                     releaseAllVirtualMouseButtons(virtualMouseDispatcher);
                 }
                 clearVirtualMouseGesture();
             } else if (TouchpadSettings.MODE_RIGHT_STICK.equals(mode)) {
-                recenterRightStick(false);
+                uiHandler.removeCallbacks(rightStickKeepAlive);
+                if (rightStickRoute != InputBridge.NativeStickRoute.UNAVAILABLE) {
+                    recenterRightStick(false);
+                }
+                rightStickRoute = InputBridge.NativeStickRoute.UNAVAILABLE;
             } else {
                 cancelTouchDragGesture(mode);
             }
@@ -16005,8 +16136,8 @@ public class AssistantActivity extends Activity {
             int action = event.getActionMasked();
             int actionIndex = event.getActionIndex();
             int actionPointerId = event.getPointerId(actionIndex);
-            if (!InputBridge.advancedControlsEnabled(AssistantActivity.this)
-                    || !ShizukuNativeController.isReady()) {
+            if (InputBridge.virtualMouseRoute(AssistantActivity.this)
+                    == InputBridge.VirtualMouseRoute.UNAVAILABLE) {
                 if (action == MotionEvent.ACTION_DOWN && !virtualMouseErrorShown) {
                     virtualMouseErrorShown = true;
                     showErrorAction(getString(R.string.virtual_mouse_unavailable));
@@ -16354,19 +16485,12 @@ public class AssistantActivity extends Activity {
             if (action == MotionEvent.ACTION_DOWN) {
                 uiHandler.removeCallbacks(relativeMouseNeutralReset);
                 relativeMouseErrorShown = false;
+                relativeMouseRoute = prepareNativeStickRoute(false);
                 lastX = x;
                 lastY = y;
                 originX = x;
                 originY = y;
-                if (!relativeMouseBackendAvailable()) {
-                    showErrorAction(getString(R.string.shizuku_controller_route_required));
-                    x = -1f;
-                    y = -1f;
-                } else if (!shizukuControllerServicePrepared()) {
-                    lastX = -1f;
-                    lastY = -1f;
-                    originX = -1f;
-                    originY = -1f;
+                if (relativeMouseRoute == InputBridge.NativeStickRoute.UNAVAILABLE) {
                     x = -1f;
                     y = -1f;
                 }
@@ -16374,7 +16498,8 @@ public class AssistantActivity extends Activity {
                 return true;
             }
             if (action == MotionEvent.ACTION_MOVE) {
-                if (!relativeMouseBackendAvailable() || lastX < 0f || lastY < 0f) {
+                if (relativeMouseRoute == InputBridge.NativeStickRoute.UNAVAILABLE
+                        || lastX < 0f || lastY < 0f) {
                     return true;
                 }
                 float dx = x - lastX;
@@ -16396,6 +16521,7 @@ public class AssistantActivity extends Activity {
             }
             if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
                 cancelRelativeMousePulse(true);
+                relativeMouseRoute = InputBridge.NativeStickRoute.UNAVAILABLE;
                 x = -1f;
                 y = -1f;
                 lastX = -1f;
@@ -16410,23 +16536,26 @@ public class AssistantActivity extends Activity {
 
         private void cancelRelativeMousePulse(boolean forceNeutral) {
             uiHandler.removeCallbacks(relativeMouseNeutralReset);
-            if (forceNeutral && relativeMouseBackendAvailable()) {
+            if (forceNeutral
+                    && relativeMouseRoute != InputBridge.NativeStickRoute.UNAVAILABLE) {
                 emitRelativeMouseStick(0f, 0f);
             }
         }
 
         private boolean emitRelativeMouseStick(float stickX, float stickY) {
-            if (!relativeMouseBackendAvailable()) {
+            if (relativeMouseRoute == InputBridge.NativeStickRoute.UNAVAILABLE) {
                 if (!relativeMouseErrorShown) {
                     relativeMouseErrorShown = true;
-                    showErrorAction(getString(R.string.shizuku_controller_route_required));
+                    showErrorAction(getString(R.string.native_stick_route_required));
                 }
                 return false;
             }
             try {
-                NativeGamepadPath.Device device = NativeGamepadPath.requireDevice();
-                String result = ShizukuNativeController.emitRightStick(
-                        AssistantActivity.this, device, stickX, stickY);
+                NativeGamepadPath.Device device =
+                        relativeMouseRoute == InputBridge.NativeStickRoute.THOR_DIRECT
+                                ? null : NativeGamepadPath.requireDevice();
+                String result = InputBridge.emitNativeRightStick(
+                        AssistantActivity.this, relativeMouseRoute, device, stickX, stickY);
                 boolean failed = !NativeGamepadPath.operationSucceeded(result);
                 if (failed && !relativeMouseErrorShown) {
                     relativeMouseErrorShown = true;
@@ -16448,15 +16577,18 @@ public class AssistantActivity extends Activity {
             String mode = TouchpadSettings.normalizeMode(touchpadSettings.mode);
             if (TouchpadSettings.MODE_RELATIVE_MOUSE.equals(mode)) {
                 cancelRelativeMousePulse(true);
+                relativeMouseRoute = InputBridge.NativeStickRoute.UNAVAILABLE;
             } else if (TouchpadSettings.MODE_VIRTUAL_MOUSE.equals(mode)) {
                 if (virtualMouseDispatcher != null) {
                     releaseAllVirtualMouseButtons(virtualMouseDispatcher);
                 }
                 clearVirtualMouseGesture();
             } else if (TouchpadSettings.MODE_RIGHT_STICK.equals(mode)) {
+                uiHandler.removeCallbacks(rightStickKeepAlive);
                 if (rightStickGestureStarted) {
                     recenterRightStick(false);
                 }
+                rightStickRoute = InputBridge.NativeStickRoute.UNAVAILABLE;
             } else {
                 cancelTouchDragGesture(mode);
             }
@@ -16493,7 +16625,9 @@ public class AssistantActivity extends Activity {
             int action = event.getActionMasked();
             if (action == MotionEvent.ACTION_DOWN) {
                 rightStickErrorShown = false;
-                if (!shizukuControllerServicePrepared()) {
+                uiHandler.removeCallbacks(rightStickKeepAlive);
+                rightStickRoute = prepareNativeStickRoute(true);
+                if (rightStickRoute == InputBridge.NativeStickRoute.UNAVAILABLE) {
                     rightStickGestureStarted = false;
                     rightStickGestureActive = false;
                     clearUnavailableGestureVisual();
@@ -16526,15 +16660,18 @@ public class AssistantActivity extends Activity {
                     y = -1f;
                 } else if (!updateRightStickFromTouch(event.getEventTime(), false)) {
                     rightStickGestureActive = false;
+                    uiHandler.removeCallbacks(rightStickKeepAlive);
                     clearUnavailableGestureVisual();
                 }
                 invalidate();
                 return true;
             }
             if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+                uiHandler.removeCallbacks(rightStickKeepAlive);
                 if (rightStickGestureStarted) {
                     recenterRightStick(false);
                 }
+                rightStickRoute = InputBridge.NativeStickRoute.UNAVAILABLE;
                 rightStickGestureStarted = false;
                 rightStickGestureActive = false;
                 currentStickX = 0f;
@@ -16561,6 +16698,12 @@ public class AssistantActivity extends Activity {
             currentStickX = stickX;
             currentStickY = stickY;
             boolean sent = emitRightStick(stickX, stickY, false);
+            if (sent && rightStickRoute == InputBridge.NativeStickRoute.THOR_DIRECT) {
+                uiHandler.removeCallbacks(rightStickKeepAlive);
+                if (stickX != 0f || stickY != 0f) {
+                    uiHandler.postDelayed(rightStickKeepAlive, 200L);
+                }
+            }
             lastDispatchTime = eventTime;
             return sent;
         }
@@ -16617,9 +16760,11 @@ public class AssistantActivity extends Activity {
 
         private boolean emitRightStick(float stickX, float stickY, boolean showOk) {
             try {
-                NativeGamepadPath.Device device = NativeGamepadPath.requireDevice();
+                NativeGamepadPath.Device device =
+                        rightStickRoute == InputBridge.NativeStickRoute.THOR_DIRECT
+                                ? null : NativeGamepadPath.requireDevice();
                 String result = InputBridge.emitNativeRightStick(
-                        AssistantActivity.this, device, stickX, stickY);
+                        AssistantActivity.this, rightStickRoute, device, stickX, stickY);
                 if (!NativeGamepadPath.operationSucceeded(result)) {
                     showRightStickErrorOnce();
                     return false;

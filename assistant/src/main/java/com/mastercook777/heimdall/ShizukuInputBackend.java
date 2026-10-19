@@ -27,6 +27,11 @@ public final class ShizukuInputBackend implements InputBackend {
             new ShizukuTouchMacroReplay(touchExecutor);
     private boolean nativeTouchActive;
     private boolean nativeTouchFrameScheduled;
+    private InputBridge.MappedTouchRoute nativeTouchRoute =
+            InputBridge.MappedTouchRoute.UNAVAILABLE;
+    private ScheduledFuture<?> nativeTouchHeartbeat;
+    private boolean nativeTouchHeartbeatQueued;
+    private int nativeTouchGeneration;
     private int nativeTouchDisplayId;
     private int nativeTouchWidth;
     private int nativeTouchHeight;
@@ -37,7 +42,10 @@ public final class ShizukuInputBackend implements InputBackend {
     private float pendingNativeTouchDy;
     private int pendingNativeTouchFrameMs = 8;
     private InputBridge.Callback nativeTouchCallback;
+    private Context nativeTouchContext;
     private boolean portalTouchActive;
+    private InputBridge.MappedTouchRoute portalTouchRoute =
+            InputBridge.MappedTouchRoute.UNAVAILABLE;
     private boolean portalTouchMoveScheduled;
     private int portalTouchGeneration;
     private int portalTouchMoveSerial;
@@ -58,6 +66,7 @@ public final class ShizukuInputBackend implements InputBackend {
 
     ShizukuInputBackend() {
         ShizukuNativeController.addServiceLossListener(this::handleServiceLoss);
+        ThorDirectController.addStateListener(this::handleDirectStateChange);
     }
 
     @Override
@@ -283,16 +292,25 @@ public final class ShizukuInputBackend implements InputBackend {
 
     public boolean startNativeTouchDrag(Context context, int displayId, int width, int height,
             float anchorX, float anchorY, InputBridge.Callback callback) {
-        if (!ShizukuNativeController.isReady()) {
-            callback.onError(context.getString(R.string.native_touch_shizuku_required));
-            ShizukuNativeController.requestPermission();
+        InputBridge.MappedTouchRoute route = ThorDirectController.isReady(context)
+                ? InputBridge.MappedTouchRoute.THOR_DIRECT
+                : InputBridge.MappedTouchRoute.SHIZUKU;
+        if (displayId != Display.DEFAULT_DISPLAY) {
+            callback.onError(context.getString(R.string.macro_enhanced_touch_upper_only));
             return false;
         }
         if (width <= 0 || height <= 0) {
             callback.onError(context.getString(R.string.native_touch_missing_dimensions));
             return false;
         }
-        if (!ShizukuNativeController.isServiceBound()) {
+        if (route == InputBridge.MappedTouchRoute.SHIZUKU
+                && !ShizukuNativeController.isReady()) {
+            callback.onError(context.getString(R.string.native_touch_shizuku_required));
+            ShizukuNativeController.requestPermission();
+            return false;
+        }
+        if (route == InputBridge.MappedTouchRoute.SHIZUKU
+                && !ShizukuNativeController.isServiceBound()) {
             boolean bindingRequested = ShizukuNativeController.requestServiceBinding(context);
             if (bindingRequested && ShizukuNativeController.isServiceBinding()) {
                 callback.onStatus(context.getString(R.string.native_touch_preparing));
@@ -302,7 +320,7 @@ public final class ShizukuInputBackend implements InputBackend {
             return false;
         }
         synchronized (touchLock) {
-            if (touchMacroReplay.isRunning() || portalTouchActive) {
+            if (touchMacroReplay.isRunning() || portalTouchActive || nativeTouchActive) {
                 callback.onError(context.getString(
                         R.string.touchpad_enhanced_touch_macro_busy));
                 return false;
@@ -316,10 +334,17 @@ public final class ShizukuInputBackend implements InputBackend {
             pendingNativeTouchDx = 0f;
             pendingNativeTouchDy = 0f;
             nativeTouchCallback = callback;
+            nativeTouchContext = context.getApplicationContext();
             nativeTouchActive = true;
+            nativeTouchRoute = route;
             nativeTouchFrameScheduled = false;
+            nativeTouchGeneration++;
+            if (route == InputBridge.MappedTouchRoute.THOR_DIRECT) {
+                scheduleNativeTouchHeartbeatLocked(context.getApplicationContext());
+            }
         }
-        enqueueNativeTouchEvent(context, MotionEvent.ACTION_DOWN, Math.round(width * anchorX), Math.round(height * anchorY), callback);
+        enqueueNativeTouchEvent(context, MotionEvent.ACTION_DOWN,
+                Math.round(nativeTouchX), Math.round(nativeTouchY), callback);
         return true;
     }
 
@@ -347,8 +372,10 @@ public final class ShizukuInputBackend implements InputBackend {
             x = Math.round(nativeTouchX);
             y = Math.round(nativeTouchY);
             nativeTouchActive = false;
+            nativeTouchGeneration++;
             pendingNativeTouchDx = 0f;
             pendingNativeTouchDy = 0f;
+            cancelNativeTouchHeartbeatLocked();
         }
         enqueueNativeTouchEvent(context, MotionEvent.ACTION_UP, x, y, callback);
         return true;
@@ -367,17 +394,21 @@ public final class ShizukuInputBackend implements InputBackend {
             y = Math.round(nativeTouchY);
             callback = nativeTouchCallback;
             nativeTouchActive = false;
+            nativeTouchGeneration++;
             pendingNativeTouchDx = 0f;
             pendingNativeTouchDy = 0f;
+            cancelNativeTouchHeartbeatLocked();
         }
         enqueueNativeTouchEvent(context, MotionEvent.ACTION_CANCEL, x, y, callback);
     }
 
     boolean startPortalTouch(Context context, int width, int height, float x, float y,
             InputBridge.Callback callback) {
+        InputBridge.MappedTouchRoute route = context == null
+                ? InputBridge.MappedTouchRoute.UNAVAILABLE
+                : InputBridge.mappedTouchRoute(context);
         if (context == null || callback == null || width <= 0 || height <= 0
-                || !InputBridge.advancedControlsReady(context)
-                || !ShizukuNativeController.isServiceBound()) {
+                || route == InputBridge.MappedTouchRoute.UNAVAILABLE) {
             if (context != null && callback != null) {
                 callback.onError(context.getString(R.string.portal_interactive_unavailable));
             }
@@ -394,6 +425,7 @@ public final class ShizukuInputBackend implements InputBackend {
             }
             generation = ++portalTouchGeneration;
             portalTouchActive = true;
+            portalTouchRoute = route;
             portalTouchMoveScheduled = false;
             portalTouchMoveSerial = 0;
             portalTouchWidth = width;
@@ -449,6 +481,7 @@ public final class ShizukuInputBackend implements InputBackend {
         int width;
         int height;
         int rotation;
+        InputBridge.MappedTouchRoute route;
         synchronized (touchLock) {
             if (!portalTouchActive) {
                 return false;
@@ -462,6 +495,7 @@ public final class ShizukuInputBackend implements InputBackend {
             width = portalTouchWidth;
             height = portalTouchHeight;
             rotation = portalTouchRotation;
+            route = portalTouchRoute;
             portalTouchX = touchX;
             portalTouchY = touchY;
             portalTouchActive = false;
@@ -469,19 +503,19 @@ public final class ShizukuInputBackend implements InputBackend {
             cancelPortalHeartbeatLocked();
         }
         touchExecutor.execute(() -> {
-            String result = ShizukuNativeController.injectPortalTouchEvent(appContext,
-                    Display.DEFAULT_DISPLAY, action, touchX, touchY,
-                    width, height, rotation);
+            String result = emitPortalTouchEvent(appContext, route, action,
+                    touchX, touchY, width, height, rotation);
             if (!"ok".equals(result)) {
-                ShizukuNativeController.releaseMappedTouch(appContext);
+                releasePortalTouch(appContext, route);
                 notifyPortalFailure(generation, callback, appContext);
             } else if (action == MotionEvent.ACTION_CANCEL) {
-                ShizukuNativeController.releaseMappedTouch(appContext);
+                releasePortalTouch(appContext, route);
             }
             synchronized (touchLock) {
                 if (generation == portalTouchGeneration && !portalTouchActive) {
                     portalTouchContext = null;
                     portalTouchCallback = null;
+                    portalTouchRoute = InputBridge.MappedTouchRoute.UNAVAILABLE;
                 }
             }
         });
@@ -504,6 +538,7 @@ public final class ShizukuInputBackend implements InputBackend {
         int rotation;
         int serial;
         InputBridge.Callback callback;
+        InputBridge.MappedTouchRoute route;
         synchronized (touchLock) {
             if (generation != portalTouchGeneration || !portalTouchActive) {
                 portalTouchMoveScheduled = false;
@@ -516,12 +551,12 @@ public final class ShizukuInputBackend implements InputBackend {
             rotation = portalTouchRotation;
             serial = portalTouchMoveSerial;
             callback = portalTouchCallback;
+            route = portalTouchRoute;
         }
-        String result = ShizukuNativeController.injectPortalTouchEvent(context,
-                Display.DEFAULT_DISPLAY, MotionEvent.ACTION_MOVE, x, y,
-                width, height, rotation);
+        String result = emitPortalTouchEvent(context, route, MotionEvent.ACTION_MOVE,
+                x, y, width, height, rotation);
         if (!"ok".equals(result)) {
-            ShizukuNativeController.releaseMappedTouch(context);
+            releasePortalTouch(context, route);
             notifyPortalFailure(generation, callback, context);
             return;
         }
@@ -539,6 +574,7 @@ public final class ShizukuInputBackend implements InputBackend {
         int width;
         int height;
         int rotation;
+        InputBridge.MappedTouchRoute route;
         synchronized (touchLock) {
             if (generation != portalTouchGeneration) {
                 return;
@@ -546,12 +582,34 @@ public final class ShizukuInputBackend implements InputBackend {
             width = portalTouchWidth;
             height = portalTouchHeight;
             rotation = portalTouchRotation;
+            route = portalTouchRoute;
         }
-        String result = ShizukuNativeController.injectPortalTouchEvent(context,
-                Display.DEFAULT_DISPLAY, action, x, y, width, height, rotation);
+        String result = emitPortalTouchEvent(context, route, action,
+                x, y, width, height, rotation);
         if (!"ok".equals(result)) {
-            ShizukuNativeController.releaseMappedTouch(context);
+            releasePortalTouch(context, route);
             notifyPortalFailure(generation, callback, context);
+        }
+    }
+
+    private String emitPortalTouchEvent(Context context, InputBridge.MappedTouchRoute route,
+            int action, int x, int y, int width, int height, int rotation) {
+        if (route == InputBridge.MappedTouchRoute.THOR_DIRECT) {
+            return ThorDirectController.emitMappedTouch(context, Display.DEFAULT_DISPLAY,
+                    action, x, y, width, height, rotation);
+        }
+        if (route == InputBridge.MappedTouchRoute.SHIZUKU) {
+            return ShizukuNativeController.injectPortalTouchEvent(context,
+                    Display.DEFAULT_DISPLAY, action, x, y, width, height, rotation);
+        }
+        return context.getString(R.string.portal_interactive_unavailable);
+    }
+
+    private void releasePortalTouch(Context context, InputBridge.MappedTouchRoute route) {
+        if (route == InputBridge.MappedTouchRoute.THOR_DIRECT) {
+            ThorDirectController.releaseMappedTouch(context);
+        } else if (route == InputBridge.MappedTouchRoute.SHIZUKU) {
+            ShizukuNativeController.releaseMappedTouch(context);
         }
     }
 
@@ -566,6 +624,7 @@ public final class ShizukuInputBackend implements InputBackend {
             portalTouchMoveSerial++;
             portalTouchContext = null;
             portalTouchCallback = null;
+            portalTouchRoute = InputBridge.MappedTouchRoute.UNAVAILABLE;
             cancelPortalHeartbeatLocked();
             portalTouchGeneration++;
         }
@@ -576,10 +635,56 @@ public final class ShizukuInputBackend implements InputBackend {
     }
 
     private void handleServiceLoss() {
+        handlePortalRouteLoss(InputBridge.MappedTouchRoute.SHIZUKU);
+        handleNativeTouchRouteLoss(InputBridge.MappedTouchRoute.SHIZUKU);
+    }
+
+    private void handleDirectStateChange() {
+        Context portalContext;
+        Context dragContext;
+        synchronized (touchLock) {
+            portalContext = portalTouchActive
+                    && portalTouchRoute == InputBridge.MappedTouchRoute.THOR_DIRECT
+                    ? portalTouchContext : null;
+            dragContext = nativeTouchActive
+                    && nativeTouchRoute == InputBridge.MappedTouchRoute.THOR_DIRECT
+                    ? nativeTouchContext : null;
+        }
+        if (portalContext != null && !ThorDirectController.isReady(portalContext)) {
+            handlePortalRouteLoss(InputBridge.MappedTouchRoute.THOR_DIRECT);
+        }
+        if (dragContext != null && !ThorDirectController.isReady(dragContext)) {
+            handleNativeTouchRouteLoss(InputBridge.MappedTouchRoute.THOR_DIRECT);
+        }
+    }
+
+    private void handleNativeTouchRouteLoss(InputBridge.MappedTouchRoute lostRoute) {
+        Context context;
+        InputBridge.Callback callback;
+        synchronized (touchLock) {
+            if (!nativeTouchActive || nativeTouchRoute != lostRoute) return;
+            context = nativeTouchContext;
+            callback = nativeTouchCallback;
+            nativeTouchActive = false;
+            nativeTouchGeneration++;
+            pendingNativeTouchDx = 0f;
+            pendingNativeTouchDy = 0f;
+            cancelNativeTouchHeartbeatLocked();
+        }
+        if (context != null) {
+            touchExecutor.execute(() -> releasePortalTouch(context, lostRoute));
+        }
+        if (callback != null && context != null) {
+            AssistantMainHandler.post(() -> callback.onError(
+                    context.getString(R.string.native_touch_connection_failed)));
+        }
+    }
+
+    private void handlePortalRouteLoss(InputBridge.MappedTouchRoute lostRoute) {
         InputBridge.Callback callback;
         Context context;
         synchronized (touchLock) {
-            if (!portalTouchActive) {
+            if (!portalTouchActive || portalTouchRoute != lostRoute) {
                 return;
             }
             callback = portalTouchCallback;
@@ -589,8 +694,12 @@ public final class ShizukuInputBackend implements InputBackend {
             portalTouchMoveSerial++;
             portalTouchContext = null;
             portalTouchCallback = null;
+            portalTouchRoute = InputBridge.MappedTouchRoute.UNAVAILABLE;
             cancelPortalHeartbeatLocked();
             portalTouchGeneration++;
+        }
+        if (context != null) {
+            touchExecutor.execute(() -> releasePortalTouch(context, lostRoute));
         }
         if (callback != null && context != null) {
             AssistantMainHandler.post(() -> callback.onError(
@@ -632,6 +741,7 @@ public final class ShizukuInputBackend implements InputBackend {
         }
         nativeTouchFrameScheduled = true;
         int frameMs = pendingNativeTouchFrameMs;
+        int generation = nativeTouchGeneration;
         touchExecutor.execute(() -> {
             sleepQuietly(frameMs);
             int displayId;
@@ -640,7 +750,9 @@ public final class ShizukuInputBackend implements InputBackend {
             int rotation;
             int x2;
             int y2;
+            InputBridge.MappedTouchRoute route;
             synchronized (touchLock) {
+                if (!nativeTouchActive || generation != nativeTouchGeneration) return;
                 if (Math.abs(pendingNativeTouchDx) < 0.01f && Math.abs(pendingNativeTouchDy) < 0.01f) {
                     nativeTouchFrameScheduled = false;
                     return;
@@ -657,20 +769,21 @@ public final class ShizukuInputBackend implements InputBackend {
                 rotation = nativeTouchRotation;
                 x2 = Math.round(endX);
                 y2 = Math.round(endY);
+                route = nativeTouchRoute;
             }
-            String result = ShizukuNativeController.injectTouchEvent(context, displayId,
+            String result = emitNativeTouchEvent(context, route, displayId,
                     MotionEvent.ACTION_MOVE, x2, y2, width, height, rotation);
             InputBridge.Callback callback;
             synchronized (touchLock) {
+                if (generation != nativeTouchGeneration) return;
                 nativeTouchFrameScheduled = false;
                 callback = nativeTouchCallback;
                 if (nativeTouchActive) {
                     scheduleNativeTouchLocked(context);
                 }
             }
-            if (result != null && !"ok".equals(result) && callback != null) {
-                AssistantMainHandler.post(() -> callback.onError(
-                        context.getString(R.string.native_touch_injection_failed)));
+            if (!"ok".equals(result)) {
+                handleNativeTouchFailure(context, route, generation, callback);
             }
         });
     }
@@ -688,20 +801,112 @@ public final class ShizukuInputBackend implements InputBackend {
         int width;
         int height;
         int rotation;
+        int generation;
+        InputBridge.MappedTouchRoute route;
         synchronized (touchLock) {
             displayId = nativeTouchDisplayId;
             width = nativeTouchWidth;
             height = nativeTouchHeight;
             rotation = nativeTouchRotation;
+            generation = nativeTouchGeneration;
+            route = nativeTouchRoute;
         }
         touchExecutor.execute(() -> {
-            String result = ShizukuNativeController.injectTouchEvent(context, displayId,
+            String result = emitNativeTouchEvent(context, route, displayId,
                     action, x, y, width, height, rotation);
-            if (result != null && !"ok".equals(result) && callback != null) {
-                AssistantMainHandler.post(() -> callback.onError(
-                        context.getString(R.string.native_touch_injection_failed)));
+            if (!"ok".equals(result)) {
+                handleNativeTouchFailure(context, route, generation, callback);
             }
         });
+    }
+
+    private String emitNativeTouchEvent(Context context, InputBridge.MappedTouchRoute route,
+            int displayId, int action, int x, int y, int width, int height, int rotation) {
+        if (route == InputBridge.MappedTouchRoute.THOR_DIRECT) {
+            return ThorDirectController.emitMappedTouch(context, displayId, action,
+                    x, y, width, height, rotation);
+        }
+        if (route == InputBridge.MappedTouchRoute.SHIZUKU) {
+            return ShizukuNativeController.injectTouchEvent(context, displayId, action,
+                    x, y, width, height, rotation);
+        }
+        return context.getString(R.string.native_touch_connection_failed);
+    }
+
+    private void handleNativeTouchFailure(Context context,
+            InputBridge.MappedTouchRoute route, int generation,
+            InputBridge.Callback callback) {
+        if (route == InputBridge.MappedTouchRoute.THOR_DIRECT) {
+            synchronized (touchLock) {
+                if (generation == nativeTouchGeneration) {
+                    nativeTouchActive = false;
+                    nativeTouchGeneration++;
+                    pendingNativeTouchDx = 0f;
+                    pendingNativeTouchDy = 0f;
+                    cancelNativeTouchHeartbeatLocked();
+                }
+            }
+            ThorDirectController.releaseMappedTouch(context);
+        }
+        if (callback != null) {
+            AssistantMainHandler.post(() -> callback.onError(
+                    context.getString(R.string.native_touch_injection_failed)));
+        }
+    }
+
+    private void scheduleNativeTouchHeartbeatLocked(Context context) {
+        cancelNativeTouchHeartbeatLocked();
+        int generation = nativeTouchGeneration;
+        nativeTouchHeartbeat = portalTouchLeaseExecutor.scheduleAtFixedRate(() -> {
+            synchronized (touchLock) {
+                if (!nativeTouchActive || generation != nativeTouchGeneration
+                        || nativeTouchHeartbeatQueued) return;
+                nativeTouchHeartbeatQueued = true;
+            }
+            touchExecutor.execute(() -> {
+                    int displayId;
+                    int width;
+                    int height;
+                    int rotation;
+                    int x;
+                    int y;
+                    InputBridge.Callback callback;
+                    synchronized (touchLock) {
+                        if (!nativeTouchActive || generation != nativeTouchGeneration
+                                || nativeTouchRoute != InputBridge.MappedTouchRoute.THOR_DIRECT) {
+                            return;
+                        }
+                        displayId = nativeTouchDisplayId;
+                        width = nativeTouchWidth;
+                        height = nativeTouchHeight;
+                        rotation = nativeTouchRotation;
+                        x = Math.round(nativeTouchX);
+                        y = Math.round(nativeTouchY);
+                        callback = nativeTouchCallback;
+                    }
+                    String result = emitNativeTouchEvent(context,
+                            InputBridge.MappedTouchRoute.THOR_DIRECT, displayId,
+                            MotionEvent.ACTION_MOVE, x, y, width, height, rotation);
+                    synchronized (touchLock) {
+                        if (generation == nativeTouchGeneration) {
+                            nativeTouchHeartbeatQueued = false;
+                        }
+                    }
+                    if (!"ok".equals(result)) {
+                        handleNativeTouchFailure(context,
+                                InputBridge.MappedTouchRoute.THOR_DIRECT,
+                                generation, callback);
+                    }
+                });
+        }, 300L, 300L, TimeUnit.MILLISECONDS);
+    }
+
+    private void cancelNativeTouchHeartbeatLocked() {
+        nativeTouchHeartbeatQueued = false;
+        if (nativeTouchHeartbeat != null) {
+            nativeTouchHeartbeat.cancel(false);
+            nativeTouchHeartbeat = null;
+        }
     }
 
     private float clamp(float value, float min, float max) {

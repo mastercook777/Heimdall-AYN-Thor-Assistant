@@ -57,7 +57,9 @@ final class FirstSetupChecklistView extends LinearLayout {
     }
 
     void refresh(boolean profileCreated, boolean basicTouchReady,
-                 boolean advancedControlsReady) {
+                 boolean shizukuReady, ThorDirectController.State directState) {
+        boolean advancedControlsReady = shizukuReady
+                || directState == ThorDirectController.State.READY;
         renderStatus(profileStatus, profileCreated,
                 R.string.first_setup_status_profile_created,
                 R.string.first_setup_status_profile_pending);
@@ -69,8 +71,19 @@ final class FirstSetupChecklistView extends LinearLayout {
                 R.string.first_setup_status_not_configured);
         basicTouchAction.setText(basicTouchReady
                 ? R.string.first_setup_manage : R.string.first_setup_enable_open);
-        advancedControlsAction.setText(advancedControlsReady
-                ? R.string.first_setup_manage : R.string.first_setup_set_up_shizuku);
+        if (advancedControlsReady) {
+            advancedControlsAction.setText(R.string.first_setup_manage);
+        } else if (directState == ThorDirectController.State.DISABLED) {
+            advancedControlsAction.setText(R.string.first_setup_enable_thor_direct);
+        } else if (directState == ThorDirectController.State.STARTING) {
+            advancedControlsAction.setText(R.string.thor_direct_starting);
+        } else if (directState == ThorDirectController.State.UNAVAILABLE) {
+            advancedControlsAction.setText(R.string.first_setup_connection_options);
+        } else {
+            advancedControlsAction.setText(R.string.first_setup_set_up_shizuku);
+        }
+        advancedControlsAction.setEnabled(advancedControlsReady
+                || directState != ThorDirectController.State.STARTING);
     }
 
     private LinearLayout checklistCard() {

@@ -118,7 +118,7 @@ final class KeyboardInputSession {
     }
 
     private VirtualKeyboardDispatcher ensureDispatcher() {
-        if (!InputBridge.advancedControlsEnabled(context)) {
+        if (InputBridge.keyboardRoute(context) == InputBridge.KeyboardRoute.UNAVAILABLE) {
             handleUnavailable();
             return null;
         }

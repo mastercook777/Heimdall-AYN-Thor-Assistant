@@ -2,7 +2,21 @@ package com.mastercook777.heimdall;
 
 public final class UinputNativeProbe {
     static {
-        System.loadLibrary("thor_uinput_probe");
+        try {
+            System.loadLibrary("thor_uinput_probe");
+        } catch (UnsatisfiedLinkError normalLoadError) {
+            // The PServer-launched app_process has our APK on CLASSPATH but no
+            // app ClassLoader native-library search path. The APK's JNI libs
+            // are stored unextracted, so load the aligned ZIP entry directly.
+            String apk = System.getenv("CLASSPATH");
+            if (android.os.Process.myUid() != 0 || apk == null
+                    || !apk.matches("[A-Za-z0-9_./:=+~\\-]+")
+                    || !apk.endsWith("/base.apk")) {
+                throw normalLoadError;
+            }
+            String abi = android.os.Process.is64Bit() ? "arm64-v8a" : "armeabi-v7a";
+            System.load(apk + "!/lib/" + abi + "/libthor_uinput_probe.so");
+        }
     }
 
     private UinputNativeProbe() {

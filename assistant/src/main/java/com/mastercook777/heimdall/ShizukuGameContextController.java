@@ -61,6 +61,7 @@ final class ShizukuGameContextController implements AutoCloseable {
     private IBinder binder;
     private CountDownLatch bindLatch;
     private boolean boundRequested;
+    private String reportedRoute = "";
     private volatile boolean enabled;
     private volatile int queryGeneration;
     private volatile boolean closed;
@@ -79,6 +80,7 @@ final class ShizukuGameContextController implements AutoCloseable {
         if (!enabled) {
             publish(GameContextSnapshot.UNKNOWN);
             releaseService();
+            executor.execute(() -> ThorGameContextController.stop(appContext));
         }
     }
 
@@ -97,6 +99,12 @@ final class ShizukuGameContextController implements AutoCloseable {
         queryGeneration++;
         if (closed) return;
         executor.execute(() -> {
+            try {
+                ThorGameContextController.pause(appContext);
+            } catch (Throwable error) {
+                recordDiagnostic("direct monitor pause failed type="
+                        + error.getClass().getSimpleName());
+            }
             IBinder service;
             synchronized (lock) { service = binder; }
             if (service == null || !service.isBinderAlive()) return;
@@ -125,6 +133,7 @@ final class ShizukuGameContextController implements AutoCloseable {
         }
         if (foreground == null || !isSupportedPackage(foreground.packageName)) {
             releaseService();
+            executor.execute(() -> ThorGameContextController.stop(appContext));
             publish(GameContextSnapshot.UNKNOWN);
             return;
         }
@@ -139,14 +148,36 @@ final class ShizukuGameContextController implements AutoCloseable {
         final int generation = queryGeneration;
         executor.execute(() -> {
             try {
+                if (ThorDirectController.isReady(appContext)) {
+                    releaseService();
+                    if (enabled && generation == queryGeneration
+                            && queryRemote(null, packageName, generation)) {
+                        recordRoute("thor-direct");
+                        return;
+                    }
+                } else {
+                    recordRoute("direct-unavailable");
+                }
+                if (!ThorGameContextController.stop(appContext)) {
+                    recordRoute("direct-stop-unconfirmed");
+                    publish(GameContextSnapshot.UNKNOWN);
+                    return;
+                }
+                if (!enabled || closed || generation != queryGeneration) return;
                 IBinder service = awaitService();
                 if (service == null) {
+                    recordRoute("unavailable");
                     recordDiagnostic("query unavailable package=" + packageName);
                     publish(GameContextSnapshot.UNKNOWN);
                     return;
                 }
                 if (enabled && generation == queryGeneration) {
-                    queryRemote(service, packageName, generation);
+                    if (!queryRemote(service, packageName, generation)) {
+                        recordRoute("shizuku-failed");
+                        publish(GameContextSnapshot.UNKNOWN);
+                    } else {
+                        recordRoute("shizuku");
+                    }
                 }
             } finally {
                 requestInFlight.set(false);
@@ -154,14 +185,19 @@ final class ShizukuGameContextController implements AutoCloseable {
         });
     }
 
-    private void queryRemote(IBinder service, String packageName, int generation) {
+    private boolean queryRemote(IBinder service, String packageName, int generation) {
         Parcel data = Parcel.obtain();
-        Parcel reply = Parcel.obtain();
+        Parcel reply = null;
         try {
-            data.writeInterfaceToken(ShizukuGameContextUserService.DESCRIPTOR);
-            data.writeString(packageName);
-            if (!service.transact(ShizukuGameContextUserService.TRANSACTION_QUERY_CONTEXT,
-                    data, reply, 0)) throw new IllegalStateException("transaction rejected");
+            if (service == null) {
+                reply = ThorGameContextController.query(appContext, packageName);
+            } else {
+                reply = Parcel.obtain();
+                data.writeInterfaceToken(ShizukuGameContextUserService.DESCRIPTOR);
+                data.writeString(packageName);
+                if (!service.transact(ShizukuGameContextUserService.TRANSACTION_QUERY_CONTEXT,
+                        data, reply, 0)) throw new IllegalStateException("transaction rejected");
+            }
             reply.readException();
             String resolvedPackage = reply.readString();
             int activityState = reply.readInt();
@@ -217,13 +253,14 @@ final class ShizukuGameContextController implements AutoCloseable {
                 snapshot = GameContextSnapshot.UNKNOWN;
             }
             if (enabled && !closed && generation == queryGeneration) publish(snapshot);
+            return true;
         } catch (Throwable error) {
             recordDiagnostic("query failed type=" + error.getClass().getSimpleName());
-            invalidateBinder();
-            if (enabled && generation == queryGeneration) publish(GameContextSnapshot.UNKNOWN);
+            if (service != null) invalidateBinder();
+            return false;
         } finally {
             data.recycle();
-            reply.recycle();
+            if (reply != null) reply.recycle();
         }
     }
 
@@ -342,7 +379,8 @@ final class ShizukuGameContextController implements AutoCloseable {
             if (closed) return;
             closed = true;
         }
-        executor.shutdownNow();
+        executor.execute(() -> ThorGameContextController.stop(appContext));
+        executor.shutdown();
         releaseService();
         GameContextTracker.clear();
     }
@@ -353,5 +391,13 @@ final class ShizukuGameContextController implements AutoCloseable {
             lastDiagnostic = message;
         }
         HeimdallStabilityDiagnostics.recordGameContextDiagnostic(appContext, message);
+    }
+
+    private void recordRoute(String route) {
+        synchronized (lock) {
+            if (route.equals(reportedRoute)) return;
+            reportedRoute = route;
+        }
+        recordDiagnostic("route=" + route);
     }
 }

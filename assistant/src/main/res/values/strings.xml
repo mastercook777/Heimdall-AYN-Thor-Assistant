@@ -5,8 +5,8 @@
     <string name="touch_virtual_mouse_full_gesture_area">Full gesture area</string>
     <string name="touch_virtual_mouse_full_gesture_area_help">Hides the lower left/right buttons and uses the entire Touchpad for movement and gestures.</string>
     <string name="touch_virtual_mouse_help">Tap with one finger for left click; tap twice for double-click; double-tap and drag to hold left; tap with two fingers for right click; swipe vertically with two fingers to scroll. The upper client must keep focus and support relative mouse input.</string>
-    <string name="virtual_mouse_unavailable">Start and authorize Shizuku before using Virtual Mouse.</string>
-    <string name="virtual_keyboard_unavailable">Start and authorize Shizuku before using keyboard mapping.</string>
+    <string name="virtual_mouse_unavailable">Start Thor Direct or authorize Shizuku before using Virtual Mouse.</string>
+    <string name="virtual_keyboard_unavailable">Start Thor Direct or authorize Shizuku before using keyboard mapping.</string>
     <string name="virtual_mouse_entry_hint">One finger to move \u00b7 Two fingers to scroll</string>
     <string name="app_name">Heimdall</string>
     <string name="startup_readiness_brand">HEIMDALL</string>
@@ -50,6 +50,8 @@
     <string name="first_setup_status_not_configured">○ Not configured</string>
     <string name="first_setup_enable_open">Open Settings</string>
     <string name="first_setup_set_up_shizuku">Set up</string>
+    <string name="first_setup_enable_thor_direct">Enable Thor Direct</string>
+    <string name="first_setup_connection_options">Connection options</string>
     <string name="first_setup_manage">Manage</string>
     <string name="first_setup_later">Later</string>
     <string name="first_setup_continue">Continue</string>
@@ -337,6 +339,21 @@
 
     <string name="connection_capabilities">Capabilities</string>
     <string name="connection_capability_summary">Basic Touch: %1$s\nAdvanced Controls: %2$s</string>
+    <string name="connection_capability_summary_direct">Basic Touch: %1$s\nThor Direct: ready · Shizuku fallback: %2$s</string>
+    <string name="thor_direct_title">Thor Direct · Experimental</string>
+    <string name="thor_direct_summary">Controller recording/replay, Right Stick, Precision Aim, Interactive Portal, Enhanced Touch, Virtual Mouse, PC Keyboard, and Game Context on supported Thor firmware. Shizuku remains available as a fallback and on other devices.</string>
+    <string name="thor_direct_state_unsupported">Not supported on this device</string>
+    <string name="thor_direct_state_disabled">Off</string>
+    <string name="thor_direct_state_starting">Connecting</string>
+    <string name="thor_direct_state_ready">Thor Direct ready</string>
+    <string name="thor_direct_state_unavailable">Unavailable · Check firmware or retry</string>
+    <string name="thor_direct_enable">Enable Thor Direct</string>
+    <string name="thor_direct_disable">Turn off</string>
+    <string name="thor_direct_retry">Retry</string>
+    <string name="thor_direct_starting">Connecting…</string>
+    <string name="thor_direct_unavailable">Unavailable</string>
+    <string name="thor_direct_diagnostic_route">Thor Direct controller helper ready</string>
+    <string name="thor_direct_diagnostic_access">Controller access comes from the Thor Direct helper; app-process file permissions may differ.</string>
     <string name="connection_capabilities_setup">Setup</string>
     <string name="connection_state_ready">Ready</string>
     <string name="connection_state_not_enabled">Not enabled</string>
@@ -345,6 +362,8 @@
     <string name="connection_state_authorized">Authorized · Setup needed</string>
     <string name="connection_state_preparing">Preparing</string>
     <string name="connection_advanced_controls_summary">Controller macros, Precision Aim, Virtual Mouse, PC Keyboard, and game detection</string>
+    <string name="connection_shizuku_fallback_title">Shizuku fallback</string>
+    <string name="connection_shizuku_fallback_summary">Optional on Thor. Use this route when Thor Direct is unavailable or turned off.</string>
     <string name="connection_open_shizuku">Open Shizuku</string>
     <string name="connection_authorize">Authorize</string>
     <string name="connection_prepare_advanced_controls">Prepare</string>
@@ -406,10 +425,10 @@
     <string name="profile_platform_bound">Bound console: %1$s</string>
     <string name="profile_game_unknown_label">Unnamed game</string>
     <string name="profile_platform_unknown_label">Unknown console</string>
-    <string name="profile_current_game_unavailable">No supported game context is currently detected. This version supports AetherSX2, Eden, PPSSPP, the RetroArch candidate, and GameNative through Shizuku.</string>
+    <string name="profile_current_game_unavailable">No supported game context is currently detected. This version supports AetherSX2, Eden, PPSSPP, the RetroArch candidate, and GameNative through Thor Direct or Shizuku.</string>
     <string name="profile_current_platform_unavailable">This RetroArch launch does not expose an unambiguous console identity. Bind the game only, or use an uncompressed ROM/database entry with a recognizable console.</string>
     <string name="profile_game_detection_requires_app_awareness">Enable automatic Profile switching before binding the current game.</string>
-    <string name="profile_game_detection_requires_shizuku">Start Shizuku and authorize Heimdall before binding the current game.</string>
+    <string name="profile_game_detection_requires_shizuku">Enable Thor Direct or start Shizuku and authorize Heimdall before binding the current game.</string>
     <string name="profile_game_bound_draft">Bound %1$s in this draft. Tap Save to apply.</string>
     <string name="profile_platform_bound_draft">Bound console %1$s in this draft. Tap Save to apply.</string>
     <string name="profile_game_binding_cleared_draft">Game binding cleared in this draft. Tap Save to apply.</string>
@@ -511,9 +530,9 @@
     <string name="portal_reselect_region">Reselect Region</string>
     <string name="portal_interactive_status">Interactive status</string>
     <string name="portal_interactive_ready">Interactive ready</string>
-    <string name="portal_interactive_unavailable">Interactive Portal unavailable. Set up Advanced Controls with Shizuku.</string>
+    <string name="portal_interactive_unavailable">Interactive Portal unavailable. Set up Shizuku Advanced Controls, or use Thor Direct on supported Thor firmware.</string>
     <string name="portal_touch_busy">Interactive Portal is busy with another Enhanced Touch gesture.</string>
-    <string name="portal_touch_failed">Interactive Portal touch failed and was released.</string>
+    <string name="portal_touch_failed">Interactive Portal touch failed; release was requested.</string>
     <string name="portal_settings_help_interactive">Interactive Portals support one-finger touch in either shape. Touches on the live image control the upper-screen game. Reselect the region in Settings. Stop the Portal there or in Quick Actions.</string>
 
     <string name="settings_summary_layout_saved">Choose a preset or edit the Grid. Save to apply.</string>
@@ -923,6 +942,7 @@
     <string name="macro_icon_custom_number">Custom %1$d</string>
     <string name="touchpad_mode_route_unavailable">%1$s is not available yet. Use Touch Drag instead.</string>
     <string name="shizuku_controller_route_required">Enable Advanced Controls first</string>
+    <string name="native_stick_route_required">Enable Thor Direct or Shizuku Advanced Controls first</string>
     <string name="shizuku_controller_preparing">Advanced Controls are getting ready. Try again in a moment.</string>
     <string name="settings_reset_touchpad_draft">Touch controls reset. Save to update this Profile.</string>
     <string name="settings_reset_macro_draft">Macro button layout reset. Save to update this Profile.</string>

@@ -15,6 +15,7 @@ import java.util.concurrent.Executors;
  */
 final class StartupReadinessCoordinator implements AutoCloseable {
     private static final long USER_SERVICE_WAIT_MS = 4_000L;
+    private static final long DIRECT_WAIT_MS = 6_500L;
     private static final long ACCESSIBILITY_POST_WARM_WAIT_MS = 750L;
 
     enum Status {
@@ -76,27 +77,34 @@ final class StartupReadinessCoordinator implements AutoCloseable {
         Status accessibility = accessibilityReady ? Status.READY : Status.OPTIONAL;
         publish(new Snapshot(accessibility, Status.CHECKING, Status.CHECKING, false));
 
-        if (!ShizukuNativeController.isBinderAlive()) {
-            publish(new Snapshot(accessibility, Status.ACTION_REQUIRED,
-                    Status.UNAVAILABLE, true));
-            return;
-        }
+        Status shizuku;
         if (!ShizukuNativeController.isPermissionGranted()) {
-            publish(new Snapshot(accessibility, Status.ACTION_REQUIRED,
-                    Status.UNAVAILABLE, true));
+            shizuku = Status.ACTION_REQUIRED;
+        } else {
+            publish(new Snapshot(accessibility, Status.CHECKING, Status.CHECKING, false));
+            shizuku = ShizukuNativeController.warmUp(context, USER_SERVICE_WAIT_MS)
+                    ? Status.READY : Status.UNAVAILABLE;
+        }
+        // Do not pre-create a Shizuku keyboard while the opted-in direct helper
+        // is still starting: two resident uinput keyboards can confuse clients.
+        if (ThorDirectController.isEnabled(context)) {
+            long deadline = SystemClock.uptimeMillis() + DIRECT_WAIT_MS;
+            while (!closed && ThorDirectController.state(context)
+                    == ThorDirectController.State.STARTING
+                    && SystemClock.uptimeMillis() < deadline) {
+                SystemClock.sleep(100L);
+            }
+        }
+        InputBridge.KeyboardRoute route = InputBridge.keyboardRoute(context);
+        if (route == InputBridge.KeyboardRoute.UNAVAILABLE
+                || (route == InputBridge.KeyboardRoute.SHIZUKU
+                && shizuku != Status.READY)) {
+            publish(new Snapshot(accessibility, shizuku, Status.UNAVAILABLE, true));
             return;
         }
-
-        publish(new Snapshot(accessibility, Status.CHECKING, Status.CHECKING, false));
-        if (!ShizukuNativeController.warmUp(context, USER_SERVICE_WAIT_MS)) {
-            publish(new Snapshot(accessibility, Status.UNAVAILABLE,
-                    Status.UNAVAILABLE, true));
-            return;
-        }
-
         Status confirmedAccessibility = awaitAccessibilityAfterServiceWarm(accessibility);
-        publish(new Snapshot(confirmedAccessibility, Status.READY, Status.CHECKING, false));
-        mainHandler.post(() -> startKeyboardPrewarm(confirmedAccessibility));
+        publish(new Snapshot(confirmedAccessibility, shizuku, Status.CHECKING, false));
+        mainHandler.post(() -> startKeyboardPrewarm(confirmedAccessibility, shizuku));
     }
 
     private Status awaitAccessibilityAfterServiceWarm(Status initial) {
@@ -113,7 +121,7 @@ final class StartupReadinessCoordinator implements AutoCloseable {
         return ThorAccessibilityService.isReady() ? Status.READY : Status.OPTIONAL;
     }
 
-    private void startKeyboardPrewarm(Status accessibility) {
+    private void startKeyboardPrewarm(Status accessibility, Status shizuku) {
         if (closed) return;
         VirtualKeyboardDispatcher dispatcher = new VirtualKeyboardDispatcher(context,
                 new VirtualKeyboardDispatcher.Listener() {
@@ -123,7 +131,7 @@ final class StartupReadinessCoordinator implements AutoCloseable {
                         if (closed || active == null) return;
                         active.park();
                         prewarmDispatcher = null;
-                        publish(new Snapshot(accessibility, Status.READY,
+                        publish(new Snapshot(accessibility, shizuku,
                                 Status.READY, true));
                     }
 
@@ -134,7 +142,7 @@ final class StartupReadinessCoordinator implements AutoCloseable {
                             active.park();
                             prewarmDispatcher = null;
                         }
-                        publish(new Snapshot(accessibility, Status.READY,
+                        publish(new Snapshot(accessibility, shizuku,
                                 Status.UNAVAILABLE, true));
                     }
                 });
