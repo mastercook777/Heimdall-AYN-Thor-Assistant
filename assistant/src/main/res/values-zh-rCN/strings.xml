@@ -473,6 +473,9 @@
     <string name="profile_platform_bound_draft">已在草稿中绑定主机 %1$s，点击“保存”后生效。</string>
     <string name="profile_game_binding_cleared_draft">已在草稿中清除游戏绑定，点击“保存”后生效。</string>
     <string name="profile_default_for_app">作为此 App 的默认 Profile</string>
+    <string name="profile_use_as_desktop">设为桌面 Profile</string>
+    <string name="profile_desktop_help">自动切换确认上屏 App 没有匹配的 Profile 时，显示此 Profile。手动选择会保留到上屏 App 或游戏改变。</string>
+    <string name="profile_return_to_desktop">返回桌面 · %1$s</string>
     <string name="profile_binding_help">RetroArch 可绑定检测到的游戏或主机；GameNative 可绑定 Steam、GOG、Epic 或本地库游戏，返回库时会清除当前游戏。RetroArch 与 PPSSPP 返回菜单后保留最近一次正向启动。Heimdall 不保存原始 ROM、content URI、core、PC 路径或 GameNative 游戏 ID。</string>
     <string name="profile_create">新建 Profile</string>
     <string name="profile_data_management">数据管理</string>

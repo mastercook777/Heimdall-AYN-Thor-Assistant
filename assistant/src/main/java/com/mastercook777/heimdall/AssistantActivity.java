@@ -192,6 +192,7 @@ public class AssistantActivity extends Activity {
     private static final String STATE_PROFILE_CONTEXT_BINDING_DRAFT =
             "heimdall.profile_context_binding_draft";
     private static final String STATE_PROFILE_DEFAULT_DRAFT = "heimdall.profile_default_draft";
+    private static final String STATE_DESKTOP_PROFILE_DRAFT = "heimdall.desktop_profile_draft";
     private static final int MAGNIFIER_DIRTY_REGION = 1;
     private static final int MAGNIFIER_DIRTY_ZOOM = 1 << 1;
     private static final int MAGNIFIER_DIRTY_SHAPE = 1 << 2;
@@ -259,6 +260,7 @@ public class AssistantActivity extends Activity {
     private TextView settingsDetectedGameStatus;
     private Button settingsBindPlatformButton;
     private CheckBox settingsProfileDefaultInput;
+    private CheckBox settingsDesktopProfileInput;
     private WidgetLayout.Item settingsMagnifierDraft;
     private String settingsMagnifierItemId;
     private int settingsMagnifierDirtyMask;
@@ -412,6 +414,7 @@ public class AssistantActivity extends Activity {
     private ShizukuGameContextController gameContextController;
     private final ManualProfileSelectionGuard manualProfileSelectionGuard =
             new ManualProfileSelectionGuard();
+    private final DesktopProfilePolicy desktopProfilePolicy = new DesktopProfilePolicy();
     private final ForegroundAppTracker.Listener foregroundAppListener = snapshot ->
             uiHandler.post(() -> {
                 refreshQuickMediaSurfaces();
@@ -661,6 +664,10 @@ public class AssistantActivity extends Activity {
             }
             outState.putBoolean(STATE_PROFILE_DEFAULT_DRAFT,
                     settingsProfileDefaultInput.isChecked());
+            if (settingsDesktopProfileInput != null) {
+                outState.putBoolean(STATE_DESKTOP_PROFILE_DRAFT,
+                        settingsDesktopProfileInput.isChecked());
+            }
         }
         super.onSaveInstanceState(outState);
     }
@@ -735,6 +742,11 @@ public class AssistantActivity extends Activity {
         settingsProfilePackageInput.setText(state.getString(STATE_PROFILE_PACKAGE_DRAFT, ""));
         settingsProfileDefaultInput.setChecked(
                 state.getBoolean(STATE_PROFILE_DEFAULT_DRAFT, false));
+        if (settingsDesktopProfileInput != null
+                && state.containsKey(STATE_DESKTOP_PROFILE_DRAFT)) {
+            settingsDesktopProfileInput.setChecked(
+                    state.getBoolean(STATE_DESKTOP_PROFILE_DRAFT, false));
+        }
     }
 
     private void putJsonState(Bundle state, String key, WidgetLayout value) {
@@ -4981,6 +4993,9 @@ public class AssistantActivity extends Activity {
         if (userInitiated) {
             manualProfileSelectionGuard.record(
                     ForegroundAppTracker.latest(), GameContextTracker.latest());
+            desktopProfilePolicy.recordManualSelection(ForegroundAppTracker.latest(),
+                    GameContextTracker.latest(),
+                    ForegroundAppTracker.isUpperLauncherVisible());
         }
         flushGuideReadingPosition();
         invalidateGuideTextCache();
@@ -5042,13 +5057,28 @@ public class AssistantActivity extends Activity {
                     + " contextKind=" + gameContext.kind);
             return;
         }
+        int desktopIndex = DesktopProfilePolicy.findDesktopIndex(profiles,
+                ProfileStore.loadDesktopProfileId(this));
+        if (desktopIndex >= 0 && desktopProfilePolicy.suppressesAutomaticSwitch(
+                snapshot, gameContext, ForegroundAppTracker.isUpperLauncherVisible())) {
+            recordProfileAutoSwitchDiagnostic("suppressed reason=manual-desktop-selection");
+            return;
+        }
         int match = ProfileAutoSwitchResolver.resolve(profiles, selectedProfileIndex,
                 snapshot, gameContext);
+        boolean confirmedUnbound = DesktopProfilePolicy.isConfirmedUnbound(
+                profiles, snapshot, gameContext,
+                ForegroundAppTracker.isUpperLauncherVisible());
+        if (desktopIndex >= 0 && confirmedUnbound) {
+            match = desktopIndex;
+        }
+        String foregroundName = snapshot == null ? "launcher" : snapshot.packageName;
         recordProfileAutoSwitchDiagnostic("decision current=" + selectedProfileIndex
                 + " match=" + match
-                + " foreground=" + snapshot.packageName
+                + " foreground=" + foregroundName
                 + " contextState=" + gameContext.state
                 + " contextKind=" + gameContext.kind
+                + " desktopFallback=" + confirmedUnbound
                 + " platform=" + gameContext.hasPlatformIdentity()
                 + " " + ProfileAutoSwitchResolver.diagnosticSummary(
                         profiles, selectedProfileIndex, snapshot, gameContext));
@@ -5056,15 +5086,19 @@ public class AssistantActivity extends Activity {
             int previous = selectedProfileIndex;
             selectProfile(match, false);
             recordProfileAutoSwitchDiagnostic("applied from=" + previous + " to=" + match
-                    + " foreground=" + snapshot.packageName
+                    + " foreground=" + foregroundName
                     + " contextKind=" + gameContext.kind);
         }
     }
 
     private String profileAutoSwitchBlocker(ForegroundAppTracker.Snapshot snapshot) {
         if (!ForegroundAppTracker.isEnabled(this)) return "disabled";
-        if (snapshot == null) return "missing-foreground";
-        if (!snapshot.isUpperOrUnknownDisplay()) return "non-upper-foreground";
+        if (snapshot == null && !ForegroundAppTracker.isUpperLauncherVisible()) {
+            return "missing-foreground";
+        }
+        if (snapshot != null && !snapshot.isUpperOrUnknownDisplay()) {
+            return "non-upper-foreground";
+        }
         if (activeScreen == SCREEN_SETTINGS) return "settings";
         if (hasUnsavedWidgetLayout()) return "unsaved-layout";
         if (activeDraftSteps != null) return "macro-editor";
@@ -5686,6 +5720,44 @@ public class AssistantActivity extends Activity {
         LinearLayout.LayoutParams resetIconParams = new LinearLayout.LayoutParams(dp(84), dp(40));
         resetIconParams.setMargins(dp(3), 0, 0, 0);
         current.addView(resetIcon, resetIconParams);
+
+        int desktopIndex = DesktopProfilePolicy.findDesktopIndex(profiles,
+                ProfileStore.loadDesktopProfileId(this));
+        if (desktopIndex >= 0 && desktopIndex != selectedProfileIndex) {
+            LinearLayout desktopShortcut = new LinearLayout(this);
+            desktopShortcut.setOrientation(LinearLayout.HORIZONTAL);
+            desktopShortcut.setGravity(Gravity.CENTER_VERTICAL);
+            desktopShortcut.setPadding(dp(12), 0, dp(12), 0);
+            desktopShortcut.setClickable(true);
+            desktopShortcut.setFocusable(true);
+            desktopShortcut.setBackground(HeimdallUi.isFreyaFamily(this)
+                    ? HeimdallUi.cncMenuControl(this, HeimdallUi.RADIUS_CARD, false, false)
+                    : HeimdallUi.glassSurface(this, ThemeGlassColors.LIST_CONTROL,
+                            HeimdallUi.RADIUS_CARD, 1));
+            ImageView desktopIcon = new ImageView(this);
+            desktopIcon.setImageResource(R.drawable.ic_desktop_mode);
+            desktopIcon.setColorFilter(HeimdallUi.accent(this));
+            desktopShortcut.addView(desktopIcon,
+                    new LinearLayout.LayoutParams(dp(26), dp(26)));
+            TextView desktopLabel = text(getString(R.string.profile_return_to_desktop,
+                    profiles.get(desktopIndex).name), 13, TEXT, true);
+            desktopLabel.setGravity(Gravity.CENTER_VERTICAL | Gravity.LEFT);
+            desktopLabel.setSingleLine(true);
+            desktopLabel.setEllipsize(android.text.TextUtils.TruncateAt.END);
+            LinearLayout.LayoutParams labelParams = new LinearLayout.LayoutParams(0, -1, 1);
+            labelParams.setMargins(dp(10), 0, 0, 0);
+            desktopShortcut.addView(desktopLabel, labelParams);
+            desktopShortcut.setContentDescription(desktopLabel.getText());
+            desktopShortcut.setOnClickListener(view -> {
+                Runnable switchProfile = () -> selectProfile(desktopIndex);
+                if (holder[0] != null) dismissPanelAnimated(holder[0], switchProfile);
+                else switchProfile.run();
+            });
+            LinearLayout.LayoutParams desktopParams =
+                    new LinearLayout.LayoutParams(-1, dp(48));
+            desktopParams.setMargins(0, 0, 0, dp(6));
+            panel.addView(desktopShortcut, desktopParams);
+        }
 
         ScrollView scroll = new ScrollView(this);
         LinearLayout list = new LinearLayout(this);
@@ -7040,6 +7112,15 @@ public class AssistantActivity extends Activity {
         settingsProfileDefaultInput.setChecked(selectedProfile.defaultForPackage);
         content.addView(settingsProfileDefaultInput, new LinearLayout.LayoutParams(-1, dp(40)));
 
+        settingsDesktopProfileInput = new CheckBox(this);
+        settingsDesktopProfileInput.setText(R.string.profile_use_as_desktop);
+        settingsDesktopProfileInput.setTextSize(12);
+        styleCheckBox(settingsDesktopProfileInput);
+        settingsDesktopProfileInput.setChecked(selectedProfile.safeProfileId().equals(
+                ProfileStore.loadDesktopProfileId(this)));
+        content.addView(settingsDesktopProfileInput, new LinearLayout.LayoutParams(-1, dp(40)));
+        addSettingsHelp(content, getString(R.string.profile_desktop_help));
+
         addSettingsHelp(content, getString(R.string.profile_binding_help));
 
         LinearLayout manageRow = settingsActionRow(content);
@@ -7199,6 +7280,8 @@ public class AssistantActivity extends Activity {
                 : settingsProfilePackageInput.getText().toString();
         Boolean defaultForPackage = settingsProfileDefaultInput == null ? null
                 : settingsProfileDefaultInput.isChecked();
+        Boolean desktopProfile = settingsDesktopProfileInput == null ? null
+                : settingsDesktopProfileInput.isChecked();
         showProfileDetectionDetails = !showProfileDetectionDetails;
         refreshSettingsContent();
         if (name != null && settingsProfileNameInput != null) {
@@ -7209,6 +7292,9 @@ public class AssistantActivity extends Activity {
         }
         if (defaultForPackage != null && settingsProfileDefaultInput != null) {
             settingsProfileDefaultInput.setChecked(defaultForPackage);
+        }
+        if (desktopProfile != null && settingsDesktopProfileInput != null) {
+            settingsDesktopProfileInput.setChecked(desktopProfile);
         }
     }
 
@@ -8396,6 +8482,15 @@ public class AssistantActivity extends Activity {
         }
         if (activeSettingsSection == SETTINGS_PROFILE) {
             applyProfileSettingsInputs();
+            if (settingsDesktopProfileInput != null) {
+                String selectedId = selectedProfile.safeProfileId();
+                String savedId = ProfileStore.loadDesktopProfileId(this);
+                if (settingsDesktopProfileInput.isChecked()) {
+                    ProfileStore.saveDesktopProfileId(this, selectedId);
+                } else if (selectedId.equals(savedId)) {
+                    ProfileStore.saveDesktopProfileId(this, "");
+                }
+            }
         }
         boolean themeChanged = activeSettingsSection == SETTINGS_APPEARANCE;
         if (themeChanged) {
@@ -12774,7 +12869,11 @@ public class AssistantActivity extends Activity {
             return;
         }
         String removedName = profiles.get(index).name;
+        String removedId = profiles.get(index).safeProfileId();
         profiles.remove(index);
+        if (removedId.equals(ProfileStore.loadDesktopProfileId(this))) {
+            ProfileStore.saveDesktopProfileId(this, "");
+        }
         if (selectedProfileIndex >= profiles.size()) {
             selectedProfileIndex = profiles.size() - 1;
         }

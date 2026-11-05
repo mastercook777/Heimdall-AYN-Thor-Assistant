@@ -475,6 +475,9 @@
     <string name="profile_platform_bound_draft">Bound console %1$s in this draft. Tap Save to apply.</string>
     <string name="profile_game_binding_cleared_draft">Game binding cleared in this draft. Tap Save to apply.</string>
     <string name="profile_default_for_app">Default Profile for this app</string>
+    <string name="profile_use_as_desktop">Use this as the Desktop Profile</string>
+    <string name="profile_desktop_help">When automatic Profile switching confirms that the upper app has no matching Profile, show this Profile. A manual choice stays until the upper app or game changes.</string>
+    <string name="profile_return_to_desktop">Return to Desktop · %1$s</string>
     <string name="profile_binding_help">Bind a detected game or console. RetroArch and PPSSPP retain the last detected launch in menus; GameNative clears it on library return. Heimdall does not save raw game paths or IDs.</string>
     <string name="profile_create">Create Profile</string>
     <string name="profile_data_management">Data</string>

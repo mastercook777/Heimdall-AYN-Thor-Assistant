@@ -72,6 +72,7 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
             testUserMacroIconDeletionContract();
             testGameContextIdentityAndResolverContract();
             testGameContextAppOnlyFallbackAndManualSelectionGuardContract();
+            testDesktopProfileFallbackContract();
             testForegroundObservationClearAndUnicodeExportFilenameContract();
             testGameContextUserServiceLifetimeContract();
             testEdenGameContextIdentityAndResolverContract();
@@ -1576,6 +1577,62 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
         assertFalse(guard.shouldSuppress(otherApp, contextB));
     }
 
+    public void testDesktopProfileFallbackContract() {
+        GameProfile desktop = new GameProfile("Desktop", "generic", "",
+                Collections.emptyList());
+        GameProfile gameA = new GameProfile("Game A", "generic",
+                "com.example.emulator", Collections.emptyList());
+        gameA.gameContextBinding.kind = GameContextBinding.KIND_EMULATOR_TITLE_ID;
+        gameA.gameContextBinding.identityKey = "game-a";
+        List<GameProfile> profiles = Arrays.asList(desktop, gameA);
+        ForegroundAppTracker.Snapshot emulator = new ForegroundAppTracker.Snapshot(
+                "com.example.emulator", "Main", "", 0, 100L);
+        ForegroundAppTracker.Snapshot other = new ForegroundAppTracker.Snapshot(
+                "com.example.video", "Main", "", 0, 100L);
+        GameContextSnapshot activeA = new GameContextSnapshot(
+                GameContextSnapshot.State.ACTIVE, "com.example.emulator", 1,
+                GameContextBinding.KIND_EMULATOR_TITLE_ID, "game-a", "A", 100L, "test");
+        GameContextSnapshot activeB = new GameContextSnapshot(
+                GameContextSnapshot.State.ACTIVE, "com.example.emulator", 1,
+                GameContextBinding.KIND_EMULATOR_TITLE_ID, "game-b", "B", 200L, "test");
+
+        assertEquals(0, DesktopProfilePolicy.findDesktopIndex(
+                profiles, desktop.safeProfileId()));
+        assertEquals(-1, DesktopProfilePolicy.findDesktopIndex(profiles, "missing"));
+        assertTrue(DesktopProfilePolicy.isConfirmedUnbound(
+                profiles, other, GameContextSnapshot.UNKNOWN, false));
+        assertTrue(DesktopProfilePolicy.isConfirmedUnbound(
+                profiles, emulator, activeB, false));
+        assertFalse(DesktopProfilePolicy.isConfirmedUnbound(
+                profiles, emulator, activeA, false));
+        assertFalse(DesktopProfilePolicy.isConfirmedUnbound(
+                profiles, emulator, GameContextSnapshot.UNKNOWN, false));
+        assertTrue(DesktopProfilePolicy.isConfirmedUnbound(
+                profiles, emulator, GameContextSnapshot.none(
+                        "com.example.emulator", 1, "test"), false));
+        assertTrue(DesktopProfilePolicy.isConfirmedUnbound(
+                profiles, null, GameContextSnapshot.UNKNOWN, true));
+        assertFalse(DesktopProfilePolicy.isConfirmedUnbound(
+                profiles, null, GameContextSnapshot.UNKNOWN, false));
+
+        DesktopProfilePolicy policy = new DesktopProfilePolicy();
+        policy.recordManualSelection(other, GameContextSnapshot.UNKNOWN, false);
+        assertTrue(policy.suppressesAutomaticSwitch(
+                other, GameContextSnapshot.UNKNOWN, false));
+        assertFalse(policy.suppressesAutomaticSwitch(emulator, activeB, false));
+        policy.recordManualSelection(emulator, activeA, false);
+        assertTrue(policy.suppressesAutomaticSwitch(emulator, activeA, false));
+        assertFalse(policy.suppressesAutomaticSwitch(emulator, activeB, false));
+
+        String previousId = ProfileStore.loadDesktopProfileId(target);
+        try {
+            ProfileStore.saveDesktopProfileId(target, desktop.safeProfileId());
+            assertEquals(desktop.safeProfileId(), ProfileStore.loadDesktopProfileId(target));
+        } finally {
+            ProfileStore.saveDesktopProfileId(target, previousId);
+        }
+    }
+
     public void testForegroundObservationClearAndUnicodeExportFilenameContract() {
         ForegroundAppTracker.Snapshot previous = ForegroundAppTracker.latest();
         ForegroundAppTracker.Snapshot game = new ForegroundAppTracker.Snapshot(
@@ -1584,6 +1641,11 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
         assertEquals("com.example.game", ForegroundAppTracker.latest().packageName);
         ForegroundAppTracker.clear();
         assertNull(ForegroundAppTracker.latest());
+        assertFalse(ForegroundAppTracker.isUpperLauncherVisible());
+        ForegroundAppTracker.publish(game);
+        ForegroundAppTracker.clearForUpperLauncher();
+        assertNull(ForegroundAppTracker.latest());
+        assertTrue(ForegroundAppTracker.isUpperLauncherVisible());
         assertEquals(ProfileAutoSwitchResolver.NO_MATCH,
                 ProfileAutoSwitchResolver.resolve(Collections.emptyList(), 0,
                         ForegroundAppTracker.latest()));
@@ -1591,6 +1653,8 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
         assertFalse(ThorAccessibilityService.isLauncherPackage("com.example.game"));
         if (previous != null) {
             ForegroundAppTracker.publish(previous);
+        } else {
+            ForegroundAppTracker.clear();
         }
 
         assertEquals("\u585e\u5c14\u8fbe\u4f20\u8bf4",

@@ -38,6 +38,7 @@ final class ForegroundAppTracker {
     }
 
     private static volatile Snapshot latest;
+    private static volatile boolean upperLauncherVisible;
     private static volatile Listener listener;
 
     private ForegroundAppTracker() {
@@ -75,6 +76,10 @@ final class ForegroundAppTracker {
         return latest;
     }
 
+    static boolean isUpperLauncherVisible() {
+        return upperLauncherVisible;
+    }
+
     static void setListener(Listener value) {
         listener = value;
     }
@@ -86,6 +91,7 @@ final class ForegroundAppTracker {
     }
 
     static void clear() {
+        upperLauncherVisible = false;
         if (latest == null) {
             return;
         }
@@ -96,6 +102,14 @@ final class ForegroundAppTracker {
         }
     }
 
+    static void clearForUpperLauncher() {
+        if (latest == null && upperLauncherVisible) return;
+        latest = null;
+        upperLauncherVisible = true;
+        Listener current = listener;
+        if (current != null) current.onForegroundAppChanged(null);
+    }
+
     static boolean isObservationRequested(Context context) {
         return isEnabled(context) && ScreenPowerObserver.isInteractive(context);
     }
@@ -104,6 +118,7 @@ final class ForegroundAppTracker {
         if (snapshot == null || snapshot.packageName.length() == 0) {
             return;
         }
+        upperLauncherVisible = false;
         Snapshot previous = latest;
         if (previous != null
                 && previous.packageName.equals(snapshot.packageName)
