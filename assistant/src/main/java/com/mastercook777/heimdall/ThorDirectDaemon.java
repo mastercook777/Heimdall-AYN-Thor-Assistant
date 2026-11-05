@@ -22,7 +22,7 @@ import java.util.Arrays;
 /** Privileged Thor-only helper, launched from the installed APK through stock PServer. */
 public final class ThorDirectDaemon {
     static final int MAGIC = 0x48444c31; // HDL1
-    static final int VERSION = 1;
+    static final int VERSION = 3;
     static final int OP_PING = 1;
     static final int OP_CAPTURE = 2;
     static final int OP_REPLAY = 3;
@@ -37,6 +37,10 @@ public final class ThorDirectDaemon {
     static final int OP_EMIT_KEYBOARD = 12;
     static final int OP_RELEASE_KEYBOARD_KEYS = 13;
     static final int OP_RELEASE_KEYBOARD = 14;
+    static final int OP_PROBE_DISPLAY_BRIGHTNESS = 15;
+    static final int OP_READ_LINKED_BRIGHTNESS = 16;
+    static final int OP_PREVIEW_LINKED_BRIGHTNESS = 17;
+    static final int OP_COMMIT_LINKED_BRIGHTNESS = 18;
     private static final int MAX_REQUEST_BYTES = 64 * 1024;
     private static final int MAX_RESPONSE_BYTES = 256 * 1024;
     private static final long STICK_LEASE_MS = 700L;
@@ -68,7 +72,7 @@ public final class ThorDirectDaemon {
     }
 
     static String socketName(int appUid, String nonce) {
-        return "heimdall_thor_direct_v1_" + appUid + "_" + nonce;
+        return "heimdall_thor_direct_v3_" + appUid + "_" + nonce;
     }
 
     public static void main(String[] args) {
@@ -175,6 +179,18 @@ public final class ThorDirectDaemon {
             case OP_RELEASE_KEYBOARD:
                 result = releaseKeyboard();
                 break;
+            case OP_PROBE_DISPLAY_BRIGHTNESS:
+                result = ThorDisplayBrightnessProbe.readOnlySnapshot();
+                break;
+            case OP_READ_LINKED_BRIGHTNESS:
+                result = ThorDisplayBrightnessProbe.readLinked();
+                break;
+            case OP_PREVIEW_LINKED_BRIGHTNESS:
+                result = ThorDisplayBrightnessProbe.writeLinked(input.readFloat(), false);
+                break;
+            case OP_COMMIT_LINKED_BRIGHTNESS:
+                result = ThorDisplayBrightnessProbe.writeLinked(input.readFloat(), true);
+                break;
             case OP_STOP:
                 releaseTouch();
                 neutralStick();
@@ -194,16 +210,16 @@ public final class ThorDirectDaemon {
             Class.forName(UinputNativeProbe.class.getName());
             NativeGamepadPath.Device device = NativeGamepadPath.requireDevice();
             if (!device.readable || !device.writable) {
-                return "thor direct v1 controller node unavailable";
+                return "thor direct v3 controller node unavailable";
             }
             // Stat permissions alone do not prove SELinux permits actual device access.
             FileDescriptor read = Os.open(device.path, OsConstants.O_RDONLY, 0);
             Os.close(read);
             FileDescriptor write = Os.open(device.path, OsConstants.O_WRONLY, 0);
             Os.close(write);
-            return "thor direct v1 ready uid=" + Process.myUid();
+            return "thor direct v3 ready uid=" + Process.myUid();
         } catch (Throwable error) {
-            return "thor direct v1 unavailable: " + error.getClass().getSimpleName();
+            return "thor direct v3 unavailable: " + error.getClass().getSimpleName();
         }
     }
 

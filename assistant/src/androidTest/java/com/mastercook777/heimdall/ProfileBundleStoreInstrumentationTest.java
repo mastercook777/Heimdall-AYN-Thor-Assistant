@@ -832,6 +832,24 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
         assertEquals(HeimdallActionCatalog.ACTION_SCREENSHOT,
                 restored.safeQuickActions().actionAt(1));
         assertFalse(restored.safeQuickActions().mediaVolume);
+        assertFalse(restored.safeQuickActions().mediaControls);
+
+        QuickActionsConfig composed = restored.safeQuickActions().copy();
+        composed.setActionAt(2, HeimdallActionCatalog.ACTION_SCREEN_RECORDING);
+        composed.setActionAt(3, HeimdallActionCatalog.ACTION_SCREENSHOT);
+        composed.mediaControls = true;
+        composed.mediaMode = QuickActionsConfig.MEDIA_FULL;
+        composed.linkedBrightness = true;
+        composed.removeActionAt(1);
+        restored.quickActions = composed;
+        WidgetLayout.Item composedRestored = WidgetLayout.Item.fromJson(restored.toJson());
+        assertEquals(3, composedRestored.safeQuickActions().actions.size());
+        assertEquals(HeimdallActionCatalog.ACTION_SCREEN_RECORDING,
+                composedRestored.safeQuickActions().actionAt(1));
+        assertTrue(composedRestored.safeQuickActions().mediaControls);
+        assertEquals(QuickActionsConfig.MEDIA_FULL,
+                composedRestored.safeQuickActions().mediaMode);
+        assertTrue(composedRestored.safeQuickActions().linkedBrightness);
         assertEquals(HeimdallActionCatalog.ACTION_NONE,
                 HeimdallActionCatalog.normalizeQuickAction("arbitrary_intent"));
     }

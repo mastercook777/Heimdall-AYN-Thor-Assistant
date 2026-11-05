@@ -33,6 +33,9 @@ import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.hardware.display.DisplayManager;
 import android.media.AudioManager;
+import android.media.MediaMetadata;
+import android.media.session.MediaController;
+import android.media.session.MediaSession;
 import android.media.projection.MediaProjectionManager;
 import android.media.projection.MediaProjectionConfig;
 import android.net.ConnectivityManager;
@@ -46,8 +49,10 @@ import android.os.Looper;
 import android.os.SystemClock;
 import android.os.ParcelFileDescriptor;
 import android.provider.OpenableColumns;
+import android.provider.Settings;
 import android.graphics.pdf.PdfRenderer;
 import android.text.Editable;
+import android.text.TextUtils;
 import android.text.TextWatcher;
 import android.util.DisplayMetrics;
 import android.view.Gravity;
@@ -381,6 +386,7 @@ public class AssistantActivity extends Activity {
     private boolean captureInProgress;
     private GamepadRecordingSession activeGamepadRecordingSession;
     private final Handler uiHandler = new Handler(Looper.getMainLooper());
+    private final Runnable quickMediaPositionTick = this::refreshQuickMediaSurfaces;
     private final Runnable hideStartupReadiness = () -> dismissStartupReadiness(true);
     private final ShizukuNativeController.PermissionResultListener
             shizukuPermissionResultListener = granted ->
@@ -408,6 +414,7 @@ public class AssistantActivity extends Activity {
             new ManualProfileSelectionGuard();
     private final ForegroundAppTracker.Listener foregroundAppListener = snapshot ->
             uiHandler.post(() -> {
+                refreshQuickMediaSurfaces();
                 if (!isProfileAwarenessRunning()) return;
                 if (gameContextController != null) gameContextController.refresh(snapshot);
                 maybeAutoSwitchProfile(snapshot);
@@ -441,6 +448,11 @@ public class AssistantActivity extends Activity {
     };
     private final List<QuickActionButtonView> quickScreenshotButtons = new ArrayList<>();
     private final List<QuickActionButtonView> quickRecordButtons = new ArrayList<>();
+    private final List<QuickMediaSurface> quickMediaSurfaces = new ArrayList<>();
+    private final List<QuickLinkedBrightnessController> quickBrightnessRows = new ArrayList<>();
+    private final Map<String, View> quickActionViews = new HashMap<>();
+    private WidgetHostLayout mainWidgetHost;
+    private QuickMediaController quickMediaController;
     private final List<UpperScreenMagnifierView> magnifierViews = new ArrayList<>();
     private final Map<String, Float> magnifierRenderedAspectRatios = new HashMap<>();
     private final List<CanvasWidgetView> canvasViews = new ArrayList<>();
@@ -551,6 +563,7 @@ public class AssistantActivity extends Activity {
         super.onCreate(savedInstanceState);
         DebugPerformanceDiagnostics.initialize(this);
         screenPowerObserver = new ScreenPowerObserver(this, this::onScreenPowerChanged);
+        quickMediaController = new QuickMediaController(this, this::refreshQuickMediaSurfaces);
         gameContextController = new ShizukuGameContextController(this, snapshot -> {
             updateSettingsDetectedGameStatus(snapshot);
             maybeAutoSwitchProfile(ForegroundAppTracker.latest());
@@ -832,6 +845,7 @@ public class AssistantActivity extends Activity {
     protected void onResume() {
         super.onResume();
         activityResumed = true;
+        if (!quickMediaSurfaces.isEmpty()) quickMediaController.start();
         screenPowerObserver.refresh();
         updateGameFocusProtection(true);
         recordFocusBoundary("resume-protected");
@@ -854,6 +868,8 @@ public class AssistantActivity extends Activity {
     @Override
     protected void onPause() {
         activityResumed = false;
+        uiHandler.removeCallbacks(quickMediaPositionTick);
+        quickMediaController.stop();
         recordFocusBoundary("pause");
         saveGuideReadingPosition();
         dismissFullVirtualKeyboard(false);
@@ -1836,6 +1852,7 @@ public class AssistantActivity extends Activity {
             return;
         }
         updateBridgeStatus();
+        for (QuickLinkedBrightnessController row : quickBrightnessRows) row.refresh();
         refreshFirstSetupSurfaces();
         if (activeScreen == SCREEN_SETTINGS
                 && (activeSettingsSection == SETTINGS_INPUT
@@ -2177,12 +2194,18 @@ public class AssistantActivity extends Activity {
     }
 
     private View createMainContent() {
+        mainWidgetHost = null;
         releaseMagnifierViews();
         releaseTranslationViews();
         releaseCanvasViews();
         releaseHardwareMonitorViews();
         if (activeScreen != SCREEN_MAIN) {
             parkKeyboardInputSession();
+            quickMediaSurfaces.clear();
+            quickBrightnessRows.clear();
+            quickActionViews.clear();
+            uiHandler.removeCallbacks(quickMediaPositionTick);
+            quickMediaController.stop();
         }
         if (activeScreen == SCREEN_SETTINGS) {
             macroGrids.clear();
@@ -2203,6 +2226,7 @@ public class AssistantActivity extends Activity {
             return createGuidePage();
         }
         WidgetHostLayout widgetGrid = new WidgetHostLayout(this, currentWidgetLayout());
+        mainWidgetHost = widgetGrid;
         addWidgetsToGrid(widgetGrid, currentWidgetLayout());
         if (touchPadView == null) {
             closeVirtualMouseDispatcher();
@@ -2291,6 +2315,16 @@ public class AssistantActivity extends Activity {
             return;
         }
         draftWidgetLayout.sanitize();
+        for (WidgetLayout.Item item : draftWidgetLayout.items) {
+            if (!WidgetLayout.TYPE_QUICK_ACTIONS.equals(item.type)
+                    || !item.safeQuickActions().mediaControls
+                    || quickActionsFitGridItem(item)) continue;
+            int[] minimum = quickActionsSuggestedGrid(item, item.safeQuickActions());
+            showErrorAction(minimum == null
+                    ? getString(R.string.quick_actions_resize_required)
+                    : getString(R.string.quick_actions_resize_to, minimum[0], minimum[1]));
+            return;
+        }
         selectedProfile.widgetLayout = draftWidgetLayout.copy();
         draftWidgetLayout = null;
         ProfileStore.saveProfiles(this, profiles);
@@ -2319,6 +2353,10 @@ public class AssistantActivity extends Activity {
         macroGrids.clear();
         quickScreenshotButtons.clear();
         quickRecordButtons.clear();
+        quickMediaSurfaces.clear();
+        quickBrightnessRows.clear();
+        uiHandler.removeCallbacks(quickMediaPositionTick);
+        quickActionViews.clear();
         touchPadView = null;
         statusText = null;
         UpperScreenProjectionService.setPortalViewCount(
@@ -2329,6 +2367,11 @@ public class AssistantActivity extends Activity {
                 continue;
             }
             grid.addWidget(widget, item);
+        }
+        if (!quickMediaSurfaces.isEmpty() && activityResumed) {
+            quickMediaController.start();
+        } else {
+            quickMediaController.stop();
         }
         if (magnifierViews.isEmpty() && UpperScreenProjectionService.isRunning()) {
             stopMagnifierProjection();
@@ -2589,25 +2632,41 @@ public class AssistantActivity extends Activity {
     private View createQuickActionsWidget(WidgetLayout.Item item) {
         LinearLayout root = new TrackedLinearLayout("Quick Actions");
         root.setOrientation(LinearLayout.VERTICAL);
+        root.setGravity(Gravity.CENTER_VERTICAL);
         HeimdallUi.applyQuickActionPanel(this, root);
         QuickActionsConfig config = item.safeQuickActions();
+        boolean fourColumnLayout = item.w == 4;
+        if (config.mediaControls && QuickActionsConfig.MEDIA_FULL.equals(config.mediaMode)) {
+            root.setGravity(Gravity.TOP);
+        }
         ((TrackedLinearLayout) root).setDelayedEditAction(
                 () -> showQuickActionsEditor(item));
+        quickActionViews.put(item.itemId, root);
 
-        LinearLayout actions = new LinearLayout(this);
-        actions.setOrientation(LinearLayout.HORIZONTAL);
-        root.addView(actions, new LinearLayout.LayoutParams(-1, 0, 1));
+        ViewGroup actions = null;
+        if (!config.actions.isEmpty()) {
+            if (config.actions.size() <= 3) {
+                LinearLayout row = new LinearLayout(this);
+                row.setOrientation(LinearLayout.HORIZONTAL);
+                actions = row;
+            } else {
+                actions = new QuickActionGridView(this);
+            }
+            root.addView(actions, config.mediaControls || config.linkedBrightness
+                    ? new LinearLayout.LayoutParams(-1, dp(44))
+                    : new LinearLayout.LayoutParams(-1, 0, 1));
+        }
         int renderedActions = 0;
         for (String actionId : config.actions) {
             String normalized = HeimdallActionCatalog.normalizeQuickAction(actionId);
             if (HeimdallActionCatalog.ACTION_NONE.equals(normalized)) continue;
-            if (renderedActions > 0) {
+            if (renderedActions > 0 && actions instanceof LinearLayout) {
                 View actionDivider = new View(this);
                 actionDivider.setBackgroundColor(HeimdallUi.quickActionDivider(this));
                 LinearLayout.LayoutParams actionDividerParams =
                         new LinearLayout.LayoutParams(dp(1), -1);
                 actionDividerParams.setMargins(0, dp(7), 0, dp(7));
-                actions.addView(actionDivider, actionDividerParams);
+                ((LinearLayout) actions).addView(actionDivider, actionDividerParams);
             }
             HeimdallActionCatalog.Entry entry =
                     HeimdallActionCatalog.findQuickAction(normalized);
@@ -2623,6 +2682,7 @@ public class AssistantActivity extends Activity {
             }
             QuickActionButtonView button = addQuickActionButton(actions, icon,
                     description, visualState, () -> executeHeimdallAction(normalized));
+            button.setScaleType(ImageView.ScaleType.CENTER);
             button.setDelayedEditAction(() -> showQuickActionsEditor(item));
             if (HeimdallActionCatalog.ACTION_SCREENSHOT.equals(normalized)) {
                 quickScreenshotButtons.add(button);
@@ -2632,13 +2692,27 @@ public class AssistantActivity extends Activity {
             renderedActions++;
         }
 
+        if (config.mediaControls) {
+            if (renderedActions > 0) addQuickActionSectionDivider(root);
+            addQuickMediaSection(root, item, config);
+        }
+
+        if (config.linkedBrightness) {
+            if (renderedActions > 0 || config.mediaControls) {
+                addQuickActionSectionDivider(root,
+                        config.mediaControls ? fourColumnLayout ? 2 : 4 : 0);
+            }
+            addQuickBrightnessSection(root, item);
+        }
+
         if (config.mediaVolume) {
-            View volumeDivider = new View(this);
-            volumeDivider.setBackgroundColor(HeimdallUi.quickActionDivider(this));
-            LinearLayout.LayoutParams volumeDividerParams =
-                    new LinearLayout.LayoutParams(-1, dp(1));
-            volumeDividerParams.setMargins(dp(7), 0, dp(7), 0);
-            root.addView(volumeDivider, volumeDividerParams);
+            if (renderedActions > 0 || config.mediaControls || config.linkedBrightness) {
+                addQuickActionSectionDivider(root,
+                        config.mediaControls && !config.linkedBrightness ? 6
+                                : config.linkedBrightness ? fourColumnLayout ? 2 : 4 : 0);
+            } else {
+                root.setGravity(Gravity.CENTER_VERTICAL);
+            }
 
             LinearLayout volumeRow = new LinearLayout(this);
             volumeRow.setOrientation(LinearLayout.HORIZONTAL);
@@ -2647,11 +2721,11 @@ public class AssistantActivity extends Activity {
             LinearLayout.LayoutParams volumeParams = new LinearLayout.LayoutParams(-1, dp(38));
             root.addView(volumeRow, volumeParams);
 
-            ImageView volumeIcon = new ImageView(this);
-            volumeIcon.setImageResource(R.drawable.ic_volume_up);
+            ImageButton volumeIcon = new ImageButton(this);
             volumeIcon.setColorFilter(HeimdallUi.componentColors(this).quickVolumeIcon);
-            volumeIcon.setContentDescription(getString(R.string.quick_action_media_volume));
-            volumeRow.addView(volumeIcon, new LinearLayout.LayoutParams(dp(24), dp(24)));
+            volumeIcon.setBackgroundColor(Color.TRANSPARENT);
+            volumeIcon.setScaleType(ImageView.ScaleType.CENTER);
+            volumeRow.addView(volumeIcon, new LinearLayout.LayoutParams(dp(38), dp(38)));
 
             AudioManager audio = (AudioManager) getSystemService(AUDIO_SERVICE);
             QuickVolumeSeekBar volume = new QuickVolumeSeekBar(this);
@@ -2661,15 +2735,27 @@ public class AssistantActivity extends Activity {
                     : audio.getStreamVolume(AudioManager.STREAM_MUSIC);
             volume.setMax(max);
             volume.setProgress(current);
-            volumeIcon.setAlpha(0.55f + 0.45f * current / (float) max);
+            updateQuickVolumeIcon(volumeIcon, audio, current);
+            volumeIcon.setOnClickListener(view -> {
+                if (audio == null) return;
+                audio.adjustStreamVolume(AudioManager.STREAM_MUSIC,
+                        audio.isStreamMute(AudioManager.STREAM_MUSIC)
+                                ? AudioManager.ADJUST_UNMUTE : AudioManager.ADJUST_MUTE, 0);
+                volume.setProgress(audio.getStreamVolume(AudioManager.STREAM_MUSIC));
+                updateQuickVolumeIcon(volumeIcon, audio, volume.getProgress());
+            });
             volume.setContentDescription(getString(R.string.quick_action_adjust_media_volume));
             volume.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
                 @Override
                 public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
                     if (fromUser && audio != null) {
+                        if (progress > 0 && audio.isStreamMute(AudioManager.STREAM_MUSIC)) {
+                            audio.adjustStreamVolume(AudioManager.STREAM_MUSIC,
+                                    AudioManager.ADJUST_UNMUTE, 0);
+                        }
                         audio.setStreamVolume(AudioManager.STREAM_MUSIC, progress, 0);
                     }
-                    volumeIcon.setAlpha(0.55f + 0.45f * progress / (float) max);
+                    updateQuickVolumeIcon(volumeIcon, audio, progress);
                 }
 
                 @Override
@@ -2682,10 +2768,535 @@ public class AssistantActivity extends Activity {
             });
             LinearLayout.LayoutParams sliderParams =
                     new LinearLayout.LayoutParams(0, dp(38), 1);
-            sliderParams.setMargins(dp(7), 0, 0, 0);
+            sliderParams.setMargins(dp(1), 0, 0, 0);
             volumeRow.addView(volume, sliderParams);
         }
+        if (renderedActions == 0 && !config.mediaControls && !config.mediaVolume
+                && !config.linkedBrightness) {
+            QuickActionButtonView empty = new QuickActionButtonView(this);
+            empty.setActionIcon(R.drawable.ic_add);
+            empty.setContentDescription(getString(R.string.quick_actions_empty));
+            empty.setVisualState(QuickActionButtonView.STATE_IDLE);
+            empty.setOnClickListener(view -> showQuickActionsEditor(item));
+            empty.setDelayedEditAction(() -> showQuickActionsEditor(item));
+            root.addView(empty, new LinearLayout.LayoutParams(-1, -1));
+        }
+        if ((config.mediaControls || config.linkedBrightness) && actions != null) {
+            ViewGroup actionSection = actions;
+            root.addOnLayoutChangeListener((view, left, top, right, bottom,
+                    oldLeft, oldTop, oldRight, oldBottom) -> {
+                int rows = config.actions.size() <= 3 ? 1
+                        : QuickActionGridView.requiredRows(this,
+                                right - left - root.getPaddingLeft() - root.getPaddingRight(),
+                                config.actions.size());
+                int desired = rows * dp(44);
+                LinearLayout.LayoutParams params =
+                        (LinearLayout.LayoutParams) actionSection.getLayoutParams();
+                if (params.height != desired) {
+                    params.height = desired;
+                    actionSection.setLayoutParams(params);
+                }
+            });
+        }
         return root;
+    }
+
+    private void addQuickActionSectionDivider(LinearLayout root) {
+        addQuickActionSectionDivider(root, 0);
+    }
+
+    private void addQuickActionSectionDivider(LinearLayout root, int verticalGapDp) {
+        View divider = new View(this);
+        divider.setBackgroundColor(HeimdallUi.quickActionDivider(this));
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, dp(1));
+        params.setMargins(dp(7), dp(verticalGapDp), dp(7), dp(verticalGapDp));
+        root.addView(divider, params);
+    }
+
+    private void updateQuickVolumeIcon(ImageButton icon, AudioManager audio, int level) {
+        boolean muted = audio != null && audio.isStreamMute(AudioManager.STREAM_MUSIC);
+        icon.setImageResource(muted ? R.drawable.ic_volume_off : R.drawable.ic_volume_up);
+        icon.setContentDescription(getString(muted
+                ? R.string.quick_action_unmute_media : R.string.quick_action_mute_media));
+        icon.setAlpha(muted ? 0.8f : 0.55f + 0.45f * level
+                / (float) Math.max(1, audio == null ? 15
+                        : audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC)));
+    }
+
+    private void addQuickBrightnessSection(LinearLayout root, WidgetLayout.Item item) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(9), 0, dp(9), 0);
+        root.addView(row, new LinearLayout.LayoutParams(-1, dp(38)));
+        ImageButton icon = new ImageButton(this);
+        icon.setImageResource(R.drawable.ic_brightness_linked);
+        icon.setColorFilter(HeimdallUi.componentColors(this).quickVolumeIcon);
+        icon.setBackgroundColor(Color.TRANSPARENT);
+        icon.setScaleType(ImageView.ScaleType.CENTER);
+        icon.setContentDescription(getString(R.string.quick_actions_linked_brightness));
+        row.addView(icon, new LinearLayout.LayoutParams(dp(38), dp(38)));
+        QuickVolumeSeekBar slider = new QuickVolumeSeekBar(this);
+        slider.setContentDescription(getString(R.string.quick_actions_linked_brightness));
+        LinearLayout.LayoutParams sliderParams = new LinearLayout.LayoutParams(0, dp(38), 1);
+        sliderParams.setMargins(dp(1), 0, 0, 0);
+        row.addView(slider, sliderParams);
+        QuickLinkedBrightnessController controller = new QuickLinkedBrightnessController(
+                this, slider, icon, () -> showErrorAction(getString(
+                        !ThorDirectController.isReady(this)
+                                ? R.string.quick_actions_brightness_unavailable
+                                : Settings.System.getInt(getContentResolver(),
+                                        Settings.System.SCREEN_BRIGHTNESS_MODE,
+                                        Settings.System.SCREEN_BRIGHTNESS_MODE_AUTOMATIC)
+                                        != Settings.System.SCREEN_BRIGHTNESS_MODE_MANUAL
+                                ? R.string.quick_actions_brightness_auto
+                                : R.string.quick_actions_brightness_failed)));
+        quickBrightnessRows.add(controller);
+    }
+
+    private void addQuickMediaSection(LinearLayout root, WidgetLayout.Item item,
+            QuickActionsConfig config) {
+        LinearLayout section = new LinearLayout(this);
+        section.setOrientation(LinearLayout.VERTICAL);
+        boolean full = QuickActionsConfig.MEDIA_FULL.equals(config.mediaMode);
+        root.addView(section, full
+                ? new LinearLayout.LayoutParams(-1, 0, 1)
+                : new LinearLayout.LayoutParams(-1, dp(66)));
+
+        TextView source = text("", HeimdallUi.TYPE_META, MUTED, false);
+        source.setText(R.string.quick_media_no_session);
+        source.setGravity(Gravity.CENTER);
+        source.setSingleLine(true);
+        source.setEllipsize(TextUtils.TruncateAt.END);
+        source.setPadding(dp(6), 0, dp(6), 0);
+        section.addView(source, new LinearLayout.LayoutParams(-1, dp(22)));
+        if (full && config.linkedBrightness) source.setVisibility(View.GONE);
+
+        TextView title = null;
+        TextView subtitle = null;
+        ImageView artwork = null;
+        LinearLayout info = null;
+        SeekBar progress = null;
+        if (full) {
+            info = new LinearLayout(this);
+            info.setOrientation(LinearLayout.HORIZONTAL);
+            info.setGravity(Gravity.CENTER);
+            section.addView(info, new LinearLayout.LayoutParams(-1, 0, 1));
+            artwork = new ImageView(this);
+            artwork.setScaleType(ImageView.ScaleType.CENTER_CROP);
+            artwork.setVisibility(View.GONE);
+            LinearLayout.LayoutParams artParams =
+                    new LinearLayout.LayoutParams(dp(68), dp(68));
+            artParams.setMargins(dp(8), 0, dp(10), 0);
+            info.addView(artwork, artParams);
+            LinearLayout labels = new LinearLayout(this);
+            labels.setOrientation(LinearLayout.VERTICAL);
+            labels.setGravity(Gravity.CENTER_VERTICAL);
+            info.addView(labels, new LinearLayout.LayoutParams(0, -2, 1));
+            title = text("", HeimdallUi.TYPE_LABEL, TEXT, true);
+            title.setGravity(Gravity.CENTER);
+            title.setSingleLine(true);
+            title.setEllipsize(TextUtils.TruncateAt.END);
+            labels.addView(title, new LinearLayout.LayoutParams(-1, -2));
+            subtitle = text("", HeimdallUi.TYPE_META, MUTED, false);
+            subtitle.setGravity(Gravity.CENTER);
+            subtitle.setSingleLine(true);
+            subtitle.setEllipsize(TextUtils.TruncateAt.END);
+            subtitle.setVisibility(View.GONE);
+            labels.addView(subtitle, new LinearLayout.LayoutParams(-1, -2));
+            progress = new QuickVolumeSeekBar(this);
+            progress.setContentDescription(getString(R.string.quick_media_progress));
+            SeekBar progressControl = progress;
+            progress.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+                @Override public void onProgressChanged(SeekBar seekBar, int value,
+                        boolean fromUser) { }
+                @Override public void onStartTrackingTouch(SeekBar seekBar) {
+                    for (QuickMediaSurface surface : quickMediaSurfaces) {
+                        if (surface.progress == progressControl) {
+                            surface.seeking = true;
+                            MediaController target = quickMediaController.snapshot().selected;
+                            surface.seekingToken = target == null
+                                    ? null : target.getSessionToken();
+                        }
+                    }
+                }
+                @Override public void onStopTrackingTouch(SeekBar seekBar) {
+                    for (QuickMediaSurface surface : quickMediaSurfaces) {
+                        if (surface.progress == progressControl) {
+                            MediaController target = quickMediaController.snapshot().selected;
+                            if (target != null && surface.seekingToken != null
+                                    && surface.seekingToken.equals(target.getSessionToken())) {
+                                quickMediaController.seekTo(seekBar.getProgress() * 1000L);
+                            }
+                            surface.seeking = false;
+                            surface.seekingToken = null;
+                        }
+                    }
+                    refreshQuickMediaSurfaces();
+                }
+            });
+            section.addView(progress, new LinearLayout.LayoutParams(-1, dp(32)));
+        }
+
+        LinearLayout buttons = new LinearLayout(this);
+        buttons.setOrientation(LinearLayout.HORIZONTAL);
+        section.addView(buttons, new LinearLayout.LayoutParams(-1, dp(44)));
+        QuickActionButtonView previous = addQuickActionButton(buttons,
+                R.drawable.ic_macro_previous, getString(R.string.quick_media_previous),
+                QuickActionButtonView.STATE_IDLE,
+                () -> performQuickMediaAction(QuickMediaController.Action.PREVIOUS));
+        QuickActionButtonView playPause = addQuickActionButton(buttons,
+                R.drawable.ic_media_play, getString(R.string.quick_media_play),
+                QuickActionButtonView.STATE_IDLE,
+                () -> performQuickMediaAction(QuickMediaController.Action.PLAY_PAUSE));
+        QuickActionButtonView next = addQuickActionButton(buttons,
+                R.drawable.ic_macro_next, getString(R.string.quick_media_next),
+                QuickActionButtonView.STATE_IDLE,
+                () -> performQuickMediaAction(QuickMediaController.Action.NEXT));
+        View switchDivider = new View(this);
+        switchDivider.setBackgroundColor(HeimdallUi.quickActionDivider(this));
+        LinearLayout.LayoutParams switchDividerParams =
+                new LinearLayout.LayoutParams(dp(1), -1);
+        switchDividerParams.setMargins(0, dp(7), 0, dp(7));
+        buttons.addView(switchDivider, switchDividerParams);
+        QuickActionButtonView switchPlayer = new QuickActionButtonView(this);
+        switchPlayer.setActionIcon(R.drawable.ic_media_switch);
+        switchPlayer.setVisualState(QuickActionButtonView.STATE_IDLE);
+        switchPlayer.setPadding(dp(10), dp(10), dp(10), dp(10));
+        switchPlayer.setContentDescription(getString(R.string.quick_media_switch_player));
+        switchPlayer.setOnClickListener(view -> showQuickMediaSourcePicker());
+        switchPlayer.setDelayedEditAction(() -> showQuickActionsEditor(item));
+        buttons.addView(switchPlayer, new LinearLayout.LayoutParams(dp(44), -1));
+        previous.setDelayedEditAction(() -> showQuickActionsEditor(item));
+        playPause.setDelayedEditAction(() -> showQuickActionsEditor(item));
+        next.setDelayedEditAction(() -> showQuickActionsEditor(item));
+        QuickMediaSurface surface = new QuickMediaSurface(source, title, subtitle,
+                artwork, info, progress,
+                previous, playPause, next, switchPlayer);
+        quickMediaSurfaces.add(surface);
+        if (info != null) {
+            info.addOnLayoutChangeListener((view, left, top, right, bottom,
+                    oldLeft, oldTop, oldRight, oldBottom) -> {
+                if ((bottom - top >= dp(76)) != (oldBottom - oldTop >= dp(76))
+                        || (right - left >= dp(220)) != (oldRight - oldLeft >= dp(220))) {
+                    refreshQuickMediaSurfaces();
+                }
+            });
+        }
+        refreshQuickMediaSurfaces();
+    }
+
+    private void refreshQuickMediaSurfaces() {
+        if (quickMediaController == null || quickMediaSurfaces.isEmpty()) return;
+        QuickMediaController.Snapshot snapshot = quickMediaController.snapshot();
+        MediaController selected = snapshot.selected;
+        for (QuickMediaSurface surface : quickMediaSurfaces) {
+            if (!snapshot.accessGranted) {
+                surface.source.setText(R.string.quick_media_permission);
+            } else if (snapshot.sessions.isEmpty()) {
+                surface.source.setText(getString(R.string.quick_media_current_source,
+                        getString(R.string.quick_media_no_session)));
+            } else if (snapshot.ambiguous()) {
+                surface.source.setText(getString(R.string.quick_media_current_source,
+                        getString(R.string.quick_media_choose_player)));
+            } else {
+                surface.source.setText(getString(R.string.quick_media_current_source,
+                        quickMediaController.sourceName(selected)));
+            }
+            setQuickMediaButtonAvailable(surface.switchPlayer,
+                    !snapshot.accessGranted || !snapshot.sessions.isEmpty());
+            if (surface.title != null) {
+                String mediaTitle = QuickMediaController.title(selected);
+                if (mediaTitle.isEmpty() && surface.source.getVisibility() == View.GONE) {
+                    mediaTitle = !snapshot.accessGranted
+                            ? getString(R.string.quick_media_permission)
+                            : snapshot.sessions.isEmpty()
+                            ? getString(R.string.quick_media_no_session)
+                            : getString(R.string.quick_media_choose_player);
+                }
+                surface.title.setText(mediaTitle);
+                surface.title.setVisibility(mediaTitle.isEmpty() ? View.GONE : View.VISIBLE);
+                boolean expanded = surface.info.getHeight() >= dp(76);
+                surface.title.setSingleLine(!expanded);
+                surface.title.setMaxLines(expanded ? 2 : 1);
+                String mediaSubtitle = QuickMediaController.subtitle(selected);
+                surface.subtitle.setText(mediaSubtitle);
+                surface.subtitle.setVisibility(expanded && !mediaSubtitle.isEmpty()
+                        ? View.VISIBLE : View.GONE);
+                if (expanded && surface.info.getWidth() >= dp(220)
+                        && selected != null) {
+                    Bitmap art = QuickMediaController.artwork(selected);
+                    MediaSession.Token token = selected.getSessionToken();
+                    if (surface.artworkToken == null
+                            || !surface.artworkToken.equals(token)
+                            || surface.artworkBitmap != art) {
+                        if (art != null) {
+                            surface.artwork.setImageBitmap(art);
+                        } else {
+                            surface.artwork.setImageDrawable(
+                                    quickMediaController.sourceIcon(selected));
+                        }
+                        surface.artworkToken = token;
+                        surface.artworkBitmap = art;
+                    }
+                    surface.artwork.setVisibility(View.VISIBLE);
+                } else {
+                    if (surface.artworkToken != null) {
+                        surface.artwork.setImageDrawable(null);
+                        surface.artworkToken = null;
+                        surface.artworkBitmap = null;
+                    }
+                    surface.artwork.setVisibility(View.GONE);
+                }
+            }
+            if (surface.progress != null) {
+                long duration = QuickMediaController.duration(selected);
+                surface.progress.setVisibility(duration > 0 ? View.VISIBLE : View.GONE);
+                if (duration > 0) {
+                    surface.progress.setMax((int) Math.min(Integer.MAX_VALUE,
+                            Math.max(1, duration / 1000L)));
+                    if (!surface.seeking) {
+                        surface.progress.setProgress((int) Math.min(Integer.MAX_VALUE,
+                                QuickMediaController.position(selected) / 1000L));
+                    }
+                    boolean canSeek = QuickMediaController.supportsSeek(selected);
+                    surface.progress.setEnabled(canSeek);
+                    surface.progress.setAlpha(canSeek ? 1f : 0.65f);
+                }
+            }
+            boolean playing = QuickMediaController.isPlaying(
+                    selected == null ? null : selected.getPlaybackState());
+            surface.playPause.setActionIcon(playing
+                    ? R.drawable.ic_macro_pause : R.drawable.ic_media_play);
+            surface.playPause.setContentDescription(getString(playing
+                    ? R.string.quick_media_pause : R.string.quick_media_play));
+            setQuickMediaButtonAvailable(surface.previous,
+                    QuickMediaController.supports(selected, QuickMediaController.Action.PREVIOUS));
+            setQuickMediaButtonAvailable(surface.playPause,
+                    QuickMediaController.supports(selected, QuickMediaController.Action.PLAY_PAUSE));
+            setQuickMediaButtonAvailable(surface.next,
+                    QuickMediaController.supports(selected, QuickMediaController.Action.NEXT));
+        }
+        uiHandler.removeCallbacks(quickMediaPositionTick);
+        if (activityResumed && selected != null
+                && QuickMediaController.isPlaying(selected.getPlaybackState())) {
+            for (QuickMediaSurface surface : quickMediaSurfaces) {
+                if (surface.progress != null && surface.progress.getVisibility() == View.VISIBLE) {
+                    uiHandler.postDelayed(quickMediaPositionTick, 1000L);
+                    break;
+                }
+            }
+        }
+    }
+
+    private void setQuickMediaButtonAvailable(QuickActionButtonView button, boolean available) {
+        button.setEnabled(available);
+        button.setAlpha(available ? 1f : 0.4f);
+    }
+
+    private void performQuickMediaAction(QuickMediaController.Action action) {
+        if (quickMediaController == null) return;
+        if (!quickMediaController.perform(action)) {
+            refreshQuickMediaSurfaces();
+        }
+    }
+
+    private void showQuickMediaSourcePicker() {
+        if (quickMediaController == null) return;
+        QuickMediaController.Snapshot snapshot = quickMediaController.snapshot();
+        if (!snapshot.accessGranted) {
+            new AlertDialog.Builder(this)
+                    .setTitle(R.string.quick_media_permission)
+                    .setMessage(R.string.quick_media_permission_explain)
+                    .setNegativeButton(R.string.common_cancel, null)
+                    .setNeutralButton(R.string.quick_media_open_app_info, (dialog, which) ->
+                            startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                    Uri.parse("package:" + getPackageName()))))
+                    .setPositiveButton(R.string.quick_media_open_settings, (dialog, which) ->
+                            startActivity(new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)))
+                    .show();
+            return;
+        }
+        if (snapshot.sessions.isEmpty()) {
+            showErrorAction(getString(R.string.quick_media_no_session));
+            return;
+        }
+        final PanelOverlay[] holder = new PanelOverlay[1];
+        LinearLayout shell = new LinearLayout(this);
+        shell.setOrientation(LinearLayout.VERTICAL);
+        shell.setPadding(dp(12), dp(8), dp(12), dp(10));
+        shell.setBackground(HeimdallUi.isFreyaFamily(this)
+                ? HeimdallUi.cncFlush(this, HeimdallUi.RADIUS_PANEL)
+                : HeimdallUi.glassSurface(this, ThemeGlassColors.OVERLAY,
+                        HeimdallUi.RADIUS_PANEL, 2));
+
+        LinearLayout header = new LinearLayout(this);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        shell.addView(header, new LinearLayout.LayoutParams(-1, dp(48)));
+        header.addView(text(getString(R.string.quick_media_choose_player),
+                HeimdallUi.TYPE_EDITOR_TITLE, TEXT, true),
+                new LinearLayout.LayoutParams(0, -1, 1));
+        Button close = gridCloseButton(() -> {
+            if (holder[0] != null) dismissPanelAnimated(holder[0]);
+        });
+        close.setContentDescription(getString(R.string.common_close));
+        header.addView(close, new LinearLayout.LayoutParams(dp(42), dp(38)));
+
+        TextView help = text(getString(R.string.quick_media_picker_help),
+                HeimdallUi.TYPE_META, MUTED, false);
+        help.setGravity(Gravity.CENTER_VERTICAL);
+        shell.addView(help, new LinearLayout.LayoutParams(-1, dp(36)));
+
+        ScrollView scroll = new ScrollView(this);
+        scroll.setVerticalScrollBarEnabled(false);
+        LinearLayout list = new LinearLayout(this);
+        list.setOrientation(LinearLayout.VERTICAL);
+        scroll.addView(list, new ScrollView.LayoutParams(-1, -2));
+        int listHeight = Math.min(dp(330), snapshot.sessions.size() * dp(88));
+        shell.addView(scroll, new LinearLayout.LayoutParams(-1, listHeight));
+        for (MediaController controller : snapshot.sessions) {
+            MediaSession.Token token = controller.getSessionToken();
+            boolean selected = snapshot.selected != null
+                    && token.equals(snapshot.selected.getSessionToken());
+            String sourceName = quickMediaController.sourceName(controller);
+            String mediaTitle = QuickMediaController.title(controller);
+            boolean canOpen = quickMediaController.launchIntent(controller) != null;
+            boolean canPlayPause = QuickMediaController.supports(controller,
+                    QuickMediaController.Action.PLAY_PAUSE);
+            LinearLayout row = new LinearLayout(this);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setPadding(dp(10), dp(5), dp(10), dp(5));
+            row.setBackground(HeimdallUi.isFreyaFamily(this)
+                    ? HeimdallUi.cncMenuControl(this, HeimdallUi.RADIUS_CARD,
+                            selected, false)
+                    : HeimdallUi.glassSurface(this,
+                            selected ? ThemeGlassColors.SELECTED_CONTROL
+                                    : ThemeGlassColors.LIST_CONTROL,
+                            HeimdallUi.RADIUS_CARD, 1));
+            ImageView icon = new ImageView(this);
+            icon.setImageDrawable(quickMediaController.sourceIcon(controller));
+            icon.setScaleType(ImageView.ScaleType.FIT_CENTER);
+            row.addView(icon, new LinearLayout.LayoutParams(dp(42), dp(42)));
+            LinearLayout labels = new LinearLayout(this);
+            labels.setOrientation(LinearLayout.VERTICAL);
+            labels.setPadding(dp(10), 0, dp(4), 0);
+            row.addView(labels, new LinearLayout.LayoutParams(0, -2, 1));
+            TextView name = text(sourceName, HeimdallUi.TYPE_LABEL, TEXT, true);
+            name.setSingleLine(true);
+            name.setEllipsize(TextUtils.TruncateAt.END);
+            labels.addView(name);
+            TextView detail = text(mediaTitle.isEmpty()
+                    ? getString(canOpen ? R.string.quick_media_open_upper
+                            : R.string.quick_media_control_only)
+                    : mediaTitle, HeimdallUi.TYPE_META, MUTED, false);
+            detail.setSingleLine(true);
+            detail.setEllipsize(TextUtils.TruncateAt.END);
+            labels.addView(detail);
+            if (!canPlayPause) {
+                TextView unavailable = text(getString(R.string.quick_media_play_unavailable),
+                        HeimdallUi.TYPE_META, MUTED, false);
+                unavailable.setSingleLine(true);
+                unavailable.setEllipsize(TextUtils.TruncateAt.END);
+                labels.addView(unavailable);
+            }
+            ImageView open = new ImageView(this);
+            open.setImageResource(canOpen
+                    ? R.drawable.ic_open_external : R.drawable.ic_media_switch);
+            open.setColorFilter(HeimdallUi.resolveColor(this, MUTED));
+            row.addView(open, new LinearLayout.LayoutParams(dp(22), dp(22)));
+            row.setContentDescription(getString(canOpen
+                    ? R.string.quick_media_switch_to_upper
+                    : R.string.quick_media_switch_control_only, sourceName));
+            row.setOnClickListener(view -> {
+                if (holder[0] != null) {
+                    dismissPanelAnimated(holder[0], () -> switchToQuickMediaSession(token));
+                } else {
+                    switchToQuickMediaSession(token);
+                }
+            });
+            LinearLayout.LayoutParams rowParams =
+                    new LinearLayout.LayoutParams(-1, dp(80));
+            rowParams.setMargins(0, dp(4), 0, dp(4));
+            list.addView(row, rowParams);
+        }
+        DisplayMetrics metrics = getResources().getDisplayMetrics();
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
+                Math.min(dp(520), metrics.widthPixels - dp(56)),
+                ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER);
+        holder[0] = showPanelOverlay(shell, params, null);
+    }
+
+    private void switchToQuickMediaSession(MediaSession.Token token) {
+        if (quickMediaController == null) return;
+        MediaController target = null;
+        for (MediaController session : quickMediaController.snapshot().sessions) {
+            if (token.equals(session.getSessionToken())) {
+                target = session;
+                break;
+            }
+        }
+        if (target == null) {
+            showErrorAction(getString(R.string.quick_media_session_ended));
+            return;
+        }
+        Intent launch = quickMediaController.launchIntent(target);
+        if (launch != null) {
+            DisplayManager displays = (DisplayManager) getSystemService(DISPLAY_SERVICE);
+            Display upper = displays == null ? null
+                    : displays.getDisplay(Display.DEFAULT_DISPLAY);
+            if (upper == null || !upper.isValid()) {
+                showErrorAction(getString(R.string.error_upper_screen_not_found));
+                return;
+            }
+            ActivityOptions options = ActivityOptions.makeBasic();
+            options.setLaunchDisplayId(upper.getDisplayId());
+            launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                    | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
+            try {
+                startActivity(launch, options.toBundle());
+            } catch (RuntimeException error) {
+                showErrorAction(getString(R.string.quick_media_open_failed));
+                return;
+            }
+        } else {
+            showAction(getString(R.string.quick_media_control_only));
+        }
+        quickMediaController.select(target);
+    }
+
+    private static final class QuickMediaSurface {
+        final TextView source;
+        final TextView title;
+        final TextView subtitle;
+        final ImageView artwork;
+        final LinearLayout info;
+        final SeekBar progress;
+        final QuickActionButtonView previous;
+        final QuickActionButtonView playPause;
+        final QuickActionButtonView next;
+        final QuickActionButtonView switchPlayer;
+
+        boolean seeking;
+        MediaSession.Token seekingToken;
+        MediaSession.Token artworkToken;
+        Bitmap artworkBitmap;
+
+        QuickMediaSurface(TextView source, TextView title, TextView subtitle,
+                ImageView artwork, LinearLayout info, SeekBar progress,
+                QuickActionButtonView previous,
+                QuickActionButtonView playPause, QuickActionButtonView next,
+                QuickActionButtonView switchPlayer) {
+            this.source = source;
+            this.title = title;
+            this.subtitle = subtitle;
+            this.artwork = artwork;
+            this.info = info;
+            this.progress = progress;
+            this.previous = previous;
+            this.playPause = playPause;
+            this.next = next;
+            this.switchPlayer = switchPlayer;
+        }
     }
 
     private void executeHeimdallAction(String actionId) {
@@ -2738,34 +3349,117 @@ public class AssistantActivity extends Activity {
         help.setSingleLine(true);
         shell.addView(help, new LinearLayout.LayoutParams(-1, dp(28)));
 
-        for (int slot = 0; slot < QuickActionsConfig.MAX_SLOTS; slot++) {
-            final int slotIndex = slot;
-            LinearLayout row = new LinearLayout(this);
-            row.setOrientation(LinearLayout.HORIZONTAL);
-            row.setGravity(Gravity.CENTER_VERTICAL);
-            LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(-1, dp(44));
-            rowParams.setMargins(0, dp(2), 0, dp(2));
-            shell.addView(row, rowParams);
-            TextView slotLabel = text(getString(R.string.quick_actions_slot, slot + 1),
-                    HeimdallUi.TYPE_LABEL, TEXT, true);
-            row.addView(slotLabel, new LinearLayout.LayoutParams(dp(78), -1));
-            HeimdallActionCatalog.Entry current =
-                    HeimdallActionCatalog.findQuickAction(draft.actionAt(slot));
-            Button actionButton = editorButton(getString(current.labelRes), () -> {});
-            actionButton.setTextSize(HeimdallUi.TYPE_BUTTON_COMPACT);
-            actionButton.setOnClickListener(view -> showQuickActionPicker(
-                    draft, slotIndex, actionButton));
-            HeimdallUi.applyChoiceButton(this, actionButton,
-                    !HeimdallActionCatalog.ACTION_NONE.equals(current.id));
-            row.addView(actionButton, new LinearLayout.LayoutParams(0, -1, 1));
-        }
+        TextView sizeHint = text("", HeimdallUi.TYPE_META, MUTED, false);
+        sizeHint.setGravity(Gravity.CENTER_VERTICAL);
+        shell.addView(sizeHint, new LinearLayout.LayoutParams(-1, dp(42)));
+        Runnable refreshSizeHint = () -> {
+            int[] minimum = quickActionsSuggestedGrid(item, draft);
+            sizeHint.setText(minimum == null
+                    ? getString(R.string.quick_actions_resize_required)
+                    : getString(R.string.quick_actions_grid_hint,
+                            minimum[0], minimum[1], item.w, item.h));
+        };
+
+        DisplayMetrics metrics = getResources().getDisplayMetrics();
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(false);
+        scroll.setVerticalScrollBarEnabled(true);
+        scroll.setScrollbarFadingEnabled(false);
+        LinearLayout controls = new LinearLayout(this);
+        controls.setOrientation(LinearLayout.VERTICAL);
+        scroll.addView(controls, new ScrollView.LayoutParams(-1, -2));
+        int availableScrollHeight = Math.max(dp(128), metrics.heightPixels - dp(200));
+        shell.addView(scroll, new LinearLayout.LayoutParams(-1,
+                Math.min(dp(330), availableScrollHeight)));
+
+        TextView buttonLabel = text(getString(R.string.quick_actions_buttons),
+                HeimdallUi.TYPE_LABEL, TEXT, true);
+        controls.addView(buttonLabel, new LinearLayout.LayoutParams(-1, dp(28)));
+        LinearLayout buttonRows = new LinearLayout(this);
+        buttonRows.setOrientation(LinearLayout.VERTICAL);
+        controls.addView(buttonRows, new LinearLayout.LayoutParams(-1, -2));
+        final Button[] addButtonHolder = new Button[1];
+        final Runnable[] refreshButtonRows = new Runnable[1];
+        refreshButtonRows[0] = () -> {
+            populateQuickActionEditorRows(buttonRows, draft, refreshButtonRows[0]);
+            if (addButtonHolder[0] != null) {
+                addButtonHolder[0].setEnabled(
+                        draft.actions.size() < QuickActionsConfig.MAX_ACTIONS);
+            }
+            refreshSizeHint.run();
+        };
+        refreshButtonRows[0].run();
+        Button addButton = editorButton(getString(R.string.quick_actions_add_button),
+                () -> showQuickActionPicker(draft, draft.actions.size(), refreshButtonRows[0]));
+        addButtonHolder[0] = addButton;
+        addButton.setEnabled(draft.actions.size() < QuickActionsConfig.MAX_ACTIONS);
+        LinearLayout addButtonRow = new LinearLayout(this);
+        addButtonRow.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout.LayoutParams addButtonRowParams =
+                new LinearLayout.LayoutParams(-1, dp(44));
+        addButtonRowParams.setMargins(0, dp(4), 0, dp(6));
+        controls.addView(addButtonRow, addButtonRowParams);
+        addButtonRow.addView(new View(this), new LinearLayout.LayoutParams(dp(26), 1));
+        addButtonRow.addView(addButton, new LinearLayout.LayoutParams(0, -1, 2));
+        addButtonRow.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1));
+        addButtonRow.addView(new View(this), new LinearLayout.LayoutParams(dp(122), 1));
+
+        View capabilityDivider = new View(this);
+        capabilityDivider.setBackgroundColor(
+                HeimdallUi.componentColors(this).structuralDivider);
+        LinearLayout.LayoutParams capabilityDividerParams =
+                new LinearLayout.LayoutParams(-1, dp(1));
+        capabilityDividerParams.setMargins(dp(8), 0, dp(8), dp(4));
+        controls.addView(capabilityDivider, capabilityDividerParams);
+
+        CheckBox mediaControls = new CheckBox(this);
+        mediaControls.setText(R.string.quick_actions_media_enabled);
+        mediaControls.setChecked(draft.mediaControls);
+        mediaControls.setTextSize(12);
+        styleCheckBox(mediaControls);
+        controls.addView(mediaControls, new LinearLayout.LayoutParams(-1, dp(42)));
+        Button mediaMode = editorButton(getString(R.string.quick_actions_media_mode,
+                getString(QuickActionsConfig.MEDIA_FULL.equals(draft.mediaMode)
+                ? R.string.quick_actions_media_full : R.string.quick_actions_media_compact)),
+                () -> {});
+        mediaMode.setEnabled(draft.mediaControls);
+        mediaControls.setOnCheckedChangeListener((buttonView, checked) -> {
+            draft.mediaControls = checked;
+            mediaMode.setEnabled(checked);
+            refreshSizeHint.run();
+        });
+        mediaMode.setOnClickListener(view -> {
+            draft.mediaMode = QuickActionsConfig.MEDIA_FULL.equals(draft.mediaMode)
+                    ? QuickActionsConfig.MEDIA_COMPACT : QuickActionsConfig.MEDIA_FULL;
+            mediaMode.setText(getString(R.string.quick_actions_media_mode,
+                    getString(QuickActionsConfig.MEDIA_FULL.equals(draft.mediaMode)
+                    ? R.string.quick_actions_media_full : R.string.quick_actions_media_compact)));
+            refreshSizeHint.run();
+        });
+        controls.addView(mediaMode, new LinearLayout.LayoutParams(-1, dp(42)));
 
         CheckBox mediaVolume = new CheckBox(this);
         mediaVolume.setText(R.string.quick_actions_media_volume_enabled);
         mediaVolume.setChecked(draft.mediaVolume);
         mediaVolume.setTextSize(12);
         styleCheckBox(mediaVolume);
-        shell.addView(mediaVolume, new LinearLayout.LayoutParams(-1, dp(42)));
+        mediaVolume.setOnCheckedChangeListener((buttonView, checked) -> {
+            draft.mediaVolume = checked;
+            refreshSizeHint.run();
+        });
+        controls.addView(mediaVolume, new LinearLayout.LayoutParams(-1, dp(42)));
+
+        CheckBox linkedBrightness = new CheckBox(this);
+        linkedBrightness.setText(R.string.quick_actions_linked_brightness_enabled);
+        linkedBrightness.setChecked(draft.linkedBrightness);
+        linkedBrightness.setEnabled(ThorDirectController.isSupported());
+        linkedBrightness.setTextSize(12);
+        styleCheckBox(linkedBrightness);
+        linkedBrightness.setOnCheckedChangeListener((buttonView, checked) -> {
+            draft.linkedBrightness = checked;
+            refreshSizeHint.run();
+        });
+        controls.addView(linkedBrightness, new LinearLayout.LayoutParams(-1, dp(42)));
 
         View footerDivider = new View(this);
         footerDivider.setBackgroundColor(
@@ -2781,30 +3475,211 @@ public class AssistantActivity extends Activity {
         }));
         Button save = editorButton(getString(R.string.common_save), () -> {
             draft.mediaVolume = mediaVolume.isChecked();
+            draft.mediaControls = mediaControls.isChecked();
+            draft.linkedBrightness = linkedBrightness.isChecked();
             QuickActionsConfig saved = draft.copy();
+            if (!quickActionsFitCurrentWidget(item, saved)) {
+                int[] minimum = quickActionsSuggestedGrid(item, saved);
+                showErrorAction(minimum == null
+                        ? getString(R.string.quick_actions_resize_required)
+                        : getString(R.string.quick_actions_resize_to,
+                                minimum[0], minimum[1]));
+                return;
+            }
+            boolean newlyEnabledMedia = saved.mediaControls
+                    && !item.safeQuickActions().mediaControls;
+            boolean newlyEnabledBrightness = saved.linkedBrightness
+                    && !item.safeQuickActions().linkedBrightness;
             profileItem.quickActions = saved.copy();
             item.quickActions = saved.copy();
             mirrorQuickActionsIntoEquivalentDraft(profileItem, saved);
             ProfileStore.saveProfiles(this, profiles);
             showAction(getString(R.string.quick_actions_saved));
             if (holder[0] != null) {
-                dismissPanelAnimated(holder[0], this::rebuildContent);
+                dismissPanelAnimated(holder[0], () -> {
+                    rebuildContent();
+                    if (newlyEnabledMedia
+                            && !quickMediaController.snapshot().accessGranted) {
+                        showQuickMediaSourcePicker();
+                    }
+                    if (newlyEnabledBrightness && !ThorDirectController.isReady(this)) {
+                        showErrorAction(getString(R.string.quick_actions_brightness_unavailable));
+                    }
+                });
             } else {
                 rebuildContent();
+                if (newlyEnabledMedia && !quickMediaController.snapshot().accessGranted) {
+                    showQuickMediaSourcePicker();
+                }
+                if (newlyEnabledBrightness && !ThorDirectController.isReady(this)) {
+                    showErrorAction(getString(R.string.quick_actions_brightness_unavailable));
+                }
             }
         });
         HeimdallUi.applyPrimaryActionButton(this, save);
         actions.addView(save);
 
-        DisplayMetrics metrics = getResources().getDisplayMetrics();
         FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
                 Math.min(dp(560), metrics.widthPixels - dp(56)),
                 ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER);
         holder[0] = showPanelOverlay(shell, params, null);
     }
 
+    private void populateQuickActionEditorRows(LinearLayout rows, QuickActionsConfig draft,
+            Runnable refresh) {
+        rows.removeAllViews();
+        for (int index = 0; index < draft.actions.size(); index++) {
+            final int actionIndex = index;
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(-1, dp(44));
+            rowParams.setMargins(0, dp(2), 0, dp(2));
+            rows.addView(row, rowParams);
+
+            TextView number = text(Integer.toString(index + 1),
+                    HeimdallUi.TYPE_META, MUTED, false);
+            number.setGravity(Gravity.CENTER);
+            row.addView(number, new LinearLayout.LayoutParams(dp(26), -1));
+            HeimdallActionCatalog.Entry entry =
+                    HeimdallActionCatalog.findQuickAction(draft.actionAt(index));
+            Button action = editorButton(getString(entry.labelRes),
+                    () -> showQuickActionPicker(draft, actionIndex, refresh));
+            action.setTextSize(HeimdallUi.TYPE_BUTTON_COMPACT);
+            HeimdallUi.applyChoiceButton(this, action, true);
+            LinearLayout.LayoutParams actionParams = new LinearLayout.LayoutParams(0, -1, 2);
+            row.addView(action, actionParams);
+            // Keep the picker and reorder controls visually distinct on Thor's wide screen.
+            row.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1));
+
+            Button up = editorButton("\u2191", () -> {
+                draft.moveAction(actionIndex, actionIndex - 1);
+                refresh.run();
+            });
+            up.setContentDescription(getString(R.string.quick_actions_move_up));
+            up.setEnabled(index > 0);
+            row.addView(up, new LinearLayout.LayoutParams(dp(38), -1));
+            Button down = editorButton("\u2193", () -> {
+                draft.moveAction(actionIndex, actionIndex + 1);
+                refresh.run();
+            });
+            down.setContentDescription(getString(R.string.quick_actions_move_down));
+            down.setEnabled(index < draft.actions.size() - 1);
+            LinearLayout.LayoutParams downParams =
+                    new LinearLayout.LayoutParams(dp(38), -1);
+            downParams.setMargins(dp(4), 0, 0, 0);
+            row.addView(down, downParams);
+            Button remove = editorButton("\u00d7", () -> {
+                draft.removeActionAt(actionIndex);
+                refresh.run();
+            });
+            remove.setContentDescription(getString(R.string.quick_actions_remove_button));
+            LinearLayout.LayoutParams removeParams =
+                    new LinearLayout.LayoutParams(dp(38), -1);
+            removeParams.setMargins(dp(4), 0, 0, 0);
+            row.addView(remove, removeParams);
+        }
+    }
+
+    private boolean quickActionsFitCurrentWidget(WidgetLayout.Item item,
+            QuickActionsConfig config) {
+        View widget = quickActionViews.get(item.itemId);
+        if (widget == null || widget.getWidth() <= 0 || widget.getHeight() <= 0) {
+            return false;
+        }
+        return quickActionsFitSize(config, widget.getWidth(), widget.getHeight(), item.w);
+    }
+
+    private boolean quickActionsFitSize(QuickActionsConfig config,
+            int width, int height, int gridColumns) {
+        int count = config.actions.size();
+        int usableWidth = Math.max(1, width - dp(HeimdallUi.SPACE_1 * 2));
+        boolean fourColumnLayout = gridColumns == 4;
+        int required = dp(HeimdallUi.SPACE_1 * 2);
+        int sections = 0;
+        if (count > 0) {
+            if (usableWidth < dp(48) * Math.min(count, 3)) return false;
+            int rows = count <= 3 ? 1
+                    : QuickActionGridView.requiredRows(this, usableWidth, count);
+            required += rows * dp(config.mediaControls || config.linkedBrightness ? 44
+                    : count <= 3 ? 40 : 48);
+            sections++;
+        }
+        if (config.mediaControls) {
+            if (usableWidth < dp(fourColumnLayout ? 153 : 180)) return false;
+            required += dp(QuickActionsConfig.MEDIA_FULL.equals(config.mediaMode)
+                    ? config.linkedBrightness ? fourColumnLayout ? 96 : 100 : 122 : 66);
+            sections++;
+        }
+        if (config.linkedBrightness) {
+            if (usableWidth < dp(fourColumnLayout ? 153 : 180)) return false;
+            required += dp(38);
+            sections++;
+        }
+        if (config.mediaVolume) {
+            required += dp(38);
+            sections++;
+        }
+        required += Math.max(0, sections - 1) * dp(1);
+        if (config.mediaControls && config.mediaVolume) required += dp(12);
+        if (config.linkedBrightness && config.mediaControls)
+            required += dp(fourColumnLayout ? 4 : 8);
+        if (config.linkedBrightness && config.mediaVolume)
+            required += dp(fourColumnLayout ? 4 : 8);
+        if (config.linkedBrightness && config.mediaControls && config.mediaVolume)
+            required -= dp(12);
+        return required <= height;
+    }
+
+    private int[] quickActionsSuggestedGrid(WidgetLayout.Item item,
+            QuickActionsConfig config) {
+        WidgetHostLayout host = quickActionsHost(item);
+        if (host == null) return null;
+        WidgetLayout layout = selectedProfile == null ? null : selectedProfile.safeWidgetLayout();
+        if (layout == null || host.getWidth() <= 0 || host.getHeight() <= 0) return null;
+        float cellWidth = host.getWidth() / (float) Math.max(1, layout.columns);
+        float cellHeight = host.getHeight() / (float) Math.max(1, layout.rows);
+        int gap = dp(6);
+        int[] best = null;
+        int bestArea = Integer.MAX_VALUE;
+        for (int columns = 1; columns <= layout.columns; columns++) {
+            int width = Math.max(1, Math.round(columns * cellWidth) - gap * 2);
+            for (int rows = 1; rows <= layout.rows; rows++) {
+                int height = Math.max(1, Math.round(rows * cellHeight) - gap * 2);
+                if (quickActionsFitSize(config, width, height, columns)) {
+                    int area = columns * rows;
+                    if (area < bestArea || (area == bestArea && best != null
+                            && Math.abs(columns - item.w) < Math.abs(best[0] - item.w))) {
+                        best = new int[]{columns, rows};
+                        bestArea = area;
+                    }
+                    break;
+                }
+            }
+        }
+        return best;
+    }
+
+    private boolean quickActionsFitGridItem(WidgetLayout.Item item) {
+        WidgetHostLayout host = quickActionsHost(item);
+        WidgetLayout layout = currentWidgetLayout();
+        if (host == null || host.getWidth() <= 0 || host.getHeight() <= 0) return false;
+        float cellWidth = host.getWidth() / (float) Math.max(1, layout.columns);
+        float cellHeight = host.getHeight() / (float) Math.max(1, layout.rows);
+        int gap = dp(6);
+        return quickActionsFitSize(item.safeQuickActions(),
+                Math.max(1, Math.round(item.w * cellWidth) - gap * 2),
+                Math.max(1, Math.round(item.h * cellHeight) - gap * 2), item.w);
+    }
+
+    private WidgetHostLayout quickActionsHost(WidgetLayout.Item item) {
+        View widget = quickActionViews.get(item.itemId);
+        return widget != null && widget.getParent() instanceof WidgetHostLayout
+                ? (WidgetHostLayout) widget.getParent() : mainWidgetHost;
+    }
+
     private void showQuickActionPicker(QuickActionsConfig draft, int slot,
-            Button valueButton) {
+            Runnable onSelection) {
         final PanelOverlay[] holder = new PanelOverlay[1];
         LinearLayout shell = new LinearLayout(this);
         shell.setOrientation(LinearLayout.VERTICAL);
@@ -2828,9 +3703,7 @@ public class AssistantActivity extends Activity {
         for (HeimdallActionCatalog.Entry entry : HeimdallActionCatalog.quickActionEntries()) {
             Button choice = editorButton(getString(entry.labelRes), () -> {
                 draft.setActionAt(slot, entry.id);
-                valueButton.setText(entry.labelRes);
-                HeimdallUi.applyChoiceButton(this, valueButton,
-                        !HeimdallActionCatalog.ACTION_NONE.equals(entry.id));
+                onSelection.run();
                 if (holder[0] != null) dismissPanelAnimated(holder[0]);
             });
             HeimdallUi.applyChoiceButton(this, choice,
@@ -4033,7 +4906,7 @@ public class AssistantActivity extends Activity {
         pendingCanvasImportFrameHeight = 1;
     }
 
-    private QuickActionButtonView addQuickActionButton(LinearLayout row, int icon,
+    private QuickActionButtonView addQuickActionButton(ViewGroup row, int icon,
                                                        String description, int visualState,
                                                        Runnable action) {
         QuickActionButtonView button = new QuickActionButtonView(this);
@@ -4041,8 +4914,11 @@ public class AssistantActivity extends Activity {
         button.setContentDescription(description);
         button.setVisualState(visualState);
         button.setOnClickListener(v -> action.run());
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, -1, 1);
-        row.addView(button, params);
+        if (row instanceof LinearLayout) {
+            row.addView(button, new LinearLayout.LayoutParams(0, -1, 1));
+        } else {
+            row.addView(button, new ViewGroup.LayoutParams(-1, -1));
+        }
         return button;
     }
 
@@ -7693,6 +8569,12 @@ public class AssistantActivity extends Activity {
         help.setPadding(dp(4), 0, 0, 0);
         editor.addView(help, new LinearLayout.LayoutParams(-1, dp(18)));
 
+        TextView gridSizeHint = text("", HeimdallUi.TYPE_META, MUTED, false);
+        gridSizeHint.setGravity(Gravity.CENTER_VERTICAL | Gravity.LEFT);
+        gridSizeHint.setPadding(dp(4), 0, 0, 0);
+        gridSizeHint.setVisibility(View.GONE);
+        editor.addView(gridSizeHint, new LinearLayout.LayoutParams(-1, dp(26)));
+
         WidgetGridEditor gridEditor = new WidgetGridEditor(this, new WidgetGridEditor.Host() {
             @Override
             public WidgetLayout currentLayout() {
@@ -7722,6 +8604,24 @@ public class AssistantActivity extends Activity {
             @Override
             public void showError(String message) {
                 showErrorAction(message);
+            }
+
+            @Override
+            public void onSelectionChanged(WidgetLayout.Item item) {
+                if (item == null || !WidgetLayout.TYPE_QUICK_ACTIONS.equals(item.type)
+                        || !item.safeQuickActions().mediaControls) {
+                    gridSizeHint.setVisibility(View.GONE);
+                    return;
+                }
+                int[] minimum = quickActionsSuggestedGrid(item, item.safeQuickActions());
+                gridSizeHint.setText(minimum == null
+                        ? getString(R.string.quick_actions_resize_required)
+                        : getString(R.string.quick_actions_grid_hint,
+                                minimum[0], minimum[1], item.w, item.h));
+                gridSizeHint.setTextColor(quickActionsFitGridItem(item)
+                        ? MUTED : HeimdallUi.semanticColor(AssistantActivity.this,
+                                HeimdallUi.SEMANTIC_WARNING));
+                gridSizeHint.setVisibility(View.VISIBLE);
             }
         });
         applySystemGestureExclusion(gridEditor);

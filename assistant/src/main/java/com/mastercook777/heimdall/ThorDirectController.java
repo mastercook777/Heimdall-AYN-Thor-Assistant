@@ -60,6 +60,30 @@ final class ThorDirectController {
         return isEnabled(context) && state == State.READY;
     }
 
+    /** Call from a worker thread; the helper validates the physical display pair. */
+    static String readLinkedBrightness(Context context) {
+        if (!isReady(context)) return "unavailable:Thor Direct";
+        try {
+            return call(context, ThorDirectDaemon.OP_READ_LINKED_BRIGHTNESS, 0, null);
+        } catch (IOException error) {
+            connectionLost();
+            return "unavailable:connection";
+        }
+    }
+
+    /** Preview is temporary; commit saves both display values on touch release. */
+    static String writeLinkedBrightness(Context context, float target, boolean commit) {
+        if (!isReady(context)) return "unavailable:Thor Direct";
+        try {
+            return call(context, commit ? ThorDirectDaemon.OP_COMMIT_LINKED_BRIGHTNESS
+                    : ThorDirectDaemon.OP_PREVIEW_LINKED_BRIGHTNESS, 0, null,
+                    target, 0f);
+        } catch (IOException error) {
+            connectionLost();
+            return "unavailable:connection";
+        }
+    }
+
     static boolean helperStopConfirmed() {
         return helperStopConfirmed;
     }
@@ -294,8 +318,17 @@ final class ThorDirectController {
             if (!isReadyResponse(finalResponse)) {
                 Log.w(TAG, "Helper not ready: " + finalResponse);
             }
+            boolean ready = isReadyResponse(finalResponse);
             setStateIfCurrent(context, requestGeneration,
-                    isReadyResponse(finalResponse) ? State.READY : State.UNAVAILABLE);
+                    ready ? State.READY : State.UNAVAILABLE);
+            if (ready && BuildConfig.DEBUG) {
+                try {
+                    Log.i(TAG, "Read-only brightness probe: "
+                            + call(context, ThorDirectDaemon.OP_PROBE_DISPLAY_BRIGHTNESS, 0, null));
+                } catch (IOException error) {
+                    Log.w(TAG, "Read-only brightness probe unavailable", error);
+                }
+            }
         } catch (Throwable error) {
             Log.w(TAG, "Helper start failed", error);
             setStateIfCurrent(context, requestGeneration, State.UNAVAILABLE);
@@ -335,7 +368,7 @@ final class ThorDirectController {
     }
 
     private static boolean isReadyResponse(String response) {
-        return "thor direct v1 ready uid=0".equals(response);
+        return "thor direct v3 ready uid=0".equals(response);
     }
 
     private static String pingResponse(Context context) {
@@ -383,9 +416,11 @@ final class ThorDirectController {
                 if (bytes.length > 64 * 1024) throw new IOException("sequence too large");
                 output.writeInt(bytes.length);
                 output.write(bytes);
-            } else if (operation == ThorDirectDaemon.OP_STICK) {
+            } else if (operation == ThorDirectDaemon.OP_STICK
+                    || operation == ThorDirectDaemon.OP_PREVIEW_LINKED_BRIGHTNESS
+                    || operation == ThorDirectDaemon.OP_COMMIT_LINKED_BRIGHTNESS) {
                 output.writeFloat(stickX);
-                output.writeFloat(stickY);
+                if (operation == ThorDirectDaemon.OP_STICK) output.writeFloat(stickY);
             } else if (operation == ThorDirectDaemon.OP_TOUCH) {
                 if (intFrame == null || intFrame.length != 7) {
                     throw new IOException("invalid touch frame");

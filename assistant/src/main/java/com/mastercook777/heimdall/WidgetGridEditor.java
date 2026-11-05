@@ -19,6 +19,7 @@ final class WidgetGridEditor extends View {
         void ensureMacroCapacity(int requiredCount);
         void showDebug(String message);
         void showError(String message);
+        void onSelectionChanged(WidgetLayout.Item item);
     }
 
     private static final int MODE_NONE = 0;
@@ -78,6 +79,7 @@ final class WidgetGridEditor extends View {
         layout.sanitize();
         selectedIndex = layout.items.size() - 1;
         invalidate();
+        notifySelection(layout);
         host.showDebug(getContext().getString(R.string.grid_editor_added, widgetTypeLabel(type)));
     }
 
@@ -113,6 +115,7 @@ final class WidgetGridEditor extends View {
         layout.sanitize();
         selectedIndex = layout.items.size() - 1;
         invalidate();
+        notifySelection(layout);
         host.showDebug(getContext().getString(R.string.grid_editor_copied));
     }
 
@@ -127,12 +130,15 @@ final class WidgetGridEditor extends View {
         layout.sanitize();
         selectedIndex = -1;
         invalidate();
+        notifySelection(layout);
         host.showDebug(getContext().getString(R.string.grid_editor_deleted));
     }
 
     void resetPreview() {
         host.replaceDraftLayout(WidgetLayout.defaultLayout());
         invalidate();
+        selectedIndex = -1;
+        host.onSelectionChanged(null);
         host.showDebug(getContext().getString(R.string.grid_editor_reset_preview));
     }
 
@@ -243,6 +249,7 @@ final class WidgetGridEditor extends View {
                 downX = event.getX();
                 downY = event.getY();
                 selectedIndex = hitTest(layout, downX, downY, cellW, cellH);
+                notifySelection(layout);
                 if (selectedIndex < 0) {
                     mode = MODE_NONE;
                     invalidate();
@@ -266,23 +273,31 @@ final class WidgetGridEditor extends View {
                     updateDraggedItem(layout, layout.items.get(selectedIndex),
                             event.getX(), event.getY(), cellW, cellH);
                     invalidate();
+                    notifySelection(layout);
                 }
                 return true;
             case MotionEvent.ACTION_UP:
                 getParent().requestDisallowInterceptTouchEvent(false);
                 finishDrag(layout);
+                notifySelection(layout);
                 mode = MODE_NONE;
                 invalidate();
                 return true;
             case MotionEvent.ACTION_CANCEL:
                 getParent().requestDisallowInterceptTouchEvent(false);
                 restoreOriginal(layout);
+                notifySelection(layout);
                 mode = MODE_NONE;
                 invalidate();
                 return true;
             default:
                 return true;
         }
+    }
+
+    private void notifySelection(WidgetLayout layout) {
+        host.onSelectionChanged(selectedIndex >= 0 && selectedIndex < layout.items.size()
+                ? layout.items.get(selectedIndex) : null);
     }
 
     private int hitTest(WidgetLayout layout, float x, float y, float cellW, float cellH) {
