@@ -5976,6 +5976,10 @@ public class AssistantActivity extends Activity {
         if (activeScreen != SCREEN_SETTINGS) {
             return;
         }
+        if (activeSettingsSection == SETTINGS_PROFILE) {
+            settingsProfilePackageDraft = null;
+            settingsProfileAppStatus = null;
+        }
         if (!shouldAnimateUi() || contentHost == null || currentContentPage == null
                 || bottomDock == null) {
             activeScreen = SCREEN_MAIN;
@@ -11852,6 +11856,10 @@ public class AssistantActivity extends Activity {
         }
         if (!isPlayScreen(targetScreen)) {
             return;
+        }
+        if (activeScreen == SCREEN_SETTINGS && activeSettingsSection == SETTINGS_PROFILE) {
+            settingsProfilePackageDraft = null;
+            settingsProfileAppStatus = null;
         }
         if (contentHost == null || currentContentPage == null
                 || activeScreen == SCREEN_SETTINGS || mapViewerFullscreen) {
