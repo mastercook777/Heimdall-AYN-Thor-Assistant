@@ -451,7 +451,11 @@
     <string name="profile_name">Profile name</string>
     <string name="profile_associated_game">App or emulator</string>
     <string name="profile_package_hint">Choose a recent app or use the detected app</string>
-    <string name="profile_choose_recent_app">Choose from recent apps</string>
+    <string name="profile_choose_recent_app">Choose app</string>
+    <string name="profile_clear_app_binding">Clear app</string>
+    <string name="profile_app_not_bound">No app selected</string>
+    <string name="profile_recently_detected">Recently detected</string>
+    <string name="profile_installed_app">Installed app</string>
     <string name="profile_game_context">Game Context (optional)</string>
     <string name="profile_game_context_binding">Game Context</string>
     <string name="profile_current_game">Detected game</string>
@@ -1093,9 +1097,9 @@
     <string name="diagnostic_route_enable_accessibility">Enable Heimdall Basic Touch, then refresh these diagnostics.</string>
     <string name="common_yes">Yes</string>
     <string name="common_no">No</string>
-    <string name="profile_recent_apps_empty">No recent apps yet. Switch to the upper-screen game and interact with it first.</string>
+    <string name="profile_recent_apps_empty">No apps available to select.</string>
     <string name="profile_recent_app_picker_title">Choose a game or emulator</string>
-    <string name="profile_recent_app_picker_subtitle">Choose from recently detected upper-screen apps</string>
+    <string name="profile_recent_app_picker_subtitle">Recently detected apps first, followed by installed apps</string>
     <string name="profile_app_selected">Selected: %1$s</string>
     <string name="canvas_name">Canvas</string>
     <string name="canvas_add_image">Add media</string>
