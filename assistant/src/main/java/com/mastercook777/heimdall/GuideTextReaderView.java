@@ -1,10 +1,12 @@
 package com.mastercook777.heimdall;
 
 import android.content.Context;
+import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.Typeface;
 import android.text.Layout;
 import android.text.SpannableString;
+import android.text.style.BackgroundColorSpan;
 import android.text.style.TabStopSpan;
 import android.util.TypedValue;
 import android.view.Gravity;
@@ -38,6 +40,8 @@ final class GuideTextReaderView extends FrameLayout {
     private GuideTextDocument document;
     private float originalCharacterWidth;
     private int preservedHorizontalColumn;
+    private int searchAnchor = -1;
+    private int searchLength;
 
     GuideTextReaderView(Context context, boolean originalLayout) {
         super(context);
@@ -62,6 +66,8 @@ final class GuideTextReaderView extends FrameLayout {
 
     void setDocument(GuideTextDocument document, Position restore) {
         this.document = document;
+        searchAnchor = -1;
+        searchLength = 0;
         preservedHorizontalColumn = restore == null ? 0 : restore.horizontalColumn;
         removeAllViews();
         list = buildList();
@@ -113,7 +119,23 @@ final class GuideTextReaderView extends FrameLayout {
         if (position == null || document == null || list == null) {
             return;
         }
+        if (searchAnchor >= 0) {
+            searchAnchor = -1;
+            searchLength = 0;
+            ((BaseAdapter) list.getAdapter()).notifyDataSetChanged();
+        }
         restorePosition(position);
+    }
+
+    void scrollToSearchMatch(int anchor, int length, int horizontalColumn) {
+        if (document == null || list == null || anchor < 0 || length <= 0
+                || anchor >= document.text.length()) {
+            return;
+        }
+        searchAnchor = anchor;
+        searchLength = length;
+        ((BaseAdapter) list.getAdapter()).notifyDataSetChanged();
+        restorePosition(new Position(anchor, 0, horizontalColumn, getWidth()));
     }
 
     private ListView buildList() {
@@ -231,7 +253,20 @@ final class GuideTextReaderView extends FrameLayout {
         public View getView(int position, View convertView, ViewGroup parent) {
             TextView row = convertView instanceof TextView
                     ? (TextView) convertView : createRowTextView();
-            row.setText(displayText(document.chunks.get(position).text));
+            GuideTextDocument.Chunk chunk = document.chunks.get(position);
+            CharSequence displayed = displayText(chunk.text);
+            if (searchAnchor >= chunk.start && searchAnchor < chunk.end) {
+                SpannableString highlighted = new SpannableString(displayed);
+                int start = searchAnchor - chunk.start;
+                int end = Math.min(highlighted.length(), start + searchLength);
+                int accent = HeimdallUi.accent(getContext());
+                int color = Color.argb(105, Color.red(accent), Color.green(accent),
+                        Color.blue(accent));
+                highlighted.setSpan(new BackgroundColorSpan(color), start, end,
+                        SpannableString.SPAN_EXCLUSIVE_EXCLUSIVE);
+                displayed = highlighted;
+            }
+            row.setText(displayed);
             return row;
         }
     }

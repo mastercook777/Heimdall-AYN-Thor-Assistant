@@ -16,6 +16,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class VirtualMouseDispatcher {
     private static final int LINUX_BTN_LEFT = 272;
     private static final int LINUX_BTN_RIGHT = 273;
+    private static final int LINUX_BTN_MIDDLE = 274;
     private static final AtomicBoolean DEVICE_MAY_BE_OPEN = new AtomicBoolean();
     // Accessed only on DEVICE_EXECUTOR; a parked device retains its route.
     private static InputBridge.VirtualMouseRoute deviceRoute =
@@ -160,6 +161,7 @@ public final class VirtualMouseDispatcher {
         // Activity does not present Steam Link with a newly hot-plugged mouse.
         emitMouse(context, deviceRoute, 0, 0, 0, LINUX_BTN_LEFT, 0);
         emitMouse(context, deviceRoute, 0, 0, 0, LINUX_BTN_RIGHT, 0);
+        emitMouse(context, deviceRoute, 0, 0, 0, LINUX_BTN_MIDDLE, 0);
         if (destroyDevice && operationSucceeded(releaseMouse(context, deviceRoute))) {
             DEVICE_MAY_BE_OPEN.set(false);
             deviceRoute = InputBridge.VirtualMouseRoute.UNAVAILABLE;

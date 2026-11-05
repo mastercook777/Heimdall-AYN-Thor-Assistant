@@ -143,6 +143,7 @@ public class AssistantActivity extends Activity {
     private static final int REQUEST_MAGNIFIER_PROJECTION = 2110;
     private static final int REQUEST_CANVAS_IMAGE = 2111;
     private static final int REQUEST_DIAGNOSTIC_EXPORT = 2112;
+    private static final int REQUEST_CANVAS_SLIDESHOW_IMAGE = 2113;
     private static final int MAGNIFIER_REGION_START_MAX_ATTEMPTS = 12;
     private static final long MAGNIFIER_REGION_START_RETRY_MS = 150L;
     private static final int BG = HeimdallUi.COLOR_BG;
@@ -172,7 +173,10 @@ public class AssistantActivity extends Activity {
     private static final int SETTINGS_DIAGNOSTICS = 7;
     private static final int SETTINGS_GETTING_STARTED = 8;
     private static final int SETTINGS_TRANSLATION = 9;
+    private static final int SETTINGS_ABOUT = 10;
     private static final String STATE_ACTIVE_SCREEN = "heimdall.active_screen";
+    private static final String STATE_GALLERY_CATEGORY = "heimdall.gallery_category";
+    private static final String STATE_GALLERY_MAP_MODE = "heimdall.gallery_map_mode";
     private static final String STATE_SETTINGS_SECTION = "heimdall.settings_section";
     private static final String STATE_SETTINGS_SCROLL_Y = "heimdall.settings_scroll_y";
     private static final String STATE_LAYOUT_DRAFT = "heimdall.layout_draft";
@@ -345,6 +349,11 @@ public class AssistantActivity extends Activity {
     private Macro pendingMacroIconMacro;
     private boolean editingInteractiveMapInline;
     private int activeMapViewerMode = MAP_VIEW_LOCAL;
+    private static final int GALLERY_MAPS = 0;
+    private static final int GALLERY_SCREENSHOTS = 1;
+    private static final int GALLERY_OTHER = 2;
+    private int activeGalleryCategory = GALLERY_MAPS;
+    private int galleryLoadGeneration;
     private WebView activeMapWebView;
     private InteractiveMapLoadIndicator activeMapLoadIndicator;
     private boolean activeMapWebError;
@@ -485,6 +494,14 @@ public class AssistantActivity extends Activity {
     private int pendingCanvasImportFrameWidth = 1;
     private int pendingCanvasImportFrameHeight = 1;
     private CanvasAssetStore.Request pendingCanvasImportRequest;
+    private CanvasSlideshowEditor activeCanvasSlideshowEditor;
+    private CanvasSlideshowEditor pendingSlideshowDeviceEditor;
+    private GameProfile slideshowProfile;
+    private WidgetLayout.Item slideshowItem;
+    private int slideshowFrameWidth = 1;
+    private int slideshowFrameHeight = 1;
+    private CanvasAssetStore.Request pendingSlideshowImportRequest;
+    private int slideshowImportGeneration;
     private boolean canvasOverlayActive;
     private CanvasCompositionEditor activeCanvasCompositionEditor;
     private FullscreenImageViewer activeCanvasFullscreenViewer;
@@ -628,6 +645,8 @@ public class AssistantActivity extends Activity {
                     settingsMacroMappingProtectionInput.isChecked();
         }
         outState.putInt(STATE_ACTIVE_SCREEN, activeScreen);
+        outState.putInt(STATE_GALLERY_CATEGORY, activeGalleryCategory);
+        outState.putInt(STATE_GALLERY_MAP_MODE, activeMapViewerMode);
         outState.putInt(STATE_SETTINGS_SECTION, activeSettingsSection);
         outState.putInt(STATE_SETTINGS_SCROLL_Y, settingsContentScrollY);
         putJsonState(outState, STATE_LAYOUT_DRAFT, widgetLayoutDraftForInstanceState());
@@ -687,6 +706,10 @@ public class AssistantActivity extends Activity {
             return;
         }
         activeScreen = state.getInt(STATE_ACTIVE_SCREEN, SCREEN_MAIN);
+        activeGalleryCategory = Math.max(GALLERY_MAPS, Math.min(GALLERY_OTHER,
+                state.getInt(STATE_GALLERY_CATEGORY, GALLERY_MAPS)));
+        activeMapViewerMode = state.getInt(STATE_GALLERY_MAP_MODE, MAP_VIEW_LOCAL)
+                == MAP_VIEW_INTERACTIVE ? MAP_VIEW_INTERACTIVE : MAP_VIEW_LOCAL;
         activeSettingsSection = state.getInt(STATE_SETTINGS_SECTION, SETTINGS_TOUCHPAD);
         settingsContentScrollY = state.getInt(STATE_SETTINGS_SCROLL_Y, 0);
         settingsMagnifierDirtyMask = state.getInt(STATE_MAGNIFIER_DIRTY_MASK, 0);
@@ -810,6 +833,12 @@ public class AssistantActivity extends Activity {
         releaseCanvasViews();
         releaseHardwareMonitorViews();
         cancelPendingCanvasImport();
+        cancelPendingSlideshowImport();
+        pendingSlideshowDeviceEditor = null;
+        if (activeCanvasSlideshowEditor != null) {
+            activeCanvasSlideshowEditor.release();
+            activeCanvasSlideshowEditor = null;
+        }
         cancelCommunityProfileSummary();
         cancelCommunityProfileFlow();
         cancelPendingProfileBundleWork();
@@ -906,6 +935,7 @@ public class AssistantActivity extends Activity {
 
     @Override
     protected void onStop() {
+        InputBridge.stopActiveMacroLoop();
         activityStarted = false;
         upperDisplayStartedHandoff.rearmAfterStop();
         recordFocusBoundary("stop-handoff-generation-"
@@ -1256,6 +1286,7 @@ public class AssistantActivity extends Activity {
             case REQUEST_SCREEN_RECORDING:
             case REQUEST_MAGNIFIER_PROJECTION:
             case REQUEST_CANVAS_IMAGE:
+            case REQUEST_CANVAS_SLIDESHOW_IMAGE:
             case REQUEST_DIAGNOSTIC_EXPORT:
                 return true;
             default:
@@ -1359,6 +1390,26 @@ public class AssistantActivity extends Activity {
                     && isCanvasTargetValid(targetProfile, targetItem)) {
                 importCanvasImage(targetProfile, targetItem, data.getData(),
                         targetFrameWidth, targetFrameHeight);
+            }
+            return;
+        }
+        if (requestCode == REQUEST_CANVAS_SLIDESHOW_IMAGE) {
+            CanvasSlideshowEditor requestedEditor = pendingSlideshowDeviceEditor;
+            pendingSlideshowDeviceEditor = null;
+            if (resultCode == RESULT_OK && data != null
+                    && requestedEditor != null
+                    && requestedEditor == activeCanvasSlideshowEditor) {
+                List<Uri> images = new ArrayList<>();
+                ClipData clip = data.getClipData();
+                if (clip != null) {
+                    for (int i = 0; i < clip.getItemCount(); i++) {
+                        Uri uri = clip.getItemAt(i).getUri();
+                        if (uri != null) images.add(uri);
+                    }
+                } else if (data.getData() != null) {
+                    images.add(data.getData());
+                }
+                importSlideshowImages(images, 0, requestedEditor);
             }
             return;
         }
@@ -2423,8 +2474,9 @@ public class AssistantActivity extends Activity {
 
                         @Override
                         public void onFullscreen(WidgetLayout.Item requestedItem,
-                                int frameWidth, int frameHeight) {
-                            showCanvasFullscreen(requestedItem, frameWidth, frameHeight);
+                                int slideIndex, int frameWidth, int frameHeight) {
+                            showCanvasFullscreen(requestedItem, slideIndex,
+                                    frameWidth, frameHeight);
                         }
 
                         @Override
@@ -3738,11 +3790,13 @@ public class AssistantActivity extends Activity {
         resetQuickScreenshotFeedback();
         updateTargetDisplayInfo();
         final String profileName = selectedProfile == null ? "Profile" : selectedProfile.name;
+        final String profileId = selectedProfile == null ? "" : selectedProfile.safeProfileId();
+        final long capturedAt = System.currentTimeMillis();
         ThorAccessibilityService.captureDisplay(this, targetDisplayId,
                 new ThorAccessibilityService.ScreenshotCallback() {
                     @Override
                     public void onCaptured(Bitmap bitmap) {
-                        new Thread(() -> saveScreenshot(bitmap, profileName),
+                        new Thread(() -> saveScreenshot(bitmap, profileName, profileId, capturedAt),
                                 "heimdall-screenshot-save").start();
                     }
 
@@ -3756,9 +3810,11 @@ public class AssistantActivity extends Activity {
                 });
     }
 
-    private void saveScreenshot(Bitmap bitmap, String profileName) {
+    private void saveScreenshot(Bitmap bitmap, String profileName, String profileId,
+            long capturedAt) {
         Uri uri = null;
         boolean saved = false;
+        boolean indexed = false;
         try {
             uri = CaptureStorage.createImage(getContentResolver(), profileName);
             if (uri != null) {
@@ -3768,19 +3824,30 @@ public class AssistantActivity extends Activity {
             }
             if (saved) {
                 CaptureStorage.publish(getContentResolver(), uri);
+                try (GalleryScreenshotStore store = new GalleryScreenshotStore(this)) {
+                    indexed = store.add(profileId, uri, capturedAt);
+                } catch (Exception ignored) {
+                    // The image remains safely published even when the local index fails.
+                }
             } else {
                 CaptureStorage.discard(getContentResolver(), uri);
             }
         } catch (Throwable ignored) {
+            saved = false;
             CaptureStorage.discard(getContentResolver(), uri);
         } finally {
             bitmap.recycle();
         }
         final boolean result = saved;
+        final boolean galleryIndexed = indexed;
         runOnUiThread(() -> {
             showQuickScreenshotResult(result);
             if (result) {
-                showAction(getString(R.string.screenshot_saved));
+                if (galleryIndexed) {
+                    showAction(getString(R.string.screenshot_saved));
+                } else {
+                    showErrorAction(getString(R.string.gallery_screenshot_unindexed));
+                }
             } else {
                 showErrorAction(getString(R.string.screenshot_save_failed));
             }
@@ -4480,8 +4547,21 @@ public class AssistantActivity extends Activity {
             showErrorAction(getString(R.string.canvas_unavailable));
             return;
         }
+        GameProfile profile = selectedProfile;
+        showSettingsDecisionPanel(getString(R.string.gallery_canvas_source_title),
+                getString(R.string.gallery_canvas_source_message),
+                getString(R.string.gallery_canvas_device_files), () ->
+                        openCanvasDevicePicker(profile, targetItem, frameWidth, frameHeight),
+                getString(R.string.gallery_canvas_picker_title), () ->
+                        showCanvasGalleryPicker(profile, targetItem,
+                                Math.max(1, frameWidth), Math.max(1, frameHeight)));
+    }
+
+    private void openCanvasDevicePicker(GameProfile profile, WidgetLayout.Item targetItem,
+            int frameWidth, int frameHeight) {
+        if (!isCanvasTargetValid(profile, targetItem) || selectedProfile != profile) return;
         cancelPendingCanvasImport();
-        pendingCanvasImportProfile = selectedProfile;
+        pendingCanvasImportProfile = profile;
         pendingCanvasImportItem = targetItem;
         pendingCanvasImportFrameWidth = Math.max(1, frameWidth);
         pendingCanvasImportFrameHeight = Math.max(1, frameHeight);
@@ -4500,8 +4580,266 @@ public class AssistantActivity extends Activity {
         }
     }
 
+    private void showCanvasGalleryPicker(GameProfile profile, WidgetLayout.Item targetItem,
+            int frameWidth, int frameHeight) {
+        if (!isCanvasTargetValid(profile, targetItem) || selectedProfile != profile) return;
+        List<GalleryMediaGrid.Item> mapImages = new ArrayList<>();
+        int index = 0;
+        for (MapEntry map : profile.safeMaps()) {
+            if (isImageDocument(map.uri, map.title)) {
+                mapImages.add(galleryMapItem(map, index));
+            }
+            index++;
+        }
+        List<GalleryMediaGrid.Item> otherImages = new ArrayList<>();
+        for (GalleryMediaGrid.Item item : galleryOtherItems(profile)) {
+            if (item.uri != null) otherImages.add(item);
+        }
+        final PanelOverlay[] overlay = new PanelOverlay[1];
+        GalleryCanvasPicker picker = new GalleryCanvasPicker(this, profile.safeProfileId(),
+                mapImages, otherImages, new GalleryCanvasPicker.Listener() {
+                    @Override public void onSelected(GalleryMediaGrid.Item source) {
+                        if (overlay[0] != null) {
+                            dismissPanelAnimated(overlay[0], () ->
+                                    applyGalleryCanvasSource(profile, targetItem, source,
+                                            frameWidth, frameHeight));
+                        }
+                    }
+                    @Override public void onClose() {
+                        if (overlay[0] != null) dismissPanelAnimated(overlay[0]);
+                    }
+                });
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER);
+        params.setMargins(dp(10), dp(10), dp(10), dp(10));
+        overlay[0] = showPanelOverlay(picker, params, picker::release);
+    }
+
+    private boolean slideshowTargetValid(CanvasSlideshowEditor editor) {
+        return editor != null && editor == activeCanvasSlideshowEditor
+                && slideshowProfile == selectedProfile
+                && isCanvasTargetValid(slideshowProfile, slideshowItem)
+                && !hasUnsavedWidgetLayout();
+    }
+
+    private void showCanvasSlideshowEditor(GameProfile profile, WidgetLayout.Item item,
+            int frameWidth, int frameHeight) {
+        if (!isCanvasTargetValid(profile, item) || selectedProfile != profile
+                || hasUnsavedWidgetLayout() || item.canvasConfig == null) return;
+        if (item.canvasConfig.animated || item.canvasConfig.video) {
+            showErrorAction(getString(R.string.canvas_slideshow_static_only));
+            return;
+        }
+        final PanelOverlay[] overlay = new PanelOverlay[1];
+        final CanvasSlideshowEditor[] holder = new CanvasSlideshowEditor[1];
+        CanvasSlideshowEditor editor = new CanvasSlideshowEditor(this, item.canvasConfig,
+                frameWidth, frameHeight,
+                new CanvasSlideshowEditor.Listener() {
+                    @Override public void onAddDevice() {
+                        openSlideshowDevicePicker(holder[0]);
+                    }
+                    @Override public void onAddGallery() {
+                        showSlideshowGalleryPicker(holder[0]);
+                    }
+                    @Override public void onEdit(int index, CanvasConfig config) {
+                        showSlideshowCompositionEditor(holder[0], index, config);
+                    }
+                    @Override public void onSave(CanvasConfig config) {
+                        if (!slideshowTargetValid(holder[0]) || overlay[0] == null) return;
+                        dismissPanelAnimated(overlay[0], () -> {
+                            if (!isCanvasTargetValid(profile, item)
+                                    || selectedProfile != profile) return;
+                            item.canvasConfig = config.copy();
+                            ProfileStore.saveProfiles(AssistantActivity.this, profiles);
+                            rebuildContent();
+                            showAction(getString(R.string.canvas_slideshow_saved));
+                        });
+                    }
+                    @Override public void onCancel() {
+                        if (overlay[0] != null) dismissPanelAnimated(overlay[0]);
+                    }
+                });
+        holder[0] = editor;
+        activeCanvasSlideshowEditor = editor;
+        slideshowProfile = profile;
+        slideshowItem = item;
+        slideshowFrameWidth = Math.max(1, frameWidth);
+        slideshowFrameHeight = Math.max(1, frameHeight);
+        canvasOverlayActive = true;
+        updateCanvasPlayback();
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(-1, -1,
+                Gravity.CENTER);
+        params.setMargins(dp(8), dp(8), dp(8), dp(8));
+        overlay[0] = showPanelOverlay(editor, params, () -> {
+            if (activeCanvasSlideshowEditor == editor) {
+                cancelPendingSlideshowImport();
+                pendingSlideshowDeviceEditor = null;
+                activeCanvasSlideshowEditor = null;
+                slideshowProfile = null;
+                slideshowItem = null;
+                canvasOverlayActive = false;
+                updateCanvasPlayback();
+            }
+            editor.release();
+        });
+    }
+
+    private void openSlideshowDevicePicker(CanvasSlideshowEditor editor) {
+        if (!slideshowTargetValid(editor)) return;
+        if (editor.isFull()) {
+            showErrorAction(getString(R.string.canvas_slideshow_limit));
+            return;
+        }
+        cancelPendingSlideshowImport();
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("image/*");
+        intent.putExtra(Intent.EXTRA_MIME_TYPES,
+                new String[]{"image/jpeg", "image/png", "image/webp"});
+        intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        try {
+            pendingSlideshowDeviceEditor = editor;
+            startActivityForResult(intent, REQUEST_CANVAS_SLIDESHOW_IMAGE);
+        } catch (Exception ex) {
+            pendingSlideshowDeviceEditor = null;
+            showErrorAction(getString(R.string.error_open_image_picker));
+        }
+    }
+
+    private void showSlideshowGalleryPicker(CanvasSlideshowEditor editor) {
+        if (!slideshowTargetValid(editor)) return;
+        if (editor.isFull()) {
+            showErrorAction(getString(R.string.canvas_slideshow_limit));
+            return;
+        }
+        cancelPendingSlideshowImport();
+        GameProfile profile = slideshowProfile;
+        List<GalleryMediaGrid.Item> maps = new ArrayList<>();
+        int index = 0;
+        for (MapEntry map : profile.safeMaps()) {
+            if (isImageDocument(map.uri, map.title)) {
+                maps.add(galleryMapItem(map, index));
+            }
+            index++;
+        }
+        List<GalleryMediaGrid.Item> other = new ArrayList<>();
+        for (GalleryMediaGrid.Item source : galleryOtherItems(profile)) {
+            if (source.uri != null) other.add(source);
+        }
+        final PanelOverlay[] overlay = new PanelOverlay[1];
+        GalleryCanvasPicker picker = new GalleryCanvasPicker(this, profile.safeProfileId(),
+                maps, other, new GalleryCanvasPicker.Listener() {
+                    @Override public void onSelected(GalleryMediaGrid.Item source) {
+                        if (overlay[0] != null) {
+                            dismissPanelAnimated(overlay[0], () ->
+                                    addSlideshowGallerySource(editor, source));
+                        }
+                    }
+                    @Override public void onClose() {
+                        if (overlay[0] != null) dismissPanelAnimated(overlay[0]);
+                    }
+                });
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(-1, -1,
+                Gravity.CENTER);
+        params.setMargins(dp(10), dp(10), dp(10), dp(10));
+        overlay[0] = showPanelOverlay(picker, params, picker::release);
+    }
+
+    private void addSlideshowGallerySource(CanvasSlideshowEditor editor,
+            GalleryMediaGrid.Item source) {
+        if (!slideshowTargetValid(editor) || source == null) return;
+        if (source.canvas != null) {
+            if (source.canvas.animated || source.canvas.video) {
+                showErrorAction(getString(R.string.canvas_slideshow_static_only));
+            } else if (CanvasAssetStore.resolve(this, source.canvas.assetId) == null) {
+                showErrorAction(getString(R.string.gallery_image_unavailable));
+            } else if (!editor.add(source.canvas.assetId)) {
+                showErrorAction(getString(R.string.canvas_slideshow_limit));
+            }
+        } else if (source.uri != null) {
+            importSlideshowImages(Collections.singletonList(source.uri), 0, editor);
+        }
+    }
+
+    private void importSlideshowImages(List<Uri> images, int index,
+            CanvasSlideshowEditor editor) {
+        if (index == 0) cancelPendingSlideshowImport();
+        if (!slideshowTargetValid(editor) || images == null || index >= images.size()) return;
+        if (editor.isFull()) {
+            showErrorAction(getString(R.string.canvas_slideshow_limit));
+            return;
+        }
+        int generation = slideshowImportGeneration;
+        pendingSlideshowImportRequest = CanvasAssetStore.importAsync(this, images.get(index),
+                new CanvasAssetStore.ImportCallback() {
+                    @Override public void onImported(CanvasAssetStore.ImportedAsset asset) {
+                        pendingSlideshowImportRequest = null;
+                        if (!slideshowTargetValid(editor)
+                                || generation != slideshowImportGeneration) return;
+                        if (asset.animated || asset.video) {
+                            showErrorAction(getString(R.string.canvas_slideshow_static_only));
+                        } else if (!editor.add(asset.assetId)) {
+                            showErrorAction(getString(R.string.canvas_slideshow_limit));
+                        }
+                        importSlideshowImages(images, index + 1, editor);
+                    }
+                    @Override public void onError(CanvasAssetStore.ImportError error) {
+                        pendingSlideshowImportRequest = null;
+                        if (!slideshowTargetValid(editor)
+                                || generation != slideshowImportGeneration) return;
+                        showErrorAction(getString(canvasImportErrorString(error)));
+                        importSlideshowImages(images, index + 1, editor);
+                    }
+                });
+    }
+
+    private void cancelPendingSlideshowImport() {
+        slideshowImportGeneration++;
+        if (pendingSlideshowImportRequest != null) {
+            pendingSlideshowImportRequest.cancel();
+            pendingSlideshowImportRequest = null;
+        }
+    }
+
+    private void showSlideshowCompositionEditor(CanvasSlideshowEditor editor, int index,
+            CanvasConfig config) {
+        if (!slideshowTargetValid(editor)) return;
+        final PanelOverlay[] overlay = new PanelOverlay[1];
+        CanvasCompositionEditor composition = new CanvasCompositionEditor(this, config,
+                false, slideshowFrameWidth, slideshowFrameHeight,
+                new CanvasCompositionEditor.Listener() {
+                    @Override public void onDone(CanvasConfig result) {
+                        if (overlay[0] != null) {
+                            dismissPanelAnimated(overlay[0], () -> {
+                                if (slideshowTargetValid(editor)) {
+                                    editor.updateComposition(index, result);
+                                }
+                            });
+                        }
+                    }
+                    @Override public void onCancel() {
+                        if (overlay[0] != null) dismissPanelAnimated(overlay[0]);
+                    }
+                });
+        activeCanvasCompositionEditor = composition;
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(-1, -1,
+                Gravity.CENTER);
+        params.setMargins(dp(8), dp(8), dp(8), dp(8));
+        overlay[0] = showPanelOverlay(composition, params, () -> {
+            if (activeCanvasCompositionEditor == composition) {
+                activeCanvasCompositionEditor = null;
+            }
+            composition.release();
+            updateCanvasPlayback();
+        });
+    }
     private void importCanvasImage(GameProfile profile, WidgetLayout.Item item, Uri uri,
             int frameWidth, int frameHeight) {
+        importCanvasImage(profile, item, uri, frameWidth, frameHeight, false);
+    }
+
+    private void importCanvasImage(GameProfile profile, WidgetLayout.Item item, Uri uri,
+            int frameWidth, int frameHeight, boolean returnHomeAfterSave) {
         if (!isCanvasTargetValid(profile, item) || profile != selectedProfile) {
             return;
         }
@@ -4528,13 +4866,15 @@ public class AssistantActivity extends Activity {
                             draft.shape = item.canvasConfig.shape;
                         }
                         showCanvasCompositionEditor(profile, item, draft, true,
-                                frameWidth, frameHeight);
+                                frameWidth, frameHeight, returnHomeAfterSave);
                     }
 
                     @Override
                     public void onError(CanvasAssetStore.ImportError error) {
                         pendingCanvasImportRequest = null;
-                        showErrorAction(getString(canvasImportErrorString(error)));
+                        if (selectedProfile == profile && !isFinishing() && !isDestroyed()) {
+                            showErrorAction(getString(canvasImportErrorString(error)));
+                        }
                     }
                 });
     }
@@ -4560,6 +4900,13 @@ public class AssistantActivity extends Activity {
 
     private void showCanvasCompositionEditor(GameProfile profile, WidgetLayout.Item item,
             CanvasConfig config, boolean initialFill, int frameWidth, int frameHeight) {
+        showCanvasCompositionEditor(profile, item, config, initialFill,
+                frameWidth, frameHeight, false);
+    }
+
+    private void showCanvasCompositionEditor(GameProfile profile, WidgetLayout.Item item,
+            CanvasConfig config, boolean initialFill, int frameWidth, int frameHeight,
+            boolean returnHomeAfterSave) {
         if (!isCanvasTargetValid(profile, item) || selectedProfile != profile
                 || config == null || !config.hasAsset()) {
             showErrorAction(getString(R.string.canvas_unavailable));
@@ -4582,7 +4929,11 @@ public class AssistantActivity extends Activity {
                             }
                             item.canvasConfig = result.copy();
                             ProfileStore.saveProfiles(AssistantActivity.this, profiles);
-                            rebuildContent();
+                            if (returnHomeAfterSave) {
+                                refreshCurrentPlayContent(SCREEN_MAIN);
+                            } else {
+                                rebuildContent();
+                            }
                             showAction(getString(initialFill
                                     ? R.string.canvas_saved_first_hint
                                     : R.string.canvas_composition_saved));
@@ -4621,6 +4972,19 @@ public class AssistantActivity extends Activity {
     }
 
     private void showCanvasFullscreen(WidgetLayout.Item item, int frameWidth, int frameHeight) {
+        int slideIndex = 0;
+        for (CanvasWidgetView view : canvasViews) {
+            if (item != null && item.itemId != null
+                    && item.itemId.equals(view.itemId())) {
+                slideIndex = view.currentSlideIndex();
+                break;
+            }
+        }
+        showCanvasFullscreen(item, slideIndex, frameWidth, frameHeight);
+    }
+
+    private void showCanvasFullscreen(WidgetLayout.Item item, int slideIndex,
+            int frameWidth, int frameHeight) {
         if (hasUnsavedWidgetLayout()) {
             showErrorAction(getString(R.string.canvas_save_layout_first));
             return;
@@ -4635,7 +4999,7 @@ public class AssistantActivity extends Activity {
         CanvasConfig config = targetItem.canvasConfig.copy();
         final PanelOverlay[] overlayHolder = new PanelOverlay[1];
         final FullscreenImageViewer[] viewerHolder = new FullscreenImageViewer[1];
-        FullscreenImageViewer viewer = new FullscreenImageViewer(this, config,
+        FullscreenImageViewer viewer = new FullscreenImageViewer(this, config, slideIndex,
                 new FullscreenImageViewer.Listener() {
                     @Override
                     public void onClose() {
@@ -4647,10 +5011,16 @@ public class AssistantActivity extends Activity {
                     @Override
                     public void onEditComposition() {
                         if (overlayHolder[0] != null) {
-                            dismissPanelAnimated(overlayHolder[0], () ->
+                            dismissPanelAnimated(overlayHolder[0], () -> {
+                                if (config.isSlideshow()) {
+                                    showCanvasSlideshowEditor(profile, targetItem,
+                                            frameWidth, frameHeight);
+                                } else {
                                     showCanvasCompositionEditor(profile, targetItem,
                                             targetItem.canvasConfig, false,
-                                            frameWidth, frameHeight));
+                                            frameWidth, frameHeight);
+                                }
+                            });
                         }
                     }
                 });
@@ -4683,8 +5053,7 @@ public class AssistantActivity extends Activity {
             return;
         }
         WidgetLayout.Item targetItem = resolveCanvasProfileItem(item);
-        if (targetItem == null || targetItem.canvasConfig == null
-                || !targetItem.canvasConfig.hasAsset()) {
+        if (targetItem == null || targetItem.canvasConfig == null) {
             return;
         }
         GameProfile profile = selectedProfile;
@@ -4700,24 +5069,41 @@ public class AssistantActivity extends Activity {
         shell.addView(title, new LinearLayout.LayoutParams(-1, dp(38)));
 
         final PanelOverlay[] overlayHolder = new PanelOverlay[1];
+        boolean hasAsset = targetItem.canvasConfig.hasAsset();
         boolean circular = targetItem.canvasConfig.isCircular();
-        shell.addView(canvasOptionButton(circular
+        boolean slideshow = targetItem.canvasConfig.isSlideshow();
+        shell.addView(canvasOptionButton(R.string.canvas_slideshow_manage, () ->
+                dismissCanvasOptionThen(overlayHolder[0], () ->
+                        showCanvasSlideshowEditor(profile, targetItem,
+                                frameWidth, frameHeight))));
+        if (slideshow) {
+            shell.addView(canvasOptionButton(targetItem.canvasConfig.autoRotate
+                    ? R.string.canvas_slideshow_pause : R.string.canvas_slideshow_start,
+                    () -> dismissCanvasOptionThen(overlayHolder[0], () ->
+                            setCanvasSlideshowPlaying(profile, targetItem,
+                                    !targetItem.canvasConfig.autoRotate))));
+        }
+        if (hasAsset) shell.addView(canvasOptionButton(circular
                 ? R.string.canvas_use_rectangle
                 : R.string.canvas_use_circle, () ->
                 dismissCanvasOptionThen(overlayHolder[0], () ->
                         setCanvasShape(profile, targetItem, !circular))));
-        shell.addView(canvasOptionButton(R.string.canvas_edit_composition, () ->
-                dismissCanvasOptionThen(overlayHolder[0], () ->
-                        showCanvasCompositionEditor(profile, targetItem,
-                                targetItem.canvasConfig, false,
-                                frameWidth, frameHeight))));
-        shell.addView(canvasOptionButton(R.string.canvas_replace_image, () ->
+        if (hasAsset && !slideshow) {
+            shell.addView(canvasOptionButton(R.string.canvas_edit_composition, () ->
+                    dismissCanvasOptionThen(overlayHolder[0], () ->
+                            showCanvasCompositionEditor(profile, targetItem,
+                                    targetItem.canvasConfig, false,
+                                    frameWidth, frameHeight))));
+        }
+        if (hasAsset) shell.addView(canvasOptionButton(slideshow
+                ? R.string.canvas_slideshow_replace_with_one
+                : R.string.canvas_replace_image, () ->
                 dismissCanvasOptionThen(overlayHolder[0], () -> chooseCanvasImage(targetItem,
                         frameWidth, frameHeight))));
-        shell.addView(canvasOptionButton(R.string.canvas_view_fullscreen, () ->
+        if (hasAsset) shell.addView(canvasOptionButton(R.string.canvas_view_fullscreen, () ->
                 dismissCanvasOptionThen(overlayHolder[0], () -> showCanvasFullscreen(targetItem,
                         frameWidth, frameHeight))));
-        shell.addView(canvasOptionButton(R.string.canvas_remove_image, () ->
+        if (hasAsset) shell.addView(canvasOptionButton(R.string.canvas_remove_image, () ->
                 dismissCanvasOptionThen(overlayHolder[0], () -> confirmRemoveCanvasImage(
                         profile, targetItem))));
         shell.addView(canvasOptionButton(R.string.common_close, () -> {
@@ -4743,7 +5129,11 @@ public class AssistantActivity extends Activity {
     }
 
     private Button canvasOptionButton(int labelRes, Runnable action) {
-        Button button = editorButton(getString(labelRes), action);
+        return canvasOptionButton(getString(labelRes), action);
+    }
+
+    private Button canvasOptionButton(String label, Runnable action) {
+        Button button = editorButton(label, action);
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, dp(46));
         params.setMargins(0, dp(3), 0, dp(3));
         button.setLayoutParams(params);
@@ -4770,6 +5160,17 @@ public class AssistantActivity extends Activity {
         rebuildContent();
         showAction(getString(circular
                 ? R.string.canvas_circle_enabled : R.string.canvas_rectangle_enabled));
+    }
+
+    private void setCanvasSlideshowPlaying(GameProfile profile, WidgetLayout.Item item,
+            boolean playing) {
+        if (!isCanvasTargetValid(profile, item) || selectedProfile != profile
+                || item.canvasConfig == null || !item.canvasConfig.isSlideshow()) return;
+        item.canvasConfig.autoRotate = playing;
+        ProfileStore.saveProfiles(this, profiles);
+        rebuildContent();
+        showAction(getString(playing ? R.string.canvas_slideshow_started
+                : R.string.canvas_slideshow_paused));
     }
 
     private void confirmRemoveCanvasImage(GameProfile profile, WidgetLayout.Item item) {
@@ -4991,6 +5392,7 @@ public class AssistantActivity extends Activity {
         if (index < 0 || index >= profiles.size()) {
             return;
         }
+        InputBridge.stopActiveMacroLoop();
         InputBridge.cancelPortalTouch(this);
         if (userInitiated) {
             manualProfileSelectionGuard.record(
@@ -5232,6 +5634,7 @@ public class AssistantActivity extends Activity {
     private Button macroButton(Macro macro, int index, boolean iconOnly) {
         MacroButtonView button = new MacroButtonView(this);
         button.setMacroLabel(macro.label);
+        button.setMacroLoopRunning(InputBridge.isMacroLoopRunning(macro));
         button.setMacroLabelVisible(!iconOnly);
         button.setText("");
         button.setAllCaps(false);
@@ -5242,7 +5645,7 @@ public class AssistantActivity extends Activity {
                 styleMacroButton(button, macroPriority, false, index, icon));
         button.setOnClickListener(v -> {
             button.cancelPendingMacroLongPress();
-            runMacro(macro);
+            runMacro(macro, button);
         });
         button.setMacroLongPressAction(() -> showMacroEditor(macro));
         return button;
@@ -5288,10 +5691,24 @@ public class AssistantActivity extends Activity {
         return HeimdallUi.MACRO_SECONDARY;
     }
 
-    private void runMacro(Macro macro) {
+    private void runMacro(Macro macro, MacroButtonView button) {
+        InputBridge.Callback callback = new InputBridge.Callback() {
+            @Override public void onStatus(String message) {
+                inputStatusCallback.onStatus(message);
+            }
+            @Override public void onError(String message) {
+                inputStatusCallback.onError(message);
+            }
+            @Override public void onMacroFinished(boolean cancelled) {
+                runOnUiThread(() -> button.setMacroLoopRunning(false));
+            }
+        };
         InputBridge.MacroDispatchResult result = InputBridge.dispatch(
                 this, macro, isEnhancedTouchModeActive(),
-                shouldProtectThorMappingFromControllerMacros(), inputStatusCallback);
+                shouldProtectThorMappingFromControllerMacros(), callback);
+        if (result == InputBridge.MacroDispatchResult.STARTED && macro.loopMaxSeconds > 0) {
+            button.setMacroLoopRunning(true);
+        }
         int statusRes;
         switch (result) {
             case STARTED:
@@ -6082,7 +6499,10 @@ public class AssistantActivity extends Activity {
             return;
         }
         virtualMouseEntryHintPending = false;
-        Toast.makeText(this, getString(R.string.virtual_mouse_entry_hint),
+        int message = touchpadSettings.virtualMouseGesturesEnabled
+                ? R.string.virtual_mouse_entry_hint
+                : R.string.virtual_mouse_movement_only_entry_hint;
+        Toast.makeText(this, getString(message),
                 Toast.LENGTH_LONG).show();
     }
 
@@ -6185,6 +6605,8 @@ public class AssistantActivity extends Activity {
                 R.drawable.ic_bridge, SETTINGS_INPUT));
         nav.addView(settingsCategoryButton(getString(R.string.settings_category_diagnostics),
                 R.drawable.ic_guide, SETTINGS_DIAGNOSTICS));
+        nav.addView(settingsCategoryButton(getString(R.string.settings_category_about),
+                R.drawable.ic_heimdall_header_mark_blue, SETTINGS_ABOUT));
 
         LinearLayout exitSection = new LinearLayout(this);
         exitSection.setOrientation(LinearLayout.VERTICAL);
@@ -6242,7 +6664,8 @@ public class AssistantActivity extends Activity {
         boolean canReset = activeSettingsSection != SETTINGS_PROFILE
                 && activeSettingsSection != SETTINGS_DIAGNOSTICS
                 && activeSettingsSection != SETTINGS_INPUT
-                && activeSettingsSection != SETTINGS_GETTING_STARTED;
+                && activeSettingsSection != SETTINGS_GETTING_STARTED
+                && activeSettingsSection != SETTINGS_ABOUT;
         String resetLabel = !canReset
                 ? getString(R.string.settings_no_reset)
                 : getString(R.string.settings_restore_defaults);
@@ -6251,11 +6674,13 @@ public class AssistantActivity extends Activity {
                 false, canReset));
         boolean canSave = activeSettingsSection != SETTINGS_INPUT
                 && activeSettingsSection != SETTINGS_DIAGNOSTICS
-                && activeSettingsSection != SETTINGS_GETTING_STARTED;
+                && activeSettingsSection != SETTINGS_GETTING_STARTED
+                && activeSettingsSection != SETTINGS_ABOUT;
         String saveLabel = canSave ? getString(R.string.common_save)
                 : getString(activeSettingsSection == SETTINGS_DIAGNOSTICS
                         || activeSettingsSection == SETTINGS_INPUT
                         || activeSettingsSection == SETTINGS_GETTING_STARTED
+                        || activeSettingsSection == SETTINGS_ABOUT
                         ? R.string.settings_no_save
                         : R.string.settings_selection_applies_immediately);
         footer.addView(settingsFooterButton(saveLabel,
@@ -6392,9 +6817,76 @@ public class AssistantActivity extends Activity {
             populateAppearanceSettingsContent(content);
         } else if (activeSettingsSection == SETTINGS_DIAGNOSTICS) {
             populateDiagnosticsSettingsContent(content);
+        } else if (activeSettingsSection == SETTINGS_ABOUT) {
+            populateAboutSettingsContent(content);
         } else {
             populateProfileSettingsContent(content);
         }
+    }
+
+    private void populateAboutSettingsContent(LinearLayout content) {
+        TextView description = text(getString(R.string.about_description),
+                HeimdallUi.TYPE_BODY, TEXT, false);
+        LinearLayout.LayoutParams descriptionParams = new LinearLayout.LayoutParams(-1, -2);
+        descriptionParams.setMargins(0, dp(8), 0, dp(4));
+        content.addView(description, descriptionParams);
+        TextView author = text(getString(R.string.about_author),
+                HeimdallUi.TYPE_LABEL, MUTED, true);
+        LinearLayout.LayoutParams authorParams = new LinearLayout.LayoutParams(-1, -2);
+        authorParams.setMargins(0, 0, 0, dp(20));
+        content.addView(author, authorParams);
+
+        TextView supportTitle = text(getString(R.string.about_support_title),
+                HeimdallUi.TYPE_SECTION_TITLE, TEXT, true);
+        content.addView(supportTitle, new LinearLayout.LayoutParams(-1, dp(32)));
+        TextView supportDescription = text(getString(R.string.about_support_description),
+                HeimdallUi.TYPE_BODY, MUTED, false);
+        content.addView(supportDescription, new LinearLayout.LayoutParams(-1, -2));
+        Button afdianButton = editorButton(getString(R.string.about_open_afdian), () -> {
+            try {
+                startActivity(new Intent(Intent.ACTION_VIEW,
+                        Uri.parse("https://afdian.com/a/heimdall")));
+            } catch (Exception ignored) {
+                showErrorAction(getString(R.string.about_open_failed));
+            }
+        });
+        HeimdallUi.applyPrimaryActionButton(this, afdianButton);
+        LinearLayout.LayoutParams afdianParams = new LinearLayout.LayoutParams(-1, dp(48));
+        afdianParams.setMargins(0, dp(12), 0, dp(24));
+        content.addView(afdianButton, afdianParams);
+
+        TextView namesTitle = text(getString(R.string.about_supporters_title),
+                HeimdallUi.TYPE_SECTION_TITLE, TEXT, true);
+        content.addView(namesTitle, new LinearLayout.LayoutParams(-1, dp(32)));
+        TextView namesView = text("", HeimdallUi.TYPE_BODY, TEXT, false);
+        content.addView(namesView, new LinearLayout.LayoutParams(-1, -2));
+        TextView refreshView = text(getString(R.string.about_supporters_refreshing),
+                HeimdallUi.TYPE_META, MUTED, false);
+        LinearLayout.LayoutParams refreshParams = new LinearLayout.LayoutParams(-1, -2);
+        refreshParams.setMargins(0, dp(10), 0, 0);
+        content.addView(refreshView, refreshParams);
+        showSponsorNames(namesView, SponsorListRepository.cached(this));
+        SponsorListRepository.refresh(this, (names, updated) -> {
+            if (activeSettingsSection != SETTINGS_ABOUT
+                    || settingsContentContainer != content) return;
+            showSponsorNames(namesView, names);
+            refreshView.setText(updated
+                    ? R.string.about_supporters_updated
+                    : R.string.about_supporters_offline);
+        });
+    }
+
+    private void showSponsorNames(TextView view, List<String> names) {
+        if (names.isEmpty()) {
+            view.setText(R.string.about_supporters_empty);
+            return;
+        }
+        StringBuilder text = new StringBuilder();
+        for (String name : names) {
+            if (text.length() > 0) text.append('\n');
+            text.append(name);
+        }
+        view.setText(text);
     }
 
     private void populateGettingStartedSettingsContent(LinearLayout content) {
@@ -8299,6 +8791,9 @@ public class AssistantActivity extends Activity {
     }
 
     private String settingsSectionTitle() {
+        if (activeSettingsSection == SETTINGS_ABOUT) {
+            return getString(R.string.settings_category_about);
+        }
         if (activeSettingsSection == SETTINGS_GETTING_STARTED) {
             return getString(R.string.settings_category_getting_started);
         }
@@ -8330,6 +8825,9 @@ public class AssistantActivity extends Activity {
     }
 
     private String settingsSectionSummary() {
+        if (activeSettingsSection == SETTINGS_ABOUT) {
+            return getString(R.string.about_summary);
+        }
         if (activeSettingsSection == SETTINGS_GETTING_STARTED) {
             return getString(R.string.settings_summary_getting_started);
         }
@@ -8437,9 +8935,13 @@ public class AssistantActivity extends Activity {
             TouchpadSettings savedTouchpadSettings = ensureSettingsTouchpadDraft().copy();
             boolean wasVirtualMouse = TouchpadSettings.MODE_VIRTUAL_MOUSE.equals(
                     TouchpadSettings.normalizeMode(touchpadSettings.mode));
+            boolean virtualMouseGesturesChanged = wasVirtualMouse
+                    && touchpadSettings.virtualMouseGesturesEnabled
+                            != savedTouchpadSettings.virtualMouseGesturesEnabled;
             boolean isVirtualMouse = TouchpadSettings.MODE_VIRTUAL_MOUSE.equals(
                     TouchpadSettings.normalizeMode(savedTouchpadSettings.mode));
-            virtualMouseEntryHintPending = !wasVirtualMouse && isVirtualMouse;
+            virtualMouseEntryHintPending = isVirtualMouse
+                    && (!wasVirtualMouse || virtualMouseGesturesChanged);
             selectedProfile.touchpadSettings = savedTouchpadSettings;
             touchpadSettings = selectedProfile.safeTouchpadSettings();
             closeVirtualMouseDispatcherIfUnused();
@@ -9186,12 +9688,53 @@ public class AssistantActivity extends Activity {
     }
 
     private View createMapPage() {
+        int generation = ++galleryLoadGeneration;
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackground(HeimdallUi.isFreyaFamily(this)
                 ? HeimdallUi.cncFlush(this, 12)
                 : HeimdallUi.surfacePanel(this, 12));
         root.setPadding(dp(8), dp(8), dp(8), dp(8));
+
+        LinearLayout categories = new LinearLayout(this);
+        categories.setOrientation(LinearLayout.HORIZONTAL);
+        categories.setPadding(dp(3), dp(3), dp(3), dp(3));
+        categories.setBackground(HeimdallUi.isFreyaFamily(this)
+                ? new ColorDrawable(Color.TRANSPARENT)
+                : HeimdallUi.insetPanel(this, HeimdallUi.RADIUS_BUTTON));
+        LinearLayout.LayoutParams categoryParams = new LinearLayout.LayoutParams(-1, dp(52));
+        categoryParams.setMargins(0, dp(2), 0, dp(8));
+        root.addView(categories, categoryParams);
+        addGalleryCategory(categories, GALLERY_MAPS, R.string.gallery_maps);
+        addGalleryCategory(categories, GALLERY_SCREENSHOTS, R.string.gallery_screenshots);
+        addGalleryCategory(categories, GALLERY_OTHER, R.string.gallery_other);
+
+        if (activeGalleryCategory != GALLERY_MAPS) {
+            GalleryMediaGrid grid = new GalleryMediaGrid(this, new GalleryMediaGrid.Listener() {
+                @Override public void onOpen(GalleryMediaGrid.Item item) {
+                    if (item.canvas != null) {
+                        showGalleryCanvas(item.canvas);
+                    } else {
+                        showGalleryScreenshot(item.uri);
+                    }
+                }
+
+                @Override public void onRemove(GalleryMediaGrid.Item item) {
+                    confirmGalleryScreenshotRemoval(item.uri);
+                }
+
+                @Override public void onUseForCanvas(GalleryMediaGrid.Item item) {
+                    chooseGalleryCanvasTarget(selectedProfile, item);
+                }
+            });
+            root.addView(grid, new LinearLayout.LayoutParams(-1, 0, 1));
+            if (activeGalleryCategory == GALLERY_SCREENSHOTS) {
+                loadGalleryScreenshots(grid, selectedProfile, generation);
+            } else {
+                showGalleryOther(grid, selectedProfile);
+            }
+            return root;
+        }
 
         LinearLayout modes = new LinearLayout(this);
         modes.setOrientation(LinearLayout.HORIZONTAL);
@@ -9229,6 +9772,314 @@ public class AssistantActivity extends Activity {
         return root;
     }
 
+    private void addGalleryCategory(LinearLayout row, int category, int labelRes) {
+        Button button = editorButton(getString(labelRes), () -> {
+            if (activeGalleryCategory == category) return;
+            runAfterTextInputFocusRelease(() -> {
+                activeGalleryCategory = category;
+                rebuildContent();
+            });
+        });
+        HeimdallUi.applySectionButton(this, button, activeGalleryCategory == category);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, -1, 1);
+        params.setMargins(dp(2), 0, dp(2), 0);
+        row.addView(button, params);
+    }
+
+    private void loadGalleryScreenshots(GalleryMediaGrid grid, GameProfile profile,
+            int generation) {
+        String profileId = profile.safeProfileId();
+        new Thread(() -> {
+            List<GalleryScreenshotStore.Entry> screenshots = null;
+            try (GalleryScreenshotStore store = new GalleryScreenshotStore(this)) {
+                screenshots = store.list(profileId);
+            } catch (Exception ignored) {
+            }
+            List<GalleryScreenshotStore.Entry> result = screenshots;
+            runOnUiThread(() -> {
+                if (generation != galleryLoadGeneration || activeScreen != SCREEN_MAP
+                        || selectedProfile != profile
+                        || activeGalleryCategory != GALLERY_SCREENSHOTS) return;
+                if (result == null) {
+                    grid.showMessage(getString(R.string.gallery_load_failed));
+                    return;
+                }
+                grid.showItems(galleryScreenshotItems(result),
+                        getString(R.string.gallery_screenshots_empty));
+            });
+        }, "heimdall-gallery-screenshots").start();
+    }
+
+    private List<GalleryMediaGrid.Item> galleryScreenshotItems(
+            List<GalleryScreenshotStore.Entry> screenshots) {
+        List<GalleryMediaGrid.Item> items = new ArrayList<>();
+        SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd HH:mm",
+                Locale.getDefault());
+        for (GalleryScreenshotStore.Entry entry : screenshots) {
+            items.add(new GalleryMediaGrid.Item(entry.uri,
+                    format.format(new Date(entry.createdAt)),
+                    getString(R.string.gallery_screenshot_detail), null, true));
+        }
+        return items;
+    }
+
+    private void showGalleryOther(GalleryMediaGrid grid, GameProfile profile) {
+        grid.showItems(galleryOtherItems(profile), getString(R.string.gallery_other_empty));
+    }
+
+    private List<GalleryMediaGrid.Item> galleryOtherItems(GameProfile profile) {
+        List<GalleryMediaGrid.Item> items = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
+        int number = 0;
+        for (WidgetLayout.Item widget : profile.safeWidgetLayout().items) {
+            if (!WidgetLayout.TYPE_CANVAS.equals(widget.type)
+                    || widget.canvasConfig == null || !widget.canvasConfig.hasAsset()
+                    || widget.canvasConfig.video) {
+                continue;
+            }
+            CanvasConfig owner = widget.canvasConfig;
+            int slideCount = owner.slides.isEmpty() ? 1 : owner.slides.size();
+            for (int i = 0; i < slideCount; i++) {
+                CanvasConfig image = owner.slideConfig(i);
+                if (!seen.add(image.assetId)) continue;
+                number++;
+                File file = CanvasAssetStore.resolve(this, image.assetId);
+                items.add(new GalleryMediaGrid.Item(file == null ? null : Uri.fromFile(file),
+                        getString(R.string.gallery_canvas_asset, number),
+                        getString(file == null ? R.string.gallery_canvas_missing
+                                : R.string.gallery_canvas_detail), image, false));
+            }
+        }
+        return items;
+    }
+
+    private GalleryMediaGrid.Item galleryMapItem(MapEntry map, int index) {
+        String source = map.uri == null ? "" : map.uri.trim();
+        Uri uri = source.isEmpty() ? null : source.contains("://")
+                ? Uri.parse(source) : Uri.fromFile(new File(source));
+        return new GalleryMediaGrid.Item(uri,
+                nonEmpty(map.title, getString(R.string.map_numbered, index + 1)),
+                getString(R.string.gallery_maps), null, false);
+    }
+
+    private void chooseGalleryCanvasTarget(GameProfile profile, GalleryMediaGrid.Item source) {
+        if (profile == null || selectedProfile != profile || source == null) return;
+        if (hasUnsavedWidgetLayout()) {
+            showErrorAction(getString(R.string.canvas_save_layout_first));
+            return;
+        }
+        List<WidgetLayout.Item> targets = profile.safeWidgetLayout()
+                .findItems(WidgetLayout.TYPE_CANVAS);
+        if (targets.isEmpty()) {
+            showInformationPanel(getString(R.string.gallery_canvas_choose_target),
+                    getString(R.string.gallery_canvas_no_target));
+            return;
+        }
+        if (targets.size() == 1) {
+            applyGalleryCanvasSource(profile, targets.get(0), source, 0, 0);
+            return;
+        }
+
+        LinearLayout shell = new LinearLayout(this);
+        shell.setOrientation(LinearLayout.VERTICAL);
+        shell.setPadding(dp(14), dp(12), dp(14), dp(12));
+        shell.setBackground(HeimdallUi.isFreyaFamily(this)
+                ? HeimdallUi.cncFlush(this, HeimdallUi.RADIUS_PANEL)
+                : HeimdallUi.glassSurface(this, ThemeGlassColors.OVERLAY,
+                        HeimdallUi.RADIUS_PANEL, 2));
+        TextView title = text(getString(R.string.gallery_canvas_choose_target),
+                HeimdallUi.TYPE_EDITOR_TITLE, TEXT, true);
+        shell.addView(title, new LinearLayout.LayoutParams(-1, dp(42)));
+        ScrollView scroll = new ScrollView(this);
+        scroll.setVerticalScrollBarEnabled(false);
+        LinearLayout list = new LinearLayout(this);
+        list.setOrientation(LinearLayout.VERTICAL);
+        scroll.addView(list, new ScrollView.LayoutParams(-1, -2));
+        shell.addView(scroll, new LinearLayout.LayoutParams(-1, dp(350)));
+        final PanelOverlay[] overlay = new PanelOverlay[1];
+        for (int i = 0; i < targets.size(); i++) {
+            WidgetLayout.Item target = targets.get(i);
+            View row = galleryCanvasTargetRow(target, i + 1, () -> {
+                if (overlay[0] != null) {
+                    dismissPanelAnimated(overlay[0], () ->
+                            applyGalleryCanvasSource(profile, target, source, 0, 0));
+                }
+            });
+            LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(-1, dp(74));
+            rowParams.setMargins(0, dp(3), 0, dp(3));
+            list.addView(row, rowParams);
+        }
+        Button close = canvasOptionButton(R.string.common_close, () -> {
+            if (overlay[0] != null) dismissPanelAnimated(overlay[0]);
+        });
+        shell.addView(close);
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
+                settingsOverlayWidth(520), -2, Gravity.CENTER);
+        params.setMargins(dp(12), dp(12), dp(12), dp(12));
+        overlay[0] = showPanelOverlay(shell, params, null);
+    }
+
+    private View galleryCanvasTargetRow(WidgetLayout.Item target, int number,
+            Runnable action) {
+        LinearLayout row = new LinearLayout(this);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(5), dp(5), dp(9), dp(5));
+        row.setBackground(HeimdallUi.isFreyaFamily(this)
+                ? HeimdallUi.cncMenuControl(this, HeimdallUi.RADIUS_CARD, false, false)
+                : HeimdallUi.glassSurface(this, ThemeGlassColors.LIST_CONTROL,
+                        HeimdallUi.RADIUS_CARD, 1));
+        CanvasConfig config = target.canvasConfig;
+        boolean hasAsset = config != null && config.hasAsset();
+        FrameLayout preview = new FrameLayout(this);
+        preview.setBackgroundColor(0xFF05070A);
+        ImageView image = new ImageView(this);
+        image.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        preview.addView(image, new FrameLayout.LayoutParams(-1, -1));
+        TextView state = text(getString(hasAsset
+                ? R.string.gallery_loading_preview : R.string.gallery_canvas_empty_preview),
+                10, MUTED, false);
+        state.setGravity(Gravity.CENTER);
+        preview.addView(state, new FrameLayout.LayoutParams(-1, -1));
+        row.addView(preview, new LinearLayout.LayoutParams(dp(74), -1));
+        if (hasAsset) {
+            File file = CanvasAssetStore.resolve(this, config.assetId);
+            if (file == null) {
+                state.setText(R.string.gallery_image_unavailable);
+            } else if (config.video) {
+                state.setText(R.string.gallery_canvas_video_preview);
+            } else {
+                GalleryThumbnailLoader.load(this, Uri.fromFile(file), image, available -> {
+                    state.setVisibility(available ? View.GONE : View.VISIBLE);
+                    if (!available) state.setText(R.string.gallery_image_unavailable);
+                });
+            }
+        }
+        int label = hasAsset ? R.string.gallery_canvas_target_filled
+                : R.string.gallery_canvas_target_empty;
+        TextView title = text(getString(label, number), 13, TEXT, true);
+        title.setPadding(dp(12), 0, 0, 0);
+        row.addView(title, new LinearLayout.LayoutParams(0, -1, 1));
+        row.setContentDescription(getString(label, number));
+        row.setOnClickListener(view -> action.run());
+        return row;
+    }
+
+    private void applyGalleryCanvasSource(GameProfile profile, WidgetLayout.Item target,
+            GalleryMediaGrid.Item source, int frameWidth, int frameHeight) {
+        if (!isCanvasTargetValid(profile, target) || selectedProfile != profile
+                || hasUnsavedWidgetLayout()) return;
+        cancelPendingCanvasImport();
+        int width = frameWidth;
+        int height = frameHeight;
+        if (width <= 0 || height <= 0) {
+            if (contentHost == null || contentHost.getWidth() <= 0
+                    || contentHost.getHeight() <= 0) {
+                showErrorAction(getString(R.string.canvas_unavailable));
+                return;
+            }
+            WidgetLayout layout = profile.safeWidgetLayout();
+            width = Math.max(1, Math.round(target.w * contentHost.getWidth()
+                    / (float) Math.max(1, layout.columns)) - dp(6) * 2);
+            height = Math.max(1, Math.round(target.h * contentHost.getHeight()
+                    / (float) Math.max(1, layout.rows)) - dp(6) * 2);
+        }
+        if (source.canvas != null) {
+            CanvasConfig existing = source.canvas;
+            if (!existing.hasAsset()
+                    || CanvasAssetStore.resolve(this, existing.assetId) == null) {
+                showErrorAction(getString(R.string.gallery_image_unavailable));
+                return;
+            }
+            if (!CanvasAnimationPolicy.canAssign(profile.safeWidgetLayout(), target,
+                    existing.animated)) {
+                showErrorAction(getString(R.string.canvas_animated_profile_limit));
+                return;
+            }
+            CanvasConfig draft = new CanvasConfig();
+            draft.assetId = existing.assetId;
+            draft.animated = existing.animated;
+            draft.video = existing.video;
+            if (target.canvasConfig != null) draft.shape = target.canvasConfig.shape;
+            showCanvasCompositionEditor(profile, target, draft, true, width, height, true);
+        } else if (source.uri != null) {
+            importCanvasImage(profile, target, source.uri, width, height, true);
+        } else {
+            showErrorAction(getString(R.string.gallery_image_unavailable));
+        }
+    }
+
+    private void showGalleryScreenshot(Uri uri) {
+        if (uri == null) {
+            showErrorAction(getString(R.string.gallery_image_unavailable));
+            return;
+        }
+        final PanelOverlay[] overlay = new PanelOverlay[1];
+        GalleryPhotoViewer viewer = new GalleryPhotoViewer(this, uri, () -> {
+            if (overlay[0] != null) dismissPanelAnimated(overlay[0]);
+        });
+        overlay[0] = showPanelOverlay(viewer,
+                new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER), viewer::release);
+    }
+
+    private void showGalleryCanvas(CanvasConfig config) {
+        if (config == null || !config.hasAsset()
+                || CanvasAssetStore.resolve(this, config.assetId) == null) {
+            showErrorAction(getString(R.string.gallery_image_unavailable));
+            return;
+        }
+        final PanelOverlay[] overlay = new PanelOverlay[1];
+        FullscreenImageViewer viewer = new FullscreenImageViewer(this, config,
+                new FullscreenImageViewer.Listener() {
+                    @Override public void onClose() {
+                        if (overlay[0] != null) dismissPanelAnimated(overlay[0]);
+                    }
+                    @Override public void onEditComposition() { }
+                }, false);
+        canvasOverlayActive = true;
+        activeCanvasFullscreenViewer = viewer;
+        updateCanvasPlayback();
+        overlay[0] = showPanelOverlay(viewer,
+                new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER), () -> {
+                    if (activeCanvasFullscreenViewer == viewer) {
+                        activeCanvasFullscreenViewer = null;
+                    }
+                    canvasOverlayActive = false;
+                    viewer.release();
+                    updateCanvasPlayback();
+                });
+        if (overlay[0] == null) {
+            activeCanvasFullscreenViewer = null;
+            canvasOverlayActive = false;
+            viewer.release();
+            updateCanvasPlayback();
+        }
+    }
+
+    private void confirmGalleryScreenshotRemoval(Uri uri) {
+        if (uri == null || selectedProfile == null) return;
+        GameProfile profile = selectedProfile;
+        String profileId = profile.safeProfileId();
+        showSettingsDecisionPanel(getString(R.string.gallery_remove_reference),
+                getString(R.string.gallery_remove_screenshot_confirm), null, null,
+                getString(R.string.gallery_remove_reference), () -> {
+                    new Thread(() -> {
+                        try (GalleryScreenshotStore store = new GalleryScreenshotStore(this)) {
+                            store.remove(profileId, uri);
+                        } catch (Exception ignored) {
+                            runOnUiThread(() -> showErrorAction(
+                                    getString(R.string.gallery_load_failed)));
+                            return;
+                        }
+                        runOnUiThread(() -> {
+                            if (selectedProfile == profile && activeScreen == SCREEN_MAP
+                                    && activeGalleryCategory == GALLERY_SCREENSHOTS) {
+                                rebuildContent();
+                            }
+                        });
+                    }, "heimdall-gallery-remove").start();
+                });
+    }
+
     private View createLocalMapPage() {
         List<MapEntry> maps = selectedProfile.safeMaps();
         activeLocalMapIndex = maps.isEmpty()
@@ -9250,6 +10101,17 @@ public class AssistantActivity extends Activity {
                 !maps.isEmpty(), this::renameSelectedLocalMap));
         actions.addView(mapLibraryAction(getString(R.string.map_delete), R.drawable.ic_trash,
                 !maps.isEmpty(), this::deleteSelectedLocalMap));
+        actions.addView(mapLibraryAction(getString(R.string.gallery_use_for_canvas_short),
+                R.drawable.ic_add, !maps.isEmpty(), () -> {
+                    if (activeLocalMapIndex < 0 || activeLocalMapIndex >= maps.size()) return;
+                    MapEntry selectedMap = maps.get(activeLocalMapIndex);
+                    if (!isImageDocument(selectedMap.uri, selectedMap.title)) {
+                        showErrorAction(getString(R.string.gallery_canvas_image_only));
+                        return;
+                    }
+                    chooseGalleryCanvasTarget(selectedProfile, galleryMapItem(selectedMap,
+                            activeLocalMapIndex));
+                }));
 
         ScrollView scroller = new ScrollView(this);
         scroller.setFillViewport(true);
@@ -9970,7 +10832,8 @@ public class AssistantActivity extends Activity {
                 LinearLayout row = listActionRow(guideLabel(guide),
                         () -> openGuide(guide),
                         () -> showGuideEditor(null, guide.type, guide));
-            row.addView(iconButton(R.drawable.ic_copy, getString(R.string.guide_copy_content), false,
+            row.addView(iconButton(R.drawable.ic_copy, getString(GuideEntry.TYPE_LINK.equals(guide.type)
+                            ? R.string.guide_copy_link : R.string.guide_copy_content), false,
                         () -> copyGuideContent(guide)), iconButtonParams());
 
             row.addView(iconButton(R.drawable.ic_edit, getString(R.string.guide_edit), false,
@@ -10224,7 +11087,8 @@ public class AssistantActivity extends Activity {
         String content = GuideEntry.TYPE_LINK.equals(guide.type) ? guideUri(guide).toString() : guide.content;
         manager.setPrimaryClip(ClipData.newPlainText(
                 nonEmpty(guide.title, getString(R.string.common_guide_fallback)), content));
-        showAction(getString(R.string.guide_copied));
+        showAction(getString(GuideEntry.TYPE_LINK.equals(guide.type)
+                ? R.string.guide_link_copied : R.string.guide_copied));
     }
 
     private void chooseGuideFile(TextView fileSummary, String[] fileUriDraft,
@@ -10342,22 +11206,7 @@ public class AssistantActivity extends Activity {
             return;
         }
 
-        Intent intent = new Intent(Intent.ACTION_VIEW);
-        Uri uri = guideUri(guide);
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_GRANT_READ_URI_PERMISSION);
-        boolean pdf = false;
-        if (GuideEntry.TYPE_FILE.equals(guide.type)) {
-            pdf = isPdfDocument(guide.content, guide.title);
-            if (pdf) {
-                intent.setDataAndType(uri, "application/pdf");
-            } else {
-                intent.setDataAndType(uri, "*/*");
-            }
-        } else {
-            intent.setData(uri);
-        }
-        startExternalActivity(intent, getString(R.string.guide_open_chooser),
-                R.string.guide_open_failed, pdf);
+        openGuideExternally(guide);
     }
 
     private View createGuideReaderPage(GuideEntry guide) {
@@ -10436,6 +11285,12 @@ public class AssistantActivity extends Activity {
             addGuideIconTool(toolbar, R.drawable.ic_bookmark,
                     getString(R.string.guide_bookmark_action),
                     () -> showGuideBookmarks(guide));
+            addGuideIconTool(toolbar, R.drawable.ic_chapters,
+                    getString(R.string.guide_chapters_action),
+                    () -> showGuideChapters(guide));
+            addGuideIconTool(toolbar, R.drawable.ic_search,
+                    getString(R.string.guide_search_action),
+                    () -> showGuideSearch(guide));
 
             if (!fullscreen) {
                 addGuideIconTool(toolbar, R.drawable.ic_fullscreen,
@@ -10636,6 +11491,93 @@ public class AssistantActivity extends Activity {
                 settingsOverlayWidth(600), settingsOverlayHeight(620), Gravity.CENTER);
         params.setMargins(dp(12), dp(12), dp(12), dp(12));
         holder[0] = showPanelOverlay(shell, params, null);
+    }
+
+    private void showGuideChapters(GuideEntry guide) {
+        if (guide == null || viewingGuideInline != guide
+                || activeGuideReaderEntry != guide
+                || cachedGuideTextEntry != guide || cachedGuideTextDocument == null) {
+            showErrorAction(getString(R.string.guide_chapters_wait));
+            return;
+        }
+        GuideTextDocument document = cachedGuideTextDocument;
+        String source = guide.content == null ? "" : guide.content.toLowerCase(Locale.US);
+        String type = GuideEntry.TYPE_FILE.equals(guide.type) ? mimeType(guide.content) : null;
+        boolean markdown = GuideEntry.TYPE_NOTE.equals(guide.type)
+                || source.matches(".*\\.(?:md|markdown)(?:[?#].*)?$")
+                || "text/markdown".equals(type);
+        final PanelOverlay[] holder = new PanelOverlay[1];
+        GuideChapterPanel panel = new GuideChapterPanel(this, document, markdown,
+                new GuideChapterPanel.Listener() {
+                    @Override public void onJump(GuideChapterIndex.Chapter chapter) {
+                        if (holder[0] == null) return;
+                        if (!chapter.belongsTo(activeGuideReaderFingerprint)
+                                || cachedGuideTextDocument != document
+                                || viewingGuideInline != guide) {
+                            showErrorAction(getString(R.string.guide_chapters_stale));
+                            return;
+                        }
+                        dismissPanelAnimated(holder[0], () -> {
+                            GuideTextReaderView reader = activeGuideReaderView;
+                            if (reader == null || activeGuideReaderEntry != guide
+                                    || cachedGuideTextDocument != document
+                                    || !chapter.belongsTo(activeGuideReaderFingerprint)) {
+                                showErrorAction(getString(R.string.guide_chapters_stale));
+                                return;
+                            }
+                            reader.scrollToPosition(new GuideTextReaderView.Position(
+                                    chapter.anchor, 0, 0, reader.getWidth()));
+                        });
+                    }
+
+                    @Override public void onClose() {
+                        if (holder[0] != null) dismissPanelAnimated(holder[0]);
+                    }
+                });
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
+                settingsOverlayWidth(600), settingsOverlayHeight(620), Gravity.CENTER);
+        params.setMargins(dp(12), dp(12), dp(12), dp(12));
+        holder[0] = showPanelOverlay(panel, params, null);
+    }
+
+    private void showGuideSearch(GuideEntry guide) {
+        if (guide == null || viewingGuideInline != guide
+                || activeGuideReaderEntry != guide
+                || cachedGuideTextEntry != guide || cachedGuideTextDocument == null) {
+            showErrorAction(getString(R.string.guide_search_wait));
+            return;
+        }
+        GuideTextDocument document = cachedGuideTextDocument;
+        final PanelOverlay[] holder = new PanelOverlay[1];
+        GuideSearchPanel panel = new GuideSearchPanel(this, document,
+                new GuideSearchPanel.Listener() {
+                    @Override public void onSearchRequested(Runnable action) {
+                        runAfterTextInputFocusRelease(action);
+                    }
+
+                    @Override public void onJump(GuideTextSearch.Hit hit) {
+                        if (holder[0] == null) return;
+                        dismissPanelAnimated(holder[0], () -> {
+                            GuideTextReaderView reader = activeGuideReaderView;
+                            if (viewingGuideInline != guide || activeGuideReaderEntry != guide
+                                    || cachedGuideTextDocument != document || reader == null) {
+                                return;
+                            }
+                            int column = GuideEntry.READER_MODE_ORIGINAL.equals(guide.readerMode)
+                                    ? hit.horizontalColumn : 0;
+                            reader.scrollToSearchMatch(hit.anchor, hit.length, column);
+                        });
+                    }
+
+                    @Override public void onClose() {
+                        if (holder[0] != null) dismissPanelAnimated(holder[0]);
+                    }
+                });
+        bindTextInputFocus(panel.queryInput());
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
+                settingsOverlayWidth(600), settingsOverlayHeight(620), Gravity.CENTER);
+        params.setMargins(dp(12), dp(12), dp(12), dp(12));
+        holder[0] = showPanelOverlay(panel, params, null);
     }
 
     private Drawable guideReaderOverlayPanel() {
@@ -11119,11 +12061,18 @@ public class AssistantActivity extends Activity {
             intent.setData(uri);
         }
         startExternalActivity(intent, getString(R.string.guide_open_chooser),
-                R.string.guide_open_failed, pdf);
+                R.string.guide_open_failed, pdf,
+                GuideEntry.TYPE_LINK.equals(guide.type)
+                        ? () -> showGuideLinkFallback(guide) : null);
     }
 
     private void startExternalActivity(Intent intent, String chooserTitle,
             int errorMessageRes, boolean preferDefaultHandler) {
+        startExternalActivity(intent, chooserTitle, errorMessageRes, preferDefaultHandler, null);
+    }
+
+    private void startExternalActivity(Intent intent, String chooserTitle,
+            int errorMessageRes, boolean preferDefaultHandler, Runnable onFailure) {
         if (preferDefaultHandler) {
             try {
                 startActivity(intent);
@@ -11134,8 +12083,18 @@ public class AssistantActivity extends Activity {
         try {
             startActivity(Intent.createChooser(intent, chooserTitle));
         } catch (Exception ex) {
-            showErrorAction(getString(errorMessageRes));
+            if (onFailure != null) {
+                onFailure.run();
+            } else {
+                showErrorAction(getString(errorMessageRes));
+            }
         }
+    }
+
+    private void showGuideLinkFallback(GuideEntry guide) {
+        showSettingsDecisionPanel(getString(R.string.guide_link_open_failed_title),
+                getString(R.string.guide_link_open_failed_help), null, null,
+                getString(R.string.guide_copy_link), () -> copyGuideContent(guide));
     }
 
     private Uri guideUri(GuideEntry guide) {
@@ -12801,6 +13760,7 @@ public class AssistantActivity extends Activity {
             copy.highlighted = macro.highlighted;
             copy.role = macro.normalizedRole();
             copy.iconKey = macro.iconKey;
+            copy.loopMaxSeconds = macro.loopMaxSeconds;
             macros.add(copy);
         }
         GameProfile profile = new GameProfile(getString(R.string.profile_copy_name, source.name),
@@ -13792,6 +14752,7 @@ public class AssistantActivity extends Activity {
         }
         String[] draftIconKey = {macro.iconKey};
         String[] draftRole = {macro.normalizedRole()};
+        int[] draftLoopSeconds = {macro.loopMaxSeconds};
 
         LinearLayout editorShell = new LinearLayout(this);
         editorShell.setOrientation(LinearLayout.VERTICAL);
@@ -13917,6 +14878,69 @@ public class AssistantActivity extends Activity {
         });
         iconActions.addView(defaultIconButton, new LinearLayout.LayoutParams(-1, 0, 1));
 
+        TextView loopLabel = text(getString(R.string.macro_loop_title),
+                HeimdallUi.TYPE_LABEL, MUTED, true);
+        basics.addView(loopLabel, new LinearLayout.LayoutParams(-1, dp(28)));
+        Button loopToggle = editorButton("", () -> {});
+        int[] loopDurations = {30, 60, 180, 300};
+        Button[] durationButtons = new Button[loopDurations.length];
+        Runnable updateLoopChoices = () -> {
+            loopToggle.setText(draftLoopSeconds[0] == 0
+                    ? getString(R.string.macro_loop_off)
+                    : getString(R.string.macro_loop_on));
+            loopToggle.setSelected(draftLoopSeconds[0] > 0);
+            HeimdallUi.applyChoiceButton(this, loopToggle, draftLoopSeconds[0] > 0);
+            for (int i = 0; i < durationButtons.length; i++) {
+                if (durationButtons[i] != null) {
+                    durationButtons[i].setSelected(draftLoopSeconds[0] == loopDurations[i]);
+                    HeimdallUi.applyChoiceButton(this, durationButtons[i],
+                            draftLoopSeconds[0] == loopDurations[i]);
+                }
+            }
+        };
+        loopToggle.setOnClickListener(v -> {
+            draftLoopSeconds[0] = draftLoopSeconds[0] == 0
+                    ? Macro.DEFAULT_LOOP_SECONDS : 0;
+            updateLoopChoices.run();
+        });
+        loopToggle.setSingleLine(true);
+        basics.addView(loopToggle, new LinearLayout.LayoutParams(-1, dp(44)));
+        TextView loopLimitLabel = text(getString(R.string.macro_loop_limit),
+                HeimdallUi.TYPE_META, MUTED, false);
+        LinearLayout.LayoutParams loopLimitParams = new LinearLayout.LayoutParams(-1, dp(22));
+        loopLimitParams.setMargins(0, dp(4), 0, 0);
+        basics.addView(loopLimitLabel, loopLimitParams);
+        LinearLayout loopDurationGrid = new LinearLayout(this);
+        loopDurationGrid.setOrientation(LinearLayout.VERTICAL);
+        for (int i = 0; i < loopDurations.length; i++) {
+            final int seconds = loopDurations[i];
+            if (i % 2 == 0) {
+                LinearLayout row = new LinearLayout(this);
+                row.setOrientation(LinearLayout.HORIZONTAL);
+                loopDurationGrid.addView(row, new LinearLayout.LayoutParams(-1, dp(44)));
+            }
+            Button durationButton = editorButton(getString(R.string.macro_loop_minutes_seconds,
+                    seconds < 60 ? seconds : seconds / 60,
+                    seconds < 60 ? getString(R.string.macro_loop_seconds_unit)
+                            : getString(R.string.macro_loop_minutes_unit)), () -> {
+                draftLoopSeconds[0] = seconds;
+                updateLoopChoices.run();
+            });
+            durationButton.setTextSize(HeimdallUi.TYPE_BUTTON_COMPACT);
+            durationButton.setSingleLine(true);
+            durationButton.setPadding(dp(2), 0, dp(2), 0);
+            durationButtons[i] = durationButton;
+            LinearLayout.LayoutParams durationParams = new LinearLayout.LayoutParams(0, -1, 1);
+            durationParams.setMargins(0, dp(3), dp(4), dp(3));
+            LinearLayout row = (LinearLayout) loopDurationGrid.getChildAt(i / 2);
+            row.addView(durationButton, durationParams);
+        }
+        updateLoopChoices.run();
+        basics.addView(loopDurationGrid, new LinearLayout.LayoutParams(-1, -2));
+        TextView loopHelp = text(getString(R.string.macro_loop_help),
+                HeimdallUi.TYPE_META, MUTED, false);
+        basics.addView(loopHelp, new LinearLayout.LayoutParams(-1, -2));
+
         View columnDivider = new View(this);
         columnDivider.setBackgroundColor(HeimdallUi.componentColors(this).structuralDivider);
         LinearLayout.LayoutParams columnDividerParams = new LinearLayout.LayoutParams(dp(1), -1);
@@ -14032,6 +15056,7 @@ public class AssistantActivity extends Activity {
             macro.highlighted = Macro.ROLE_PRIMARY.equals(macro.role);
             macro.iconKey = draftIconKey[0] == null || draftIconKey[0].trim().length() == 0
                     ? null : draftIconKey[0].trim();
+            macro.loopMaxSeconds = Macro.normalizeLoopSeconds(draftLoopSeconds[0]);
             macro.steps.clear();
             macro.steps.addAll(draftSteps);
             if (macro.steps.isEmpty()) {
@@ -15897,6 +16922,7 @@ public class AssistantActivity extends Activity {
     private final class TouchPadView extends View {
         private static final int LINUX_BTN_LEFT = 272;
         private static final int LINUX_BTN_RIGHT = 273;
+        private static final int LINUX_BTN_MIDDLE = 274;
         private static final long VIRTUAL_MOUSE_TAP_PULSE_MS = 32L;
         private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final RectF rect = new RectF();
@@ -15956,6 +16982,11 @@ public class AssistantActivity extends Activity {
         private float virtualMouseTwoFingerStartAY;
         private float virtualMouseTwoFingerStartBX;
         private float virtualMouseTwoFingerStartBY;
+        private boolean virtualMouseThreeFingerGestureActive;
+        private boolean virtualMouseThreeFingerTapCandidate;
+        private final int[] virtualMouseThreeFingerPointerIds = {-1, -1, -1};
+        private final float[] virtualMouseThreeFingerStartX = new float[3];
+        private final float[] virtualMouseThreeFingerStartY = new float[3];
         private float virtualMouseLeftPressProgress;
         private float virtualMouseRightPressProgress;
         private float virtualMouseFeedbackLastX = -1f;
@@ -17159,7 +18190,8 @@ public class AssistantActivity extends Activity {
         }
 
         private boolean virtualMouseUsesButtonStrip() {
-            return !touchpadSettings.virtualMouseFullGestureArea;
+            return touchpadSettings.virtualMouseGesturesEnabled
+                    && !touchpadSettings.virtualMouseFullGestureArea;
         }
 
         private boolean handleVirtualMouseTouch(MotionEvent event) {
@@ -17180,6 +18212,18 @@ public class AssistantActivity extends Activity {
             }
             VirtualMouseDispatcher dispatcher = ensureVirtualMouseDispatcher(
                     action == MotionEvent.ACTION_DOWN);
+            boolean gesturesEnabled = touchpadSettings.virtualMouseGesturesEnabled;
+            if (!gesturesEnabled) {
+                if (virtualMouseButton != 0 || virtualMouseGestureLeftButtonDown
+                        || virtualMouseTapPulseDown) {
+                    releaseAllVirtualMouseButtons(dispatcher);
+                }
+                cancelVirtualMouseTapCandidate();
+                clearVirtualMouseTwoFingerTapCandidate();
+                clearVirtualMouseThreeFingerGesture();
+                virtualMouseScrolling = false;
+                virtualMouseScrollAccumulator = 0f;
+            }
             if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN) {
                 float pointerX = event.getX(actionIndex);
                 float pointerY = event.getY(actionIndex);
@@ -17187,7 +18231,16 @@ public class AssistantActivity extends Activity {
                 if (action == MotionEvent.ACTION_POINTER_DOWN) {
                     cancelVirtualMouseTapCandidate();
                 }
-                if (pointerY >= virtualMouseButtonTop() && virtualMouseButtonPointerId < 0) {
+                if (virtualMouseThreeFingerGestureActive) {
+                    virtualMouseThreeFingerTapCandidate = false;
+                    clearVirtualMouseTwoFingerTapCandidate();
+                    virtualMouseScrolling = false;
+                    virtualMouseScrollAccumulator = 0f;
+                    invalidateVirtualMouseFeedback();
+                    return true;
+                }
+                if (gesturesEnabled && pointerY >= virtualMouseButtonTop()
+                        && virtualMouseButtonPointerId < 0) {
                     virtualMouseButtonPointerId = actionPointerId;
                     virtualMouseButton = pointerX < rect.centerX()
                             ? LINUX_BTN_LEFT : LINUX_BTN_RIGHT;
@@ -17199,15 +18252,20 @@ public class AssistantActivity extends Activity {
                     virtualMouseLastY = pointerY;
                     x = pointerX;
                     y = pointerY;
-                    if (action == MotionEvent.ACTION_DOWN) {
+                    if (action == MotionEvent.ACTION_DOWN && gesturesEnabled) {
                         beginVirtualMouseTapCandidate(event.getEventTime(), pointerX, pointerY);
                     }
                 }
-                if (event.getPointerCount() == 2 && virtualMouseButtonPointerId < 0
+                if (gesturesEnabled && event.getPointerCount() == 2
+                        && virtualMouseButtonPointerId < 0
                         && startVirtualMouseTwoFingerGesture(event, actionPointerId,
                                 firstPointerWasTapCandidate)) {
                     virtualMouseScrolling = true;
                     virtualMouseScrollLastY = averagePointerY(event, -1);
+                    virtualMouseScrollAccumulator = 0f;
+                } else if (gesturesEnabled && event.getPointerCount() == 3
+                        && startVirtualMouseThreeFingerGesture(event)) {
+                    virtualMouseScrolling = false;
                     virtualMouseScrollAccumulator = 0f;
                 } else if (event.getPointerCount() > 2) {
                     clearVirtualMouseTwoFingerTapCandidate();
@@ -17216,7 +18274,12 @@ public class AssistantActivity extends Activity {
                 return true;
             }
             if (action == MotionEvent.ACTION_MOVE) {
-                if (virtualMouseScrolling && event.getPointerCount() >= 2) {
+                if (virtualMouseThreeFingerGestureActive) {
+                    if (virtualMouseThreeFingerTapCandidate
+                            && virtualMouseThreeFingerMovedBeyondTouchSlop(event)) {
+                        virtualMouseThreeFingerTapCandidate = false;
+                    }
+                } else if (virtualMouseScrolling && event.getPointerCount() >= 2) {
                     if (virtualMouseTwoFingerTapCandidate
                             && virtualMouseTwoFingerMovedBeyondTouchSlop(event)) {
                         virtualMouseTwoFingerTapCandidate = false;
@@ -17276,6 +18339,19 @@ public class AssistantActivity extends Activity {
                 return true;
             }
             if (action == MotionEvent.ACTION_POINTER_UP || action == MotionEvent.ACTION_UP) {
+                if (virtualMouseThreeFingerGestureActive) {
+                    if (virtualMouseThreeFingerTapCandidate
+                            && event.getPointerCount() == 3
+                            && !virtualMouseThreeFingerMovedBeyondTouchSlop(event)) {
+                        clickVirtualMouseButton(dispatcher, LINUX_BTN_MIDDLE);
+                    }
+                    virtualMouseThreeFingerTapCandidate = false;
+                    if (action == MotionEvent.ACTION_UP) {
+                        clearVirtualMouseGesture();
+                    }
+                    invalidateVirtualMouseFeedback();
+                    return true;
+                }
                 boolean singleTap = action == MotionEvent.ACTION_UP
                         && actionPointerId == virtualMouseMotionPointerId
                         && virtualMouseTapCandidate
@@ -17404,6 +18480,52 @@ public class AssistantActivity extends Activity {
             virtualMouseTwoFingerPointerIdB = -1;
         }
 
+        private boolean startVirtualMouseThreeFingerGesture(MotionEvent event) {
+            if (!touchpadSettings.virtualMouseMiddleClickGestureEnabled
+                    || !virtualMouseTwoFingerTapCandidate
+                    || virtualMouseButtonPointerId >= 0
+                    || event.getPointerCount() != 3) {
+                return false;
+            }
+            for (int i = 0; i < 3; i++) {
+                if (event.getY(i) >= virtualMouseButtonTop()) {
+                    return false;
+                }
+            }
+            virtualMouseThreeFingerGestureActive = true;
+            virtualMouseThreeFingerTapCandidate = true;
+            for (int i = 0; i < 3; i++) {
+                virtualMouseThreeFingerPointerIds[i] = event.getPointerId(i);
+                virtualMouseThreeFingerStartX[i] = event.getX(i);
+                virtualMouseThreeFingerStartY[i] = event.getY(i);
+            }
+            clearVirtualMouseTwoFingerTapCandidate();
+            return true;
+        }
+
+        private boolean virtualMouseThreeFingerMovedBeyondTouchSlop(MotionEvent event) {
+            for (int i = 0; i < 3; i++) {
+                int pointerIndex = event.findPointerIndex(virtualMouseThreeFingerPointerIds[i]);
+                if (pointerIndex < 0
+                        || event.getY(pointerIndex) >= virtualMouseButtonTop()
+                        || movedBeyondSlop(event.getX(pointerIndex), event.getY(pointerIndex),
+                                virtualMouseThreeFingerStartX[i],
+                                virtualMouseThreeFingerStartY[i],
+                                virtualMouseTouchSlop)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private void clearVirtualMouseThreeFingerGesture() {
+            virtualMouseThreeFingerGestureActive = false;
+            virtualMouseThreeFingerTapCandidate = false;
+            virtualMouseThreeFingerPointerIds[0] = -1;
+            virtualMouseThreeFingerPointerIds[1] = -1;
+            virtualMouseThreeFingerPointerIds[2] = -1;
+        }
+
         private boolean movedBeyondSlop(float pointerX, float pointerY,
                 float startX, float startY, int slop) {
             float dx = pointerX - startX;
@@ -17455,6 +18577,7 @@ public class AssistantActivity extends Activity {
             cancelVirtualMouseTapPulse();
             dispatcher.button(LINUX_BTN_LEFT, false);
             dispatcher.button(LINUX_BTN_RIGHT, false);
+            dispatcher.button(LINUX_BTN_MIDDLE, false);
             virtualMouseButton = 0;
             virtualMouseButtonPointerId = -1;
             virtualMouseGestureLeftButtonDown = false;
@@ -17504,6 +18627,7 @@ public class AssistantActivity extends Activity {
             virtualMouseGestureLeftButtonDown = false;
             virtualMouseLastTapUpTime = 0L;
             clearVirtualMouseTwoFingerTapCandidate();
+            clearVirtualMouseThreeFingerGesture();
             x = -1f;
             y = -1f;
             resetSurfacePressFeedback();

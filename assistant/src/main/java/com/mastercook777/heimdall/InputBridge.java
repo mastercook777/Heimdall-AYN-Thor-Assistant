@@ -2,6 +2,9 @@ package com.mastercook777.heimdall;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.SystemClock;
 
 import java.util.List;
 import java.util.concurrent.ExecutionException;
@@ -82,6 +85,7 @@ public final class InputBridge {
             });
     private static final MacroDispatchGate<InputBackend> MACRO_DISPATCH_GATE =
             new MacroDispatchGate<>();
+    private static volatile MacroLoopSession activeMacroLoop;
 
     private InputBridge() {
     }
@@ -229,6 +233,11 @@ public final class InputBridge {
     public static MacroDispatchResult dispatch(Context context, Macro macro,
             boolean enhancedTouchMode, boolean protectThorMapping,
             Callback callback) {
+        MacroLoopSession runningLoop = activeMacroLoop;
+        if (runningLoop != null && runningLoop.macro == macro) {
+            return dispatchMacro(context, macro, runningLoop.backend,
+                    runningLoop.mappedTouch, runningLoop.allowControllerSteps, callback);
+        }
         if (!controllerMacroAllowed(context, macro, callback)) {
             return MacroDispatchResult.REJECTED;
         }
@@ -258,7 +267,7 @@ public final class InputBridge {
         }
 
         MacroDispatchGate.Result<InputBackend> gate = MACRO_DISPATCH_GATE.onTap(
-                macro, macro.hasCancellableControllerHold(), backend);
+                macro, macro.loopMaxSeconds > 0 || macro.hasCancellableControllerHold(), backend);
         if (gate.decision == MacroDispatchGate.Decision.BUSY) {
             return MacroDispatchResult.BUSY;
         }
@@ -270,6 +279,11 @@ public final class InputBridge {
         }
         if (gate.decision == MacroDispatchGate.Decision.CANCEL) {
             try {
+                MacroLoopSession loop = activeMacroLoop;
+                if (loop != null && loop.id == gate.id) {
+                    loop.stop();
+                    return MacroDispatchResult.CANCEL_REQUESTED;
+                }
                 gate.payload.cancelMacro(context.getApplicationContext());
                 return MacroDispatchResult.CANCEL_REQUESTED;
             } catch (Throwable ignored) {
@@ -278,6 +292,13 @@ public final class InputBridge {
             }
         }
 
+        if (macro.loopMaxSeconds > 0) {
+            MacroLoopSession loop = new MacroLoopSession(context, macro, backend,
+                    mappedTouch, allowControllerSteps, gate.id, callback);
+            activeMacroLoop = loop;
+            loop.start();
+            return loop.finished ? MacroDispatchResult.REJECTED : MacroDispatchResult.STARTED;
+        }
         GuardedMacroCallback guarded = new GuardedMacroCallback(gate.id, callback);
         try {
             if (mappedTouch) {
@@ -297,8 +318,159 @@ public final class InputBridge {
         return MACRO_DISPATCH_GATE.hasActive();
     }
 
+    static boolean isMacroLoopRunning(Macro macro) {
+        MacroLoopSession loop = activeMacroLoop;
+        return loop != null && loop.macro == macro && !loop.finished;
+    }
+
+    static void stopActiveMacroLoop() {
+        MacroLoopSession loop = activeMacroLoop;
+        if (loop != null) {
+            loop.stop();
+        }
+    }
+
     private static void finishMacroDispatch(long id) {
         MACRO_DISPATCH_GATE.finish(id);
+    }
+
+    private static final class MacroLoopSession {
+        private static final long REPEAT_PAUSE_MS = 120L;
+        final long id;
+        final Macro macro;
+        final Macro playbackMacro;
+        final Context context;
+        final InputBackend backend;
+        final boolean mappedTouch;
+        final boolean allowControllerSteps;
+        final Callback delegate;
+        final Handler handler = new Handler(Looper.getMainLooper());
+        final long deadline;
+        volatile boolean finished;
+        private boolean stopping;
+        private boolean inFlight;
+        private boolean timedOut;
+        private volatile long lastStatusAt;
+        private final Runnable timeout = () -> {
+            timedOut = true;
+            stop();
+        };
+
+        MacroLoopSession(Context context, Macro macro, InputBackend backend,
+                boolean mappedTouch, boolean allowControllerSteps, long id, Callback delegate) {
+            this.context = context.getApplicationContext();
+            this.macro = macro;
+            List<MacroStep> snapshot = new java.util.ArrayList<>();
+            for (MacroStep step : macro.steps) {
+                snapshot.add(new MacroStep(step.type, step.value));
+            }
+            playbackMacro = new Macro(macro.label, snapshot);
+            this.backend = backend;
+            this.mappedTouch = mappedTouch;
+            this.allowControllerSteps = allowControllerSteps;
+            this.id = id;
+            this.delegate = delegate;
+            deadline = SystemClock.elapsedRealtime()
+                    + Macro.normalizeLoopSeconds(macro.loopMaxSeconds) * 1000L;
+        }
+
+        void start() {
+            handler.postDelayed(timeout, Math.max(1L,
+                    deadline - SystemClock.elapsedRealtime()));
+            dispatchNext();
+        }
+
+        void stop() {
+            if (Looper.myLooper() == Looper.getMainLooper()) {
+                stopOnMain();
+            } else {
+                handler.post(this::stopOnMain);
+            }
+        }
+
+        private void stopOnMain() {
+            if (finished || stopping) return;
+            stopping = true;
+            handler.removeCallbacks(timeout);
+            if (!inFlight) {
+                finish(true);
+                return;
+            }
+            try {
+                backend.cancelMacro(context);
+            } catch (Throwable ignored) {
+                delegate.onError(context.getString(R.string.macro_status_dispatch_failed));
+            }
+        }
+
+        private void dispatchNext() {
+            if (finished || stopping) return;
+            if (SystemClock.elapsedRealtime() >= deadline) {
+                stop();
+                return;
+            }
+            inFlight = true;
+            Callback iteration = new Callback() {
+                private final AtomicBoolean completed = new AtomicBoolean();
+
+                @Override public void onStatus(String message) {
+                    long now = SystemClock.elapsedRealtime();
+                    if (!finished && !stopping && now - lastStatusAt >= 2000L) {
+                        lastStatusAt = now;
+                        delegate.onStatus(message);
+                    }
+                }
+
+                @Override public void onError(String message) {
+                    if (completed.compareAndSet(false, true)) {
+                        handler.post(() -> {
+                            if (finished) return;
+                            delegate.onError(message);
+                            finish(false);
+                        });
+                    }
+                }
+
+                @Override public void onMacroFinished(boolean cancelled) {
+                    if (completed.compareAndSet(false, true)) {
+                        handler.post(() -> {
+                            if (finished) return;
+                            inFlight = false;
+                            if (cancelled || stopping) {
+                                finish(true);
+                            } else {
+                                handler.postDelayed(MacroLoopSession.this::dispatchNext,
+                                        REPEAT_PAUSE_MS);
+                            }
+                        });
+                    }
+                }
+            };
+            try {
+                if (mappedTouch) {
+                    SHIZUKU_BACKEND.dispatchMappedTouchMacro(context, playbackMacro,
+                            allowControllerSteps, iteration);
+                } else {
+                    backend.dispatchMacro(context, playbackMacro, iteration);
+                }
+            } catch (Throwable ignored) {
+                iteration.onError(context.getString(R.string.macro_status_dispatch_failed));
+            }
+        }
+
+        private void finish(boolean cancelled) {
+            if (finished) return;
+            finished = true;
+            handler.removeCallbacks(timeout);
+            if (activeMacroLoop == this) activeMacroLoop = null;
+            finishMacroDispatch(id);
+            if (cancelled) {
+                delegate.onStatus(context.getString(timedOut
+                        ? R.string.macro_loop_time_limit_reached
+                        : R.string.macro_loop_stopped, macro.label));
+            }
+            delegate.onMacroFinished(cancelled);
+        }
     }
 
     public static boolean dispatchTouchMove(Context context, int displayId, int width, int height,

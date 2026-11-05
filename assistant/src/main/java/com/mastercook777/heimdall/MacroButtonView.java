@@ -26,6 +26,7 @@ final class MacroButtonView extends Button {
     private Drawable macroIcon;
     private boolean macroIconTintable = true;
     private boolean macroPressedVisual;
+    private boolean macroLoopRunning;
     private final int macroLongPressTouchSlop;
     private final Runnable triggerMacroLongPress = this::triggerMacroLongPress;
     private Runnable macroLongPressAction;
@@ -55,8 +56,21 @@ final class MacroButtonView extends Button {
 
     void setMacroLabel(String label) {
         macroLabel = label == null ? "" : label;
-        setContentDescription(macroLabel);
+        updateMacroContentDescription();
         invalidate();
+    }
+
+    void setMacroLoopRunning(boolean running) {
+        if (macroLoopRunning == running) return;
+        macroLoopRunning = running;
+        updateMacroContentDescription();
+        invalidate();
+    }
+
+    private void updateMacroContentDescription() {
+        setContentDescription(macroLoopRunning
+                ? getContext().getString(R.string.macro_loop_running_description, macroLabel)
+                : macroLabel);
     }
 
     void setMacroLabelVisible(boolean visible) {
@@ -204,6 +218,13 @@ final class MacroButtonView extends Button {
         int height = getHeight();
         if (width <= 0 || height <= 0) {
             return;
+        }
+        if (macroLoopRunning) {
+            macroPressPaint.setStyle(Paint.Style.STROKE);
+            macroPressPaint.setStrokeWidth(dp(3));
+            macroPressPaint.setColor(HeimdallUi.accent(getContext()));
+            RectF runningOutline = new RectF(dp(2), dp(2), width - dp(2), height - dp(2));
+            canvas.drawRoundRect(runningOutline, dp(10), dp(10), macroPressPaint);
         }
         float contentYOffset = macroPressedVisual ? dp(1) : 0f;
         if (macroPressedVisual && !DebugPerformanceDiagnostics.isFlatUi()) {

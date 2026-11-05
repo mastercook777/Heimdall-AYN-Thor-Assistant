@@ -120,9 +120,6 @@ final class CanvasImageView extends ImageView implements CanvasCompositionSurfac
 
     @Override
     protected void onSizeChanged(int width, int height, int oldWidth, int oldHeight) {
-        if (oldWidth > 0 && oldHeight > 0) {
-            updateCompositionFromMatrix();
-        }
         super.onSizeChanged(width, height, oldWidth, oldHeight);
         applyStoredComposition();
     }
@@ -172,7 +169,6 @@ final class CanvasImageView extends ImageView implements CanvasCompositionSurfac
         compositionMatrix.postScale(scale, scale);
         compositionMatrix.postTranslate(tx, ty);
         constrainMatrix();
-        updateCompositionFromMatrix();
         applyMatrix();
     }
 
