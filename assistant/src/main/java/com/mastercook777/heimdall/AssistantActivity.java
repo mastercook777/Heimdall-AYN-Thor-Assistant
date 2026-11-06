@@ -8,8 +8,10 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.ActivityOptions;
 import android.content.ClipData;
+import android.content.ActivityNotFoundException;
 import android.content.BroadcastReceiver;
 import android.content.ClipboardManager;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
@@ -467,6 +469,10 @@ public class AssistantActivity extends Activity {
     private final Map<String, View> quickActionViews = new HashMap<>();
     private WidgetHostLayout mainWidgetHost;
     private QuickMediaController quickMediaController;
+    private static final int MEDIA_PERMISSION_RETURN_NONE = 0;
+    private static final int MEDIA_PERMISSION_RETURN_ACCESS = 1;
+    private static final int MEDIA_PERMISSION_RETURN_APP_INFO = 2;
+    private int pendingMediaPermissionReturn = MEDIA_PERMISSION_RETURN_NONE;
     private final List<UpperScreenMagnifierView> magnifierViews = new ArrayList<>();
     private final Map<String, Float> magnifierRenderedAspectRatios = new HashMap<>();
     private final List<CanvasWidgetView> canvasViews = new ArrayList<>();
@@ -889,6 +895,15 @@ public class AssistantActivity extends Activity {
         super.onResume();
         activityResumed = true;
         if (!quickMediaSurfaces.isEmpty()) quickMediaController.start();
+        if (pendingMediaPermissionReturn != MEDIA_PERMISSION_RETURN_NONE) {
+            int returnStep = pendingMediaPermissionReturn;
+            pendingMediaPermissionReturn = MEDIA_PERMISSION_RETURN_NONE;
+            uiHandler.post(() -> {
+                if (!activityResumed || quickMediaSurfaces.isEmpty()
+                        || quickMediaController.snapshot().accessGranted) return;
+                showQuickMediaPermissionDialog(returnStep);
+            });
+        }
         screenPowerObserver.refresh();
         updateGameFocusProtection(true);
         recordFocusBoundary("resume-protected");
@@ -3171,16 +3186,7 @@ public class AssistantActivity extends Activity {
         if (quickMediaController == null) return;
         QuickMediaController.Snapshot snapshot = quickMediaController.snapshot();
         if (!snapshot.accessGranted) {
-            new AlertDialog.Builder(this)
-                    .setTitle(R.string.quick_media_permission)
-                    .setMessage(R.string.quick_media_permission_explain)
-                    .setNegativeButton(R.string.common_cancel, null)
-                    .setNeutralButton(R.string.quick_media_open_app_info, (dialog, which) ->
-                            startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                                    Uri.parse("package:" + getPackageName()))))
-                    .setPositiveButton(R.string.quick_media_open_settings, (dialog, which) ->
-                            startActivity(new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)))
-                    .show();
+            showQuickMediaPermissionDialog(MEDIA_PERMISSION_RETURN_NONE);
             return;
         }
         if (snapshot.sessions.isEmpty()) {
@@ -3290,6 +3296,55 @@ public class AssistantActivity extends Activity {
                 Math.min(dp(520), metrics.widthPixels - dp(56)),
                 ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER);
         holder[0] = showPanelOverlay(shell, params, null);
+    }
+
+    private void showQuickMediaPermissionDialog(int returnStep) {
+        AlertDialog.Builder dialog = new AlertDialog.Builder(this)
+                .setTitle(R.string.quick_media_permission)
+                .setNegativeButton(R.string.common_cancel, null);
+        if (returnStep == MEDIA_PERMISSION_RETURN_ACCESS) {
+            dialog.setMessage(R.string.quick_media_restricted_step)
+                    .setNeutralButton(R.string.quick_media_retry_access,
+                            (ignored, which) -> openQuickMediaAccessSettings())
+                    .setPositiveButton(R.string.quick_media_open_app_info,
+                            (ignored, which) -> openQuickMediaAppInfo());
+        } else {
+            dialog.setMessage(returnStep == MEDIA_PERMISSION_RETURN_APP_INFO
+                            ? R.string.quick_media_retry_step
+                            : R.string.quick_media_permission_explain)
+                    .setPositiveButton(R.string.quick_media_open_settings,
+                            (ignored, which) -> openQuickMediaAccessSettings());
+        }
+        dialog.show();
+    }
+
+    private void openQuickMediaAccessSettings() {
+        Intent detail = new Intent(Settings.ACTION_NOTIFICATION_LISTENER_DETAIL_SETTINGS)
+                .putExtra(Settings.EXTRA_NOTIFICATION_LISTENER_COMPONENT_NAME,
+                        new ComponentName(this, QuickMediaSessionListenerService.class)
+                                .flattenToString());
+        pendingMediaPermissionReturn = MEDIA_PERMISSION_RETURN_ACCESS;
+        try {
+            startActivity(detail);
+        } catch (ActivityNotFoundException | SecurityException ignored) {
+            try {
+                startActivity(new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS));
+            } catch (ActivityNotFoundException | SecurityException unavailable) {
+                pendingMediaPermissionReturn = MEDIA_PERMISSION_RETURN_NONE;
+                showErrorAction(getString(R.string.quick_media_settings_unavailable));
+            }
+        }
+    }
+
+    private void openQuickMediaAppInfo() {
+        pendingMediaPermissionReturn = MEDIA_PERMISSION_RETURN_APP_INFO;
+        try {
+            startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    Uri.parse("package:" + getPackageName())));
+        } catch (ActivityNotFoundException | SecurityException ignored) {
+            pendingMediaPermissionReturn = MEDIA_PERMISSION_RETURN_NONE;
+            showErrorAction(getString(R.string.quick_media_settings_unavailable));
+        }
     }
 
     private void switchToQuickMediaSession(MediaSession.Token token) {
