@@ -471,7 +471,6 @@ public class AssistantActivity extends Activity {
     private QuickMediaController quickMediaController;
     private static final int MEDIA_PERMISSION_RETURN_NONE = 0;
     private static final int MEDIA_PERMISSION_RETURN_ACCESS = 1;
-    private static final int MEDIA_PERMISSION_RETURN_APP_INFO = 2;
     private int pendingMediaPermissionReturn = MEDIA_PERMISSION_RETURN_NONE;
     private final List<UpperScreenMagnifierView> magnifierViews = new ArrayList<>();
     private final Map<String, Float> magnifierRenderedAspectRatios = new HashMap<>();
@@ -3317,17 +3316,12 @@ public class AssistantActivity extends Activity {
         if (returnStep == MEDIA_PERMISSION_RETURN_ACCESS) {
             showSettingsDecisionPanel(getString(R.string.quick_media_restricted_title),
                     getString(R.string.quick_media_restricted_step),
+                    null, null,
                     getString(R.string.quick_media_retry_access),
-                    this::openQuickMediaAccessSettings,
-                    getString(R.string.quick_media_open_app_info),
-                    this::openQuickMediaAppInfo);
+                    this::openQuickMediaAccessSettings);
         } else {
-            showSettingsDecisionPanel(getString(returnStep == MEDIA_PERMISSION_RETURN_APP_INFO
-                            ? R.string.quick_media_retry_title
-                            : R.string.quick_media_permission_title),
-                    getString(returnStep == MEDIA_PERMISSION_RETURN_APP_INFO
-                            ? R.string.quick_media_retry_step
-                            : R.string.quick_media_permission_explain),
+            showSettingsDecisionPanel(getString(R.string.quick_media_permission_title),
+                    getString(R.string.quick_media_permission_explain),
                     null, null,
                     getString(R.string.quick_media_open_settings),
                     this::openQuickMediaAccessSettings);
@@ -3349,29 +3343,6 @@ public class AssistantActivity extends Activity {
                 pendingMediaPermissionReturn = MEDIA_PERMISSION_RETURN_NONE;
                 showErrorAction(getString(R.string.quick_media_settings_unavailable));
             }
-        }
-    }
-
-    private void openQuickMediaAppInfo() {
-        pendingMediaPermissionReturn = MEDIA_PERMISSION_RETURN_APP_INFO;
-        Intent appInfo = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                Uri.parse("package:" + getPackageName()));
-        DisplayManager displays = (DisplayManager) getSystemService(DISPLAY_SERVICE);
-        Display upper = displays == null ? null : displays.getDisplay(Display.DEFAULT_DISPLAY);
-        try {
-            if (upper != null && upper.isValid()) {
-                // Restricted settings is hidden in Thor's lower-screen embedded App info.
-                // Start a separate Settings task so an existing lower-screen task is not reused.
-                appInfo.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_MULTIPLE_TASK);
-                ActivityOptions options = ActivityOptions.makeBasic();
-                options.setLaunchDisplayId(upper.getDisplayId());
-                startActivity(appInfo, options.toBundle());
-            } else {
-                startActivity(appInfo);
-            }
-        } catch (RuntimeException ignored) {
-            pendingMediaPermissionReturn = MEDIA_PERMISSION_RETURN_NONE;
-            showErrorAction(getString(R.string.quick_media_settings_unavailable));
         }
     }
 
