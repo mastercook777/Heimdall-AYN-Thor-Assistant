@@ -275,6 +275,7 @@ public final class ThorAccessibilityService extends AccessibilityService {
                 EventWindow window = resolveEventWindow(event.getWindowId());
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
                         && window.displayId == Display.DEFAULT_DISPLAY) {
+                    // A launcher event may precede the settled upper window scan.
                     ForegroundAppTracker.clear();
                 }
             }
@@ -361,7 +362,8 @@ public final class ThorAccessibilityService extends AccessibilityService {
                 || upperOwnerRoot.getPackageName() == null
                 ? "" : upperOwnerRoot.getPackageName().toString();
         if (isLauncherPackage(upperOwnerPackage)) {
-            ForegroundAppTracker.clear();
+            if (best == null) ForegroundAppTracker.clearForUpperLauncher();
+            else ForegroundAppTracker.clear();
             DebugPerformanceDiagnostics.endTask(
                     "Accessibility getWindows scan", started);
             return;

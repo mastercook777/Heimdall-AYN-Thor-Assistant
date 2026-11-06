@@ -16,6 +16,9 @@ public final class Macro {
     public boolean highlighted;
     public String role = ROLE_SECONDARY;
     public String iconKey;
+    public int loopMaxSeconds;
+    public static final int DEFAULT_LOOP_SECONDS = 60;
+    public static final int MAX_LOOP_SECONDS = 300;
     public final List<MacroStep> steps = new ArrayList<>();
 
     public Macro(String label, List<MacroStep> steps) {
@@ -31,6 +34,7 @@ public final class Macro {
         role = normalizeRole(source.role);
         highlighted = ROLE_PRIMARY.equals(role);
         iconKey = source.iconKey;
+        loopMaxSeconds = source.loopMaxSeconds;
         steps.clear();
         for (MacroStep step : source.steps) {
             if (step != null) {
@@ -93,6 +97,9 @@ public final class Macro {
         highlighted = ROLE_PRIMARY.equals(role);
         object.put("role", role);
         object.put("highlighted", highlighted);
+        if (loopMaxSeconds > 0) {
+            object.put("loopMaxSeconds", normalizeLoopSeconds(loopMaxSeconds));
+        }
         if (iconKey != null && iconKey.trim().length() > 0) {
             object.put("iconKey", iconKey.trim());
         }
@@ -126,7 +133,12 @@ public final class Macro {
         macro.highlighted = ROLE_PRIMARY.equals(macro.role);
         String iconKey = object.optString("iconKey", "");
         macro.iconKey = iconKey.trim().length() == 0 ? null : iconKey.trim();
+        macro.loopMaxSeconds = normalizeLoopSeconds(object.optInt("loopMaxSeconds", 0));
         return macro;
+    }
+
+    public static int normalizeLoopSeconds(int seconds) {
+        return seconds <= 0 ? 0 : Math.min(MAX_LOOP_SECONDS, Math.max(10, seconds));
     }
 
     public String normalizedRole() {

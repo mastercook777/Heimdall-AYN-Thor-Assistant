@@ -32,10 +32,26 @@ game or ROM identity.
 
 ## Shizuku
 
-Controller Enhancement uses an authorized Shizuku UserService for native
-controller recording/replay, Virtual Right Stick, Precision Aim, and the
-selected Thor touch route. Capabilities are unavailable when Shizuku is not
-running or not authorized. Heimdall does not bundle Shizuku.
+Shizuku is an optional Advanced Controls route for native controller
+recording/replay, Virtual Right Stick, Precision Aim, and supported upper-screen
+input. It remains a fallback when Thor Direct is unavailable. Heimdall does not
+bundle Shizuku.
+
+## Thor Direct
+
+On supported AYN Thor firmware, players may opt in to Thor Direct for Advanced
+Controls, Game Context, and linked brightness on the two recognized physical
+displays. It launches a local privileged helper through Thor's built-in service.
+The helper accepts only bounded operations from this App over a local socket;
+Profile content cannot supply commands or socket names. Turning Thor Direct off
+stops the helper. Thor Direct does not upload controller input or brightness data.
+
+## Media Controls
+
+Optional Quick Actions media controls use Android notification access to discover
+active media sessions, show playback information, and send playback commands.
+Media session details remain on the device and are not included in Profile
+exports.
 
 ## Screen Capture And Audio
 

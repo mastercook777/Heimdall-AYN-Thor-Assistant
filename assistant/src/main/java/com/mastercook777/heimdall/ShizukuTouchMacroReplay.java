@@ -18,12 +18,13 @@ import java.util.concurrent.atomic.AtomicReference;
  * Replays upper-screen touch macros through Thor's mapping-compatible touch slot.
  *
  * The complete macro is validated before the first event so a mixed or malformed
- * macro never produces partial input. Timing stays in the App process; each Binder
- * call emits only one touch frame.
+ * macro never produces partial input. Timing stays in the App process; each
+ * selected-route call emits only one touch frame.
  */
 final class ShizukuTouchMacroReplay {
     private static final int SWIPE_FRAME_MS = 8;
     private static final long TAP_DURATION_MS = 16L;
+    private static final long DIRECT_TOUCH_RENEW_MS = 300L;
 
     private final ExecutorService executor;
     private final AtomicBoolean running = new AtomicBoolean();
@@ -69,13 +70,22 @@ final class ShizukuTouchMacroReplay {
         Thread worker = Thread.currentThread();
         replayThread.set(worker);
         boolean touchDown = false;
+        InputBridge.MappedTouchRoute touchRoute = InputBridge.MappedTouchRoute.UNAVAILABLE;
         String error = null;
         try {
             if (plan.hasGamepad) {
                 requireGamepadRoute(context);
             }
-            if (plan.hasTouch && !ShizukuNativeController.warmUp(context, 1500)) {
-                throw new ReplayFailure(context.getString(R.string.native_touch_connection_failed));
+            if (plan.hasTouch) {
+                if (ThorDirectController.isReady(context)) {
+                    touchRoute = InputBridge.MappedTouchRoute.THOR_DIRECT;
+                } else if (InputBridge.advancedControlsEnabled(context)
+                        && ShizukuNativeController.warmUp(context, 1500)) {
+                    touchRoute = InputBridge.MappedTouchRoute.SHIZUKU;
+                } else {
+                    throw new ReplayFailure(context.getString(
+                            R.string.macro_enhanced_touch_route_unavailable));
+                }
             }
             for (PlannedStep step : plan.steps) {
                 ensureNotCancelled();
@@ -94,15 +104,19 @@ final class ShizukuTouchMacroReplay {
                     continue;
                 }
                 touchDown = true;
-                requireFrame(context, step, MotionEvent.ACTION_DOWN,
+                requireFrame(context, touchRoute, step, MotionEvent.ACTION_DOWN,
                         step.startX, step.startY);
                 if (step.startX == step.endX && step.startY == step.endY) {
-                    sleepResponsive(step.durationMs);
+                    if (touchRoute == InputBridge.MappedTouchRoute.THOR_DIRECT) {
+                        holdDirectTouch(context, step);
+                    } else {
+                        sleepResponsive(step.durationMs);
+                    }
                 } else {
-                    replaySwipe(context, step);
+                    replaySwipe(context, touchRoute, step);
                 }
                 ensureNotCancelled();
-                requireFrame(context, step, MotionEvent.ACTION_UP,
+                requireFrame(context, touchRoute, step, MotionEvent.ACTION_UP,
                         step.endX, step.endY);
                 touchDown = false;
             }
@@ -114,7 +128,11 @@ final class ShizukuTouchMacroReplay {
             error = context.getString(R.string.native_touch_injection_failed);
         } finally {
             if (touchDown || cancelled.get()) {
-                ShizukuNativeController.releaseMappedTouch(context);
+                if (touchRoute == InputBridge.MappedTouchRoute.THOR_DIRECT) {
+                    ThorDirectController.releaseMappedTouch(context);
+                } else if (touchRoute == InputBridge.MappedTouchRoute.SHIZUKU) {
+                    ShizukuNativeController.releaseMappedTouch(context);
+                }
             }
             boolean wasCancelled = cancelled.get();
             replayThread.compareAndSet(worker, null);
@@ -141,6 +159,7 @@ final class ShizukuTouchMacroReplay {
     }
 
     private void requireGamepadRoute(Context context) throws ReplayFailure {
+        if (ThorDirectController.isReady(context)) return;
         NativeGamepadPath.Device device = NativeGamepadPath.resolveDevice();
         if (device == null) {
             throw new ReplayFailure(context.getString(
@@ -159,7 +178,20 @@ final class ShizukuTouchMacroReplay {
         }
     }
 
-    private void replaySwipe(Context context, PlannedStep step) throws ReplayFailure, ReplayCancelled {
+    private void holdDirectTouch(Context context, PlannedStep step)
+            throws ReplayFailure, ReplayCancelled {
+        long deadline = SystemClock.elapsedRealtime() + step.durationMs;
+        while (SystemClock.elapsedRealtime() + DIRECT_TOUCH_RENEW_MS < deadline) {
+            sleepUntil(SystemClock.elapsedRealtime() + DIRECT_TOUCH_RENEW_MS);
+            ensureNotCancelled();
+            requireFrame(context, InputBridge.MappedTouchRoute.THOR_DIRECT, step,
+                    MotionEvent.ACTION_MOVE, step.startX, step.startY);
+        }
+        sleepUntil(deadline);
+    }
+
+    private void replaySwipe(Context context, InputBridge.MappedTouchRoute route,
+            PlannedStep step) throws ReplayFailure, ReplayCancelled {
         long durationMs = Math.max(1L, step.durationMs);
         int frames = Math.max(1, (int) Math.ceil(durationMs / (double) SWIPE_FRAME_MS));
         long started = SystemClock.elapsedRealtime();
@@ -170,15 +202,26 @@ final class ShizukuTouchMacroReplay {
             float progress = frame / (float) frames;
             float x = step.startX + (step.endX - step.startX) * progress;
             float y = step.startY + (step.endY - step.startY) * progress;
-            requireFrame(context, step, MotionEvent.ACTION_MOVE, x, y);
+            requireFrame(context, route, step, MotionEvent.ACTION_MOVE, x, y);
         }
     }
 
-    private void requireFrame(Context context, PlannedStep step, int action,
+    private void requireFrame(Context context, InputBridge.MappedTouchRoute route,
+            PlannedStep step, int action,
             float x, float y) throws ReplayFailure {
-        String result = ShizukuNativeController.injectMappedTouchEvent(context,
-                Display.DEFAULT_DISPLAY, action, Math.round(x), Math.round(y),
-                step.display.width, step.display.height, step.display.rotation);
+        String result;
+        if (route == InputBridge.MappedTouchRoute.THOR_DIRECT) {
+            result = ThorDirectController.emitMappedTouch(context,
+                    Display.DEFAULT_DISPLAY, action, Math.round(x), Math.round(y),
+                    step.display.width, step.display.height, step.display.rotation);
+        } else if (route == InputBridge.MappedTouchRoute.SHIZUKU) {
+            result = ShizukuNativeController.injectMappedTouchEvent(context,
+                    Display.DEFAULT_DISPLAY, action, Math.round(x), Math.round(y),
+                    step.display.width, step.display.height, step.display.rotation);
+        } else {
+            throw new ReplayFailure(context.getString(
+                    R.string.macro_enhanced_touch_route_unavailable));
+        }
         if ("ok".equals(result)) {
             return;
         }

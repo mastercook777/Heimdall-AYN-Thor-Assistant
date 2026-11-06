@@ -777,6 +777,36 @@ final class ProfileBundleStore {
                     String reference = collector.addFile(source, AssetKind.CANVAS,
                             source.getName(), mimeFromExtension(extension(source.getName())));
                     canvas.put("assetId", reference);
+                    JSONArray slides = canvas.optJSONArray("slides");
+                    if (slides != null) {
+                        for (int slideIndex = 0; slideIndex < slides.length(); slideIndex++) {
+                            JSONObject slide = slides.optJSONObject(slideIndex);
+                            if (slide == null) {
+                                throw new Failure(ErrorCode.CORRUPT, "Canvas slide");
+                            }
+                            File slideSource = CanvasAssetStore.resolve(context,
+                                    slide.optString("assetId", ""));
+                            if (slideSource == null) {
+                                throw new Failure(ErrorCode.MISSING_ASSET,
+                                        profileName + " Canvas slide " + (slideIndex + 1));
+                            }
+                            CanvasAssetStore.AssetInfo slideInfo;
+                            try {
+                                slideInfo = CanvasAssetStore.inspectBundledAsset(slideSource,
+                                        extension(slideSource.getName()));
+                            } catch (IOException ex) {
+                                throw new Failure(ErrorCode.UNSUPPORTED_ASSET,
+                                        profileName + " Canvas slide " + (slideIndex + 1), ex);
+                            }
+                            if (slideInfo.animated || slideInfo.video) {
+                                throw new Failure(ErrorCode.UNSUPPORTED_ASSET,
+                                        profileName + " Canvas slide " + (slideIndex + 1));
+                            }
+                            slide.put("assetId", collector.addFile(slideSource,
+                                    AssetKind.CANVAS, slideSource.getName(),
+                                    mimeFromExtension(extension(slideSource.getName()))));
+                        }
+                    }
                 }
             }
         }
@@ -884,6 +914,39 @@ final class ProfileBundleStore {
                     String installed = asset.sha256 + "." + asset.extension;
                     canvas.put("assetId", installed);
                     rewrite.add(InstallKind.CANVAS, asset, installed);
+                    JSONArray slides = canvas.optJSONArray("slides");
+                    if (slides != null) {
+                        for (int slideIndex = 0; slideIndex < slides.length(); slideIndex++) {
+                            JSONObject slide = slides.optJSONObject(slideIndex);
+                            if (slide == null) {
+                                throw new Failure(ErrorCode.CORRUPT, "Canvas slide");
+                            }
+                            String slideRef = slide.optString("assetId", "").trim();
+                            if (!isPlaceholder(slideRef)) {
+                                throw new Failure(ErrorCode.CORRUPT, "Canvas slide reference");
+                            }
+                            BundleAsset slideAsset = requireAsset(assets, slideRef);
+                            requireSupported(AssetKind.CANVAS,
+                                    new AssetType(slideAsset.extension, slideAsset.mimeType),
+                                    slideAsset.file, slideAsset.displayName);
+                            CanvasAssetStore.AssetInfo slideInfo;
+                            try {
+                                slideInfo = CanvasAssetStore.inspectBundledAsset(
+                                        slideAsset.file, slideAsset.extension);
+                            } catch (IOException ex) {
+                                throw new Failure(ErrorCode.UNSUPPORTED_ASSET,
+                                        slideAsset.displayName, ex);
+                            }
+                            if (slideInfo.animated || slideInfo.video) {
+                                throw new Failure(ErrorCode.UNSUPPORTED_ASSET,
+                                        slideAsset.displayName);
+                            }
+                            String slideInstalled = slideAsset.sha256 + "."
+                                    + slideAsset.extension;
+                            slide.put("assetId", slideInstalled);
+                            rewrite.add(InstallKind.CANVAS, slideAsset, slideInstalled);
+                        }
+                    }
                 }
             }
         }

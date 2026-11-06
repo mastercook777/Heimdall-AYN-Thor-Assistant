@@ -49,7 +49,7 @@ Heimdall keeps the game on Thor's upper screen while the lower screen becomes a 
 | Profiles and Grid | Separate game layouts, App bindings, themes, touch settings, maps, guides, and Canvases. Drag and resize modules on a visible 12 x 8 Grid, then save explicitly. Browse curated Community Profiles and import each as a new Profile. |
 | Macros | Structured tap, hold, swipe, wait, and physical-controller sequences, including a controller composer with chords, charge holds, recomposition, mirroring, cloning, and bounded cancellation. No free-form command editing is required. |
 | Touch and aiming | Basic Touch, touchpad drag, Virtual Right Stick, Precision Aim, a real relative Virtual Mouse, and mapping-compatible Shizuku Touch when the required route is available. |
-| PC keyboard | A temporary complete US ANSI keyboard plus Profile-owned configurable Keypad modules through Shizuku/uinput. This is active-play PC input, not Android IME text entry. |
+| PC keyboard | A temporary complete US ANSI keyboard plus Profile-owned configurable Keypad modules through an available Advanced Controls/uinput route. This is active-play PC input, not Android IME text entry. |
 | Reference tools | Local maps, PDFs, guides, Interactive Map links, and Profile-owned image or muted looping-video Canvases. |
 | Upper-screen tools | Screenshot, screen recording, and up to two live Portals per Profile. A Portal can show an upper-screen region or send one-finger touches to it. |
 | Translation and status | Profile-owned upper-screen text translation with on-device OCR, plus a passive CPU-temperature and RAM monitor when Thor exposes the required ordinary-App sensor. |
@@ -75,8 +75,9 @@ Heimdall keeps the game on Thor's upper screen while the lower screen becomes a 
 | Profiles, Grid, maps, guides, Canvas, Community Profile browsing, and normal UI | Install Heimdall only. The Community catalog and downloads need a network connection. |
 | Upper-screen taps, holds, swipes, and compatible touchpad drag | Enable the Heimdall Accessibility service for **Basic Touch**. |
 | Real-time Translation | Enable Heimdall Accessibility for upper-screen capture, then configure a supported HTTPS translation provider and API key. OCR runs on-device; recognized text is sent to the selected provider. |
-| Physical-controller recording/replay, Virtual Right Stick, Precision Aim, Virtual Mouse, PC Keyboard, or mapping-compatible Enhanced Touch | Install, start, and authorize **Shizuku**. This route needs Developer options for wireless debugging. |
-| View Only or Interactive Portal, or screen recording | Accept Android's screen-capture consent when Heimdall requests it. Interactive Portal also requires Shizuku and the available Enhanced Touch route. |
+| Physical-controller recording/replay, Virtual Right Stick, Precision Aim, Virtual Mouse, PC Keyboard, or mapping-compatible Enhanced Touch | On supported Thor firmware, enable **Thor Direct** in Connections. **Shizuku** remains the fallback and the route for other devices; its wireless-debugging setup needs Developer options. |
+| Quick Actions media controls or linked dual-screen brightness | Grant Android notification access for media sessions. Linked brightness additionally needs Thor Direct Ready and manual brightness mode. |
+| View Only or Interactive Portal, or screen recording | Accept Android's screen-capture consent when Heimdall requests it. Interactive Portal also needs an available Advanced Controls route. |
 
 You do not need to enable every permission during first launch. Start with one Profile and one route, test it, then add features as needed.
 
@@ -117,6 +118,8 @@ Older builds export configuration-only JSON, which remains importable but cannot
 6. Tap **Save** at the bottom of Settings.
 7. Switch back to the game and confirm Heimdall selects the expected Profile.
 
+You may also designate one existing Profile as **Desktop Profile** in Profile settings. It is the fallback for a confirmed unbound upper-screen App or launcher, and the Profile switcher offers **Return to Desktop**. Manual selection remains in place until a confirmed upper-App or game change.
+
 > **Save boundary:** Grid and several Profile settings use preview/draft state. Seeing the preview does not mean it has been stored; save before leaving the editor or Settings.
 
 ## 3. Enable Basic Touch (Optional)
@@ -131,9 +134,11 @@ Basic Touch sends compatible taps, holds, swipes, and touchpad drags to the uppe
 
 > Basic Accessibility touch and Thor's built-in mapper use separate touch streams and may cancel each other when used simultaneously. If coexistence is required, use the mapping-compatible Enhanced Touch route only when Heimdall reports it as available.
 
-## 4. Set Up Shizuku for Advanced Controls (Optional)
+## 4. Set Up Advanced Controls (Optional)
 
-Shizuku is needed for physical-controller recording/replay, Virtual Right Stick, Precision Aim, and mapping-compatible Enhanced Touch. Heimdall does not require root.
+On supported Thor firmware, open **Heimdall > Settings > Connections > Thor Direct**, choose **Enable Thor Direct**, and wait for Ready. This optional route supports physical-controller recording/replay, Virtual Right Stick, Precision Aim, Interactive Portal, Enhanced Touch, Virtual Mouse, PC Keyboard, and Game Context. If it is unavailable, use Shizuku as the fallback; Shizuku also serves other supported devices. Heimdall installation itself does not require root.
+
+### Shizuku fallback
 
 - [Shizuku official releases](https://github.com/RikkaApps/Shizuku/releases)
 - [Shizuku official setup guide](https://shizuku.rikka.app/guide/setup/)
@@ -185,7 +190,7 @@ Open the visual Grid editor to add, drag, resize, or remove modules. Modules sna
 
 ### Physical-Controller Macros
 
-Controller recording and replay require Shizuku and an available Advanced Controls route. Thor's built-in mapper may hide already-mapped physical buttons from Heimdall's recording stream. If this happens, begin recording, temporarily return to Android Home to press the button, then return to Heimdall to review and save the sequence.
+Controller recording and replay require an available Advanced Controls route. Thor's built-in mapper may hide already-mapped physical buttons from Heimdall's recording stream. If this happens, begin recording, temporarily return to Android Home to press the button, then return to Heimdall to review and save the sequence.
 
 Enhanced Touch protects Thor's built-in mapping by default and rejects Macros containing physical-controller steps before replay. If the mapper is off, you may disable that protection for the current Profile; screen steps still use the strict mapping-compatible touch route and never fall back to Accessibility.
 
@@ -197,10 +202,12 @@ Enhanced Touch protects Thor's built-in mapping by default and rejects Macros co
 
 ### Portal, Community Profiles, Maps, Guides, And Canvas
 
-- Add up to two Portals to a Profile's Grid. Each Portal has its own upper-screen region, zoom, shape, frame rate, and View Only or Interactive mode. Both share one screen-capture session. Interactive mode sends one-finger input through the available Shizuku Enhanced Touch route; only one Portal gesture can be active at a time. Portal and screen recording cannot run together. Choose the region in Portal Settings, then press Save; Grid placement has its own Save.
+- Add up to two Portals to a Profile's Grid. Each Portal has its own upper-screen region, zoom, shape, frame rate, and View Only or Interactive mode. Both share one screen-capture session. Interactive mode sends one-finger input through an available Advanced Controls touch route; only one Portal gesture can be active at a time. Portal and screen recording cannot run together. Choose the region in Portal Settings, then press Save; Grid placement has its own Save.
 - Open **Community Profiles** from Profile management to browse the curated catalog. A download is checked against its catalog size and SHA-256, validated as a `.heimdall-profile` bundle, and imported as a new Profile. Existing Profiles are not replaced. The catalog and bundles come from the [community repository](https://github.com/mastercook777/heimdall-community-profiles).
-- Maps and guides belong to the current Profile and may reference local images, PDFs, text, or an Interactive Map URL.
+- Gallery groups the current Profile's maps, new Heimdall screenshots, and saved Canvas images. It can send an image to an existing Canvas. Removing a screenshot from Gallery leaves the original file intact.
+- Guides belong to the current Profile and may reference local PDFs, text, or links. Local Note/TXT/Markdown readers offer full-text search and chapter navigation; PDF and web links still open externally.
 - Canvas accepts local JPG, PNG, GIF, WebP, and MP4 media. GIF and animated WebP require Android 9 or newer; MP4 is always muted and loops. A Profile can contain multiple independent static Canvases, while GIF, animated WebP, and MP4 share a limit of one dynamic Canvas. Files are limited to 50 MiB; images may be up to 4096 × 4096 and MP4 video up to 2048px on its longest side. APNG is not supported. Double-tap a Canvas for full-screen viewing and hold it to replace its media or adjust composition.
+- A static Canvas can rotate through several saved images. Configure the slides and framing in its editor, then choose a transition and interval. Multiple Canvases with the same interval share slideshow timing.
 
 ### Translation And Hardware Monitor
 
@@ -216,7 +223,7 @@ Choose a registered Heimdall or Freya colorway under Appearance. A Profile can u
 
 ### Screenshot And Recording
 
-Quick Actions can capture the upper screen. Recording uses Android MediaProjection and Android Audio Playback Capture rather than microphone input. The upper App may still forbid its game audio from being captured.
+Quick Actions can capture the upper screen, control compatible active media sessions, adjust media volume, and, with Thor Direct, adjust both Thor displays' brightness. Configure only the capabilities wanted for each Profile. Android notification access is required to discover media sessions; if Android marks the setting restricted, use App info > top-right menu > Allow restricted settings before granting notification access. Recording uses Android MediaProjection and Android Audio Playback Capture rather than microphone input. The upper App may still forbid its game audio from being captured.
 
 ## 6. Back Up Before Uninstalling
 

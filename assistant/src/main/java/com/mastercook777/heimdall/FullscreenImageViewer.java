@@ -9,6 +9,7 @@ import android.widget.FrameLayout;
 import android.widget.ImageButton;
 import android.widget.LinearLayout;
 import android.widget.TextView;
+import android.widget.Toast;
 
 @SuppressLint("ViewConstructor")
 final class FullscreenImageViewer extends FrameLayout {
@@ -19,9 +20,11 @@ final class FullscreenImageViewer extends FrameLayout {
 
     private final CanvasConfig config;
     private final Listener listener;
+    private final boolean showEditAction;
     private final LinearLayout toolbar;
     private final ImageButton revealButton;
     private final TextView stateView;
+    private TextView slideTitle;
     private final Runnable hideControls = () -> setControlsVisible(false);
     private CanvasImageLoader.Request loadRequest;
     private ZoomableMapView viewer;
@@ -29,11 +32,33 @@ final class FullscreenImageViewer extends FrameLayout {
     private CanvasVideoView videoViewer;
     private boolean playbackAllowed;
     private boolean aggregatedVisible;
+    private int currentSlideIndex;
+    private int displayedSlideIndex;
+    private int loadGeneration;
 
     FullscreenImageViewer(Context context, CanvasConfig config, Listener listener) {
+        this(context, config, 0, listener, true);
+    }
+
+    FullscreenImageViewer(Context context, CanvasConfig config, Listener listener,
+            boolean showEditAction) {
+        this(context, config, 0, listener, showEditAction);
+    }
+
+    FullscreenImageViewer(Context context, CanvasConfig config, int slideIndex,
+            Listener listener) {
+        this(context, config, slideIndex, listener, true);
+    }
+
+    private FullscreenImageViewer(Context context, CanvasConfig config, int slideIndex,
+            Listener listener, boolean showEditAction) {
         super(context);
         this.config = config == null ? new CanvasConfig() : config.copy();
+        currentSlideIndex = this.config.isSlideshow()
+                ? Math.max(0, Math.min(slideIndex, this.config.slides.size() - 1)) : 0;
+        displayedSlideIndex = currentSlideIndex;
         this.listener = listener;
+        this.showEditAction = showEditAction;
         setBackgroundColor(0xFF020407);
 
         stateView = new TextView(context);
@@ -80,6 +105,7 @@ final class FullscreenImageViewer extends FrameLayout {
     }
 
     void release() {
+        loadGeneration++;
         removeCallbacks(hideControls);
         if (loadRequest != null) {
             loadRequest.cancel();
@@ -104,11 +130,20 @@ final class FullscreenImageViewer extends FrameLayout {
             loadVideo();
             return;
         }
-        loadRequest = CanvasImageLoader.load(getContext(), config.assetId, 3000,
+        CanvasConfig current = config.slideConfig(currentSlideIndex);
+        int generation = ++loadGeneration;
+        loadRequest = CanvasImageLoader.load(getContext(), current.assetId, 3000,
                 new CanvasImageLoader.Callback() {
                     @Override
                     public void onLoaded(CanvasImageLoader.DecodedImage loaded) {
+                        if (generation != loadGeneration) {
+                            loaded.release();
+                            return;
+                        }
                         loadRequest = null;
+                        displayedSlideIndex = currentSlideIndex;
+                        ZoomableMapView previousViewer = viewer;
+                        CanvasImageLoader.DecodedImage previousImage = decodedImage;
                         decodedImage = loaded;
                         viewer = new ZoomableMapView(getContext());
                         if (loaded.bitmap() != null) {
@@ -118,6 +153,11 @@ final class FullscreenImageViewer extends FrameLayout {
                         }
                         viewer.setBackgroundColor(0xFF020407);
                         addView(viewer, 0, new LayoutParams(-1, -1));
+                        if (previousViewer != null) {
+                            previousViewer.setImageDrawable(null);
+                            removeView(previousViewer);
+                        }
+                        if (previousImage != null) previousImage.release();
                         stateView.setVisibility(GONE);
                         bringChildToFront(toolbar);
                         bringChildToFront(revealButton);
@@ -127,7 +167,15 @@ final class FullscreenImageViewer extends FrameLayout {
 
                     @Override
                     public void onError(CanvasImageLoader.Error error) {
+                        if (generation != loadGeneration) return;
                         loadRequest = null;
+                        if (viewer != null) {
+                            currentSlideIndex = displayedSlideIndex;
+                            updateSlideTitle();
+                            Toast.makeText(getContext(), R.string.canvas_image_missing,
+                                    Toast.LENGTH_SHORT).show();
+                            return;
+                        }
                         stateView.setText(error == CanvasImageLoader.Error.MISSING
                                 ? R.string.canvas_image_missing
                                 : error == CanvasImageLoader.Error.PLATFORM_UNSUPPORTED
@@ -178,13 +226,19 @@ final class FullscreenImageViewer extends FrameLayout {
         row.setPadding(dp(8), dp(3), dp(4), dp(3));
         row.setBackground(HeimdallUi.fullscreenToolbarPanel(
                 getContext(), HeimdallUi.RADIUS_PANEL));
-        TextView title = new TextView(getContext());
-        title.setText(R.string.canvas_name);
-        title.setTextColor(HeimdallUi.textColor(getContext()));
-        title.setTextSize(13);
-        title.setGravity(Gravity.CENTER_VERTICAL);
-        title.setSingleLine(true);
-        row.addView(title, new LinearLayout.LayoutParams(0, -1, 1f));
+        slideTitle = new TextView(getContext());
+        slideTitle.setTextColor(HeimdallUi.textColor(getContext()));
+        slideTitle.setTextSize(13);
+        slideTitle.setGravity(Gravity.CENTER_VERTICAL);
+        slideTitle.setSingleLine(true);
+        updateSlideTitle();
+        row.addView(slideTitle, new LinearLayout.LayoutParams(0, -1, 1f));
+        if (config.isSlideshow()) {
+            row.addView(iconButton(R.drawable.ic_macro_previous,
+                    R.string.canvas_slideshow_previous, () -> changeSlide(-1)), iconParams());
+            row.addView(iconButton(R.drawable.ic_macro_next,
+                    R.string.canvas_slideshow_next, () -> changeSlide(1)), iconParams());
+        }
         row.addView(iconButton(R.drawable.ic_refresh, R.string.canvas_reset,
                 () -> {
                     if (viewer != null) {
@@ -194,11 +248,33 @@ final class FullscreenImageViewer extends FrameLayout {
                         videoViewer.fitImage();
                     }
                 }), iconParams());
-        row.addView(iconButton(R.drawable.ic_edit, R.string.canvas_edit_composition,
-                listener::onEditComposition), iconParams());
+        if (showEditAction) {
+            row.addView(iconButton(R.drawable.ic_edit, R.string.canvas_edit_composition,
+                    listener::onEditComposition), iconParams());
+        }
         row.addView(iconButton(R.drawable.ic_fullscreen_exit,
                 R.string.common_exit_fullscreen, listener::onClose), iconParams());
         return row;
+    }
+
+    private void changeSlide(int delta) {
+        if (!config.isSlideshow()) return;
+        currentSlideIndex = (currentSlideIndex + delta + config.slides.size())
+                % config.slides.size();
+        if (loadRequest != null) {
+            loadRequest.cancel();
+            loadRequest = null;
+        }
+        updateSlideTitle();
+        loadMedia();
+    }
+
+    private void updateSlideTitle() {
+        if (slideTitle == null) return;
+        slideTitle.setText(config.isSlideshow()
+                ? getResources().getString(R.string.canvas_slideshow_fullscreen_count,
+                        currentSlideIndex + 1, config.slides.size())
+                : getResources().getString(R.string.canvas_name));
     }
 
     @Override

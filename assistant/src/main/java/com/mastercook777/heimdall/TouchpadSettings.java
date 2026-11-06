@@ -56,6 +56,10 @@ public final class TouchpadSettings {
     private static final String KEY_VIRTUAL_MOUSE_SENSITIVITY = "virtual_mouse_sensitivity";
     private static final String KEY_VIRTUAL_MOUSE_INVERT_Y = "virtual_mouse_invert_y";
     private static final String KEY_VIRTUAL_MOUSE_SCROLL_DISTANCE = "virtual_mouse_scroll_distance";
+    private static final String KEY_VIRTUAL_MOUSE_GESTURES_ENABLED =
+            "virtual_mouse_gestures_enabled";
+    private static final String KEY_VIRTUAL_MOUSE_MIDDLE_CLICK_GESTURE_ENABLED =
+            "virtual_mouse_middle_click_gesture_enabled";
     private static final String KEY_VIRTUAL_MOUSE_FULL_GESTURE_AREA =
             "virtual_mouse_full_gesture_area";
 
@@ -91,6 +95,8 @@ public final class TouchpadSettings {
     public float virtualMouseSensitivity = 1.0f;
     public boolean virtualMouseInvertY;
     public float virtualMouseScrollDistance = 36f;
+    public boolean virtualMouseGesturesEnabled = true;
+    public boolean virtualMouseMiddleClickGestureEnabled;
     public boolean virtualMouseFullGestureArea;
 
     public TouchpadSettings copy() {
@@ -135,6 +141,9 @@ public final class TouchpadSettings {
         virtualMouseSensitivity = clampFloat(source.virtualMouseSensitivity, 0.2f, 4f);
         virtualMouseInvertY = source.virtualMouseInvertY;
         virtualMouseScrollDistance = clampFloat(source.virtualMouseScrollDistance, 16f, 96f);
+        virtualMouseGesturesEnabled = source.virtualMouseGesturesEnabled;
+        virtualMouseMiddleClickGestureEnabled =
+                source.virtualMouseMiddleClickGestureEnabled;
         virtualMouseFullGestureArea = source.virtualMouseFullGestureArea;
     }
 
@@ -178,6 +187,11 @@ public final class TouchpadSettings {
                 KEY_VIRTUAL_MOUSE_INVERT_Y, settings.virtualMouseInvertY);
         settings.virtualMouseScrollDistance = clampFloat(
                 prefs.getFloat(KEY_VIRTUAL_MOUSE_SCROLL_DISTANCE, settings.virtualMouseScrollDistance), 16f, 96f);
+        settings.virtualMouseGesturesEnabled = prefs.getBoolean(
+                KEY_VIRTUAL_MOUSE_GESTURES_ENABLED, settings.virtualMouseGesturesEnabled);
+        settings.virtualMouseMiddleClickGestureEnabled = prefs.getBoolean(
+                KEY_VIRTUAL_MOUSE_MIDDLE_CLICK_GESTURE_ENABLED,
+                settings.virtualMouseMiddleClickGestureEnabled);
         settings.virtualMouseFullGestureArea = prefs.getBoolean(
                 KEY_VIRTUAL_MOUSE_FULL_GESTURE_AREA, settings.virtualMouseFullGestureArea);
         return settings;
@@ -219,6 +233,9 @@ public final class TouchpadSettings {
                 .putFloat(KEY_VIRTUAL_MOUSE_SENSITIVITY, virtualMouseSensitivity)
                 .putBoolean(KEY_VIRTUAL_MOUSE_INVERT_Y, virtualMouseInvertY)
                 .putFloat(KEY_VIRTUAL_MOUSE_SCROLL_DISTANCE, virtualMouseScrollDistance)
+                .putBoolean(KEY_VIRTUAL_MOUSE_GESTURES_ENABLED, virtualMouseGesturesEnabled)
+                .putBoolean(KEY_VIRTUAL_MOUSE_MIDDLE_CLICK_GESTURE_ENABLED,
+                        virtualMouseMiddleClickGestureEnabled)
                 .putBoolean(KEY_VIRTUAL_MOUSE_FULL_GESTURE_AREA, virtualMouseFullGestureArea)
                 .apply();
     }
@@ -258,6 +275,9 @@ public final class TouchpadSettings {
         object.put(KEY_VIRTUAL_MOUSE_SENSITIVITY, virtualMouseSensitivity);
         object.put(KEY_VIRTUAL_MOUSE_INVERT_Y, virtualMouseInvertY);
         object.put(KEY_VIRTUAL_MOUSE_SCROLL_DISTANCE, virtualMouseScrollDistance);
+        object.put(KEY_VIRTUAL_MOUSE_GESTURES_ENABLED, virtualMouseGesturesEnabled);
+        object.put(KEY_VIRTUAL_MOUSE_MIDDLE_CLICK_GESTURE_ENABLED,
+                virtualMouseMiddleClickGestureEnabled);
         object.put(KEY_VIRTUAL_MOUSE_FULL_GESTURE_AREA, virtualMouseFullGestureArea);
         return object;
     }
@@ -308,6 +328,11 @@ public final class TouchpadSettings {
         settings.virtualMouseScrollDistance = clampFloat(
                 (float) object.optDouble(KEY_VIRTUAL_MOUSE_SCROLL_DISTANCE,
                         settings.virtualMouseScrollDistance), 16f, 96f);
+        settings.virtualMouseGesturesEnabled = object.optBoolean(
+                KEY_VIRTUAL_MOUSE_GESTURES_ENABLED, settings.virtualMouseGesturesEnabled);
+        settings.virtualMouseMiddleClickGestureEnabled = object.optBoolean(
+                KEY_VIRTUAL_MOUSE_MIDDLE_CLICK_GESTURE_ENABLED,
+                settings.virtualMouseMiddleClickGestureEnabled);
         settings.virtualMouseFullGestureArea = object.optBoolean(
                 KEY_VIRTUAL_MOUSE_FULL_GESTURE_AREA, settings.virtualMouseFullGestureArea);
         return settings;

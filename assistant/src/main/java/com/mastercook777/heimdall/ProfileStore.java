@@ -17,6 +17,7 @@ public final class ProfileStore {
     private static final String PREFS = "thor_assistant_profiles";
     private static final String KEY_PROFILES = "profiles";
     private static final String KEY_SELECTED = "selected_profile";
+    private static final String KEY_DESKTOP_PROFILE_ID = "desktop_profile_id";
 
     private ProfileStore() {
     }
@@ -152,6 +153,19 @@ public final class ProfileStore {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                 .edit()
                 .putInt(KEY_SELECTED, index)
+                .apply();
+    }
+
+    public static String loadDesktopProfileId(Context context) {
+        return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .getString(KEY_DESKTOP_PROFILE_ID, "");
+    }
+
+    public static void saveDesktopProfileId(Context context, String profileId) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .edit()
+                .putString(KEY_DESKTOP_PROFILE_ID,
+                        profileId == null ? "" : profileId.trim())
                 .apply();
     }
 

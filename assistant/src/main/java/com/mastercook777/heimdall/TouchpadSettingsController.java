@@ -53,6 +53,8 @@ final class TouchpadSettingsController {
     private SliderInput virtualMouseSensitivityInput;
     private SliderInput virtualMouseScrollInput;
     private CheckBox virtualMouseInvertYInput;
+    private CheckBox virtualMouseGesturesEnabledInput;
+    private CheckBox virtualMouseMiddleClickGestureEnabledInput;
     private CheckBox virtualMouseFullGestureAreaInput;
 
     TouchpadSettingsController(AssistantActivity activity, Host host) {
@@ -103,16 +105,32 @@ final class TouchpadSettingsController {
         virtualMouseSensitivityInput = slider(content,
                 activity.getString(R.string.touch_virtual_mouse_sensitivity),
                 0.2f, 4f, draft.virtualMouseSensitivity, 10, "x");
-        virtualMouseScrollInput = slider(content,
-                activity.getString(R.string.touch_virtual_mouse_scroll),
-                16f, 96f, draft.virtualMouseScrollDistance, 1, "px");
         virtualMouseInvertYInput = checkBox(content,
                 R.string.touch_invert_vertical, draft.virtualMouseInvertY);
-        virtualMouseFullGestureAreaInput = checkBox(content,
-                R.string.touch_virtual_mouse_full_gesture_area,
-                draft.virtualMouseFullGestureArea);
-        addHelp(content, activity.getString(R.string.touch_virtual_mouse_full_gesture_area_help));
-        addHelp(content, activity.getString(R.string.touch_virtual_mouse_help));
+        virtualMouseGesturesEnabledInput = checkBox(content,
+                R.string.touch_virtual_mouse_gestures_enabled,
+                draft.virtualMouseGesturesEnabled);
+        virtualMouseGesturesEnabledInput.setOnCheckedChangeListener((button, checked) -> {
+            applyInputs();
+            host.refresh();
+        });
+        if (draft.virtualMouseGesturesEnabled) {
+            virtualMouseMiddleClickGestureEnabledInput = checkBox(content,
+                    R.string.touch_virtual_mouse_middle_click_gesture,
+                    draft.virtualMouseMiddleClickGestureEnabled);
+            virtualMouseScrollInput = slider(content,
+                    activity.getString(R.string.touch_virtual_mouse_scroll),
+                    16f, 96f, draft.virtualMouseScrollDistance, 1, "px");
+            virtualMouseFullGestureAreaInput = checkBox(content,
+                    R.string.touch_virtual_mouse_full_gesture_area,
+                    draft.virtualMouseFullGestureArea);
+            addHelp(content, activity.getString(
+                    R.string.touch_virtual_mouse_full_gesture_area_help));
+            addHelp(content, activity.getString(R.string.touch_virtual_mouse_help));
+        } else {
+            addHelp(content, activity.getString(
+                    R.string.touch_virtual_mouse_gestures_disabled_help));
+        }
     }
 
     private void populateRelativeMouse(LinearLayout content, TouchpadSettings draft) {
@@ -275,7 +293,16 @@ final class TouchpadSettingsController {
         if (virtualMouseSensitivityInput != null) draft.virtualMouseSensitivity = virtualMouseSensitivityInput.floatValue();
         if (virtualMouseScrollInput != null) draft.virtualMouseScrollDistance = virtualMouseScrollInput.floatValue();
         if (virtualMouseInvertYInput != null) draft.virtualMouseInvertY = virtualMouseInvertYInput.isChecked();
-        if (virtualMouseFullGestureAreaInput != null) draft.virtualMouseFullGestureArea = virtualMouseFullGestureAreaInput.isChecked();
+        if (virtualMouseGesturesEnabledInput != null) {
+            draft.virtualMouseGesturesEnabled = virtualMouseGesturesEnabledInput.isChecked();
+        }
+        if (virtualMouseMiddleClickGestureEnabledInput != null) {
+            draft.virtualMouseMiddleClickGestureEnabled =
+                    virtualMouseMiddleClickGestureEnabledInput.isChecked();
+        }
+        if (virtualMouseFullGestureAreaInput != null) {
+            draft.virtualMouseFullGestureArea = virtualMouseFullGestureAreaInput.isChecked();
+        }
     }
 
     void clearInputs() {
@@ -289,7 +316,9 @@ final class TouchpadSettingsController {
         relativeMouseInvertYInput = null;
         relativeMouseAcceleration = null;
         virtualMouseSensitivityInput = virtualMouseScrollInput = null;
-        virtualMouseInvertYInput = virtualMouseFullGestureAreaInput = null;
+        virtualMouseInvertYInput = virtualMouseGesturesEnabledInput = null;
+        virtualMouseMiddleClickGestureEnabledInput = null;
+        virtualMouseFullGestureAreaInput = null;
     }
 
     static String localizedModeLabel(AssistantActivity activity, String mode) {

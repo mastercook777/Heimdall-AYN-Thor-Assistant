@@ -7,16 +7,29 @@ import android.os.Looper;
 import java.util.ArrayDeque;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-/** Serializes and coalesces the high-frequency Touchpad stream for the Shizuku uinput mouse. */
+/** Serializes and coalesces Touchpad input for the selected uinput mouse route. */
 public final class VirtualMouseDispatcher {
     private static final int LINUX_BTN_LEFT = 272;
     private static final int LINUX_BTN_RIGHT = 273;
+    private static final int LINUX_BTN_MIDDLE = 274;
     private static final AtomicBoolean DEVICE_MAY_BE_OPEN = new AtomicBoolean();
+    // Accessed only on DEVICE_EXECUTOR; a parked device retains its route.
+    private static InputBridge.VirtualMouseRoute deviceRoute =
+            InputBridge.VirtualMouseRoute.UNAVAILABLE;
     private static final ExecutorService DEVICE_EXECUTOR =
             Executors.newSingleThreadExecutor(r -> {
                 Thread thread = new Thread(r, "HeimdallVirtualMouse");
+                thread.setDaemon(true);
+                return thread;
+            });
+    private static final ScheduledExecutorService LEASE_EXECUTOR =
+            Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread thread = new Thread(r, "HeimdallMouseLease");
                 thread.setDaemon(true);
                 return thread;
             });
@@ -30,19 +43,59 @@ public final class VirtualMouseDispatcher {
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final Object lock = new Object();
     private final ArrayDeque<MouseFrame> frames = new ArrayDeque<>();
+    private volatile InputBridge.VirtualMouseRoute route =
+            InputBridge.VirtualMouseRoute.UNAVAILABLE;
+    private final Runnable directStateListener;
+    private final Runnable shizukuLossListener;
     private float residualX;
     private float residualY;
     private boolean drainQueued;
     private boolean closed;
     private boolean errorReported;
+    private boolean heldButton;
+    private final AtomicBoolean heartbeatQueued = new AtomicBoolean();
+    private ScheduledFuture<?> heartbeat;
 
     public VirtualMouseDispatcher(Context context, Listener listener) {
         this.context = context.getApplicationContext();
         this.listener = listener;
+        directStateListener = () -> {
+            if (route == InputBridge.VirtualMouseRoute.THOR_DIRECT
+                    && !ThorDirectController.isReady(this.context)) {
+                submit(this::reportUnavailable);
+            }
+        };
+        shizukuLossListener = () -> {
+            if (route == InputBridge.VirtualMouseRoute.SHIZUKU) {
+                submit(this::reportUnavailable);
+            }
+        };
     }
 
     public void start() {
-        submit(() -> handleResult(ShizukuNativeController.openVirtualMouse(context)));
+        ThorDirectController.addStateListener(directStateListener);
+        ShizukuNativeController.addServiceLossListener(shizukuLossListener);
+        submit(() -> {
+            InputBridge.VirtualMouseRoute selected = InputBridge.virtualMouseRoute(context);
+            if (selected == InputBridge.VirtualMouseRoute.UNAVAILABLE) {
+                reportUnavailable();
+                return;
+            }
+            if (DEVICE_MAY_BE_OPEN.get() && deviceRoute != selected) {
+                releaseButtonsAndMaybeDestroy(context, true);
+                if (DEVICE_MAY_BE_OPEN.get()) {
+                    reportUnavailable();
+                    return;
+                }
+            }
+            if (!operationSucceeded(openMouse(context, selected))) {
+                reportUnavailable();
+                return;
+            }
+            DEVICE_MAY_BE_OPEN.set(true);
+            deviceRoute = selected;
+            route = selected;
+        });
     }
 
     public void move(float dx, float dy) {
@@ -80,7 +133,7 @@ public final class VirtualMouseDispatcher {
     /** Destroys a device parked by an earlier Activity after Virtual Mouse becomes unused. */
     public static void destroyParkedDevice(Context context) {
         Context appContext = context.getApplicationContext();
-        DEVICE_EXECUTOR.execute(() -> destroyParkedDeviceNow(appContext));
+        DEVICE_EXECUTOR.execute(() -> releaseButtonsAndMaybeDestroy(appContext, true));
     }
 
     private void shutdown(boolean destroyDevice) {
@@ -91,7 +144,13 @@ public final class VirtualMouseDispatcher {
             residualX = 0f;
             residualY = 0f;
         }
-        DEVICE_EXECUTOR.execute(() -> releaseButtonsAndMaybeDestroy(context, destroyDevice));
+        ThorDirectController.removeStateListener(directStateListener);
+        ShizukuNativeController.removeServiceLossListener(shizukuLossListener);
+        DEVICE_EXECUTOR.execute(() -> {
+            stopHeartbeat();
+            route = InputBridge.VirtualMouseRoute.UNAVAILABLE;
+            releaseButtonsAndMaybeDestroy(context, destroyDevice);
+        });
     }
 
     private static void releaseButtonsAndMaybeDestroy(Context context, boolean destroyDevice) {
@@ -100,24 +159,12 @@ public final class VirtualMouseDispatcher {
         }
         // Every departure is all-up. Parking deliberately omits UI_DEV_DESTROY so a returning
         // Activity does not present Steam Link with a newly hot-plugged mouse.
-        ShizukuNativeController.emitVirtualMouse(
-                context, 0, 0, 0, LINUX_BTN_LEFT, 0);
-        ShizukuNativeController.emitVirtualMouse(
-                context, 0, 0, 0, LINUX_BTN_RIGHT, 0);
-        if (destroyDevice && operationSucceeded(
-                ShizukuNativeController.releaseVirtualMouse(context))) {
+        emitMouse(context, deviceRoute, 0, 0, 0, LINUX_BTN_LEFT, 0);
+        emitMouse(context, deviceRoute, 0, 0, 0, LINUX_BTN_RIGHT, 0);
+        emitMouse(context, deviceRoute, 0, 0, 0, LINUX_BTN_MIDDLE, 0);
+        if (destroyDevice && operationSucceeded(releaseMouse(context, deviceRoute))) {
             DEVICE_MAY_BE_OPEN.set(false);
-        }
-    }
-
-    private static void destroyParkedDeviceNow(Context context) {
-        if (!DEVICE_MAY_BE_OPEN.get()) {
-            return;
-        }
-        // Parking already sent all-up. Native release repeats its tracked-button fallback
-        // without auto-opening a missing device after a Shizuku service restart.
-        if (operationSucceeded(ShizukuNativeController.releaseVirtualMouse(context))) {
-            DEVICE_MAY_BE_OPEN.set(false);
+            deviceRoute = InputBridge.VirtualMouseRoute.UNAVAILABLE;
         }
     }
 
@@ -145,7 +192,7 @@ public final class VirtualMouseDispatcher {
         while (true) {
             MouseFrame frame;
             synchronized (lock) {
-                if (closed) {
+                if (closed || errorReported) {
                     frames.clear();
                     drainQueued = false;
                     return;
@@ -158,11 +205,50 @@ public final class VirtualMouseDispatcher {
             }
             int dx = Math.round(frame.dx);
             int dy = Math.round(frame.dy);
+            if (route == InputBridge.VirtualMouseRoute.UNAVAILABLE) {
+                reportUnavailable();
+                return;
+            }
             if (dx == 0 && dy == 0 && frame.wheel == 0 && frame.button == 0) {
                 continue;
             }
-            handleResult(ShizukuNativeController.emitVirtualMouse(
-                    context, dx, dy, frame.wheel, frame.button, frame.buttonValue));
+            if (!operationSucceeded(emitMouse(context, route,
+                    dx, dy, frame.wheel, frame.button, frame.buttonValue))) {
+                reportUnavailable();
+                return;
+            }
+            if (route == InputBridge.VirtualMouseRoute.THOR_DIRECT && frame.button != 0) {
+                heldButton = frame.buttonValue == 1;
+                if (heldButton) startHeartbeat();
+                else stopHeartbeat();
+            }
+        }
+    }
+
+    private void startHeartbeat() {
+        if (heartbeat != null) return;
+        heartbeat = LEASE_EXECUTOR.scheduleAtFixedRate(() -> {
+            if (!heartbeatQueued.compareAndSet(false, true)) return;
+            DEVICE_EXECUTOR.execute(() -> {
+                try {
+                    if (!closed && heldButton
+                            && route == InputBridge.VirtualMouseRoute.THOR_DIRECT
+                            && !operationSucceeded(emitMouse(context, route,
+                                    0, 0, 0, 0, 0))) {
+                        reportUnavailable();
+                    }
+                } finally {
+                    heartbeatQueued.set(false);
+                }
+            });
+        }, 300L, 300L, TimeUnit.MILLISECONDS);
+    }
+
+    private void stopHeartbeat() {
+        heldButton = false;
+        if (heartbeat != null) {
+            heartbeat.cancel(false);
+            heartbeat = null;
         }
     }
 
@@ -173,15 +259,35 @@ public final class VirtualMouseDispatcher {
         DEVICE_EXECUTOR.execute(work);
     }
 
-    private void handleResult(String result) {
-        if (operationSucceeded(result)) {
-            DEVICE_MAY_BE_OPEN.set(true);
-            errorReported = false;
-            return;
-        }
+    private void reportUnavailable() {
         if (errorReported) return;
         errorReported = true;
+        stopHeartbeat();
         mainHandler.post(listener::onUnavailable);
+    }
+
+    private static String openMouse(Context context, InputBridge.VirtualMouseRoute selected) {
+        return selected == InputBridge.VirtualMouseRoute.THOR_DIRECT
+                ? ThorDirectController.openVirtualMouse(context)
+                : ShizukuNativeController.openVirtualMouse(context);
+    }
+
+    private static String emitMouse(Context context, InputBridge.VirtualMouseRoute selected,
+            int dx, int dy, int wheel, int button, int value) {
+        return selected == InputBridge.VirtualMouseRoute.THOR_DIRECT
+                ? ThorDirectController.emitVirtualMouse(context, dx, dy, wheel, button, value)
+                : ShizukuNativeController.emitVirtualMouse(context, dx, dy, wheel, button, value);
+    }
+
+    private static String releaseMouse(Context context, InputBridge.VirtualMouseRoute selected) {
+        if (selected == InputBridge.VirtualMouseRoute.THOR_DIRECT) {
+            String result = ThorDirectController.releaseVirtualMouse(context);
+            // OP_STOP releases the mouse before acknowledging shutdown. Its socket may
+            // already be gone when this queued cleanup reaches the device worker.
+            return !operationSucceeded(result) && ThorDirectController.helperStopConfirmed()
+                    ? "ok: helper already stopped" : result;
+        }
+        return ShizukuNativeController.releaseVirtualMouse(context);
     }
 
     private static boolean operationSucceeded(String result) {

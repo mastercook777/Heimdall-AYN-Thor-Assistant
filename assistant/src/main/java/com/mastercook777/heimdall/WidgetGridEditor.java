@@ -19,6 +19,7 @@ final class WidgetGridEditor extends View {
         void ensureMacroCapacity(int requiredCount);
         void showDebug(String message);
         void showError(String message);
+        void onSelectionChanged(WidgetLayout.Item item);
     }
 
     private static final int MODE_NONE = 0;
@@ -68,6 +69,14 @@ final class WidgetGridEditor extends View {
         }
         int[] size = defaultWidgetSize(type);
         WidgetLayout.Item item = firstAvailableWidgetItem(layout, type, size[0], size[1]);
+        boolean adjustedExisting = false;
+        if (item == null) {
+            item = bestAvailableWidgetItem(layout, type, size[0], size[1]);
+        }
+        if (item == null) {
+            item = carveSpaceForWidget(layout, type);
+            adjustedExisting = item != null;
+        }
         if (item == null) {
             host.showError(getContext().getString(R.string.grid_editor_no_space_add));
             return;
@@ -78,7 +87,17 @@ final class WidgetGridEditor extends View {
         layout.sanitize();
         selectedIndex = layout.items.size() - 1;
         invalidate();
-        host.showDebug(getContext().getString(R.string.grid_editor_added, widgetTypeLabel(type)));
+        notifySelection(layout);
+        if (adjustedExisting) {
+            host.showDebug(getContext().getString(R.string.grid_editor_added_by_resizing,
+                    widgetTypeLabel(type)));
+        } else if (item.w < size[0] || item.h < size[1]) {
+            host.showDebug(getContext().getString(R.string.grid_editor_added_compact,
+                    widgetTypeLabel(type)));
+        } else {
+            host.showDebug(getContext().getString(R.string.grid_editor_added,
+                    widgetTypeLabel(type)));
+        }
     }
 
     void duplicateSelectedWidget() {
@@ -113,6 +132,7 @@ final class WidgetGridEditor extends View {
         layout.sanitize();
         selectedIndex = layout.items.size() - 1;
         invalidate();
+        notifySelection(layout);
         host.showDebug(getContext().getString(R.string.grid_editor_copied));
     }
 
@@ -127,12 +147,15 @@ final class WidgetGridEditor extends View {
         layout.sanitize();
         selectedIndex = -1;
         invalidate();
+        notifySelection(layout);
         host.showDebug(getContext().getString(R.string.grid_editor_deleted));
     }
 
     void resetPreview() {
         host.replaceDraftLayout(WidgetLayout.defaultLayout());
         invalidate();
+        selectedIndex = -1;
+        host.onSelectionChanged(null);
         host.showDebug(getContext().getString(R.string.grid_editor_reset_preview));
     }
 
@@ -243,6 +266,7 @@ final class WidgetGridEditor extends View {
                 downX = event.getX();
                 downY = event.getY();
                 selectedIndex = hitTest(layout, downX, downY, cellW, cellH);
+                notifySelection(layout);
                 if (selectedIndex < 0) {
                     mode = MODE_NONE;
                     invalidate();
@@ -266,23 +290,31 @@ final class WidgetGridEditor extends View {
                     updateDraggedItem(layout, layout.items.get(selectedIndex),
                             event.getX(), event.getY(), cellW, cellH);
                     invalidate();
+                    notifySelection(layout);
                 }
                 return true;
             case MotionEvent.ACTION_UP:
                 getParent().requestDisallowInterceptTouchEvent(false);
                 finishDrag(layout);
+                notifySelection(layout);
                 mode = MODE_NONE;
                 invalidate();
                 return true;
             case MotionEvent.ACTION_CANCEL:
                 getParent().requestDisallowInterceptTouchEvent(false);
                 restoreOriginal(layout);
+                notifySelection(layout);
                 mode = MODE_NONE;
                 invalidate();
                 return true;
             default:
                 return true;
         }
+    }
+
+    private void notifySelection(WidgetLayout layout) {
+        host.onSelectionChanged(selectedIndex >= 0 && selectedIndex < layout.items.size()
+                ? layout.items.get(selectedIndex) : null);
     }
 
     private int hitTest(WidgetLayout layout, float x, float y, float cellW, float cellH) {
@@ -473,6 +505,49 @@ final class WidgetGridEditor extends View {
             }
         }
         return null;
+    }
+
+    private WidgetLayout.Item bestAvailableWidgetItem(WidgetLayout layout,
+            String type, int preferredWidth, int preferredHeight) {
+        WidgetLayout.Item best = null;
+        int bestArea = 0;
+        float preferredRatio = preferredWidth / (float) preferredHeight;
+        float bestRatioError = Float.MAX_VALUE;
+        for (int height = 1; height <= Math.min(preferredHeight, layout.rows); height++) {
+            for (int width = 1; width <= Math.min(preferredWidth, layout.columns); width++) {
+                int area = width * height;
+                if (area < bestArea) continue;
+                WidgetLayout.Item candidate = firstAvailableWidgetItem(layout,
+                        type, width, height);
+                if (candidate == null) continue;
+                float ratioError = Math.abs(width / (float) height - preferredRatio);
+                if (area > bestArea || ratioError < bestRatioError) {
+                    best = candidate;
+                    bestArea = area;
+                    bestRatioError = ratioError;
+                }
+            }
+        }
+        return best;
+    }
+
+    private WidgetLayout.Item carveSpaceForWidget(WidgetLayout layout, String type) {
+        WidgetLayout.Item source = null;
+        int bestArea = 0;
+        for (WidgetLayout.Item candidate : layout.items) {
+            int area = candidate.w * candidate.h;
+            if (area > bestArea && (candidate.w > 1 || candidate.h > 1)) {
+                source = candidate;
+                bestArea = area;
+            }
+        }
+        if (source == null) return null;
+        if (source.w >= source.h && source.w > 1 || source.h == 1) {
+            source.w--;
+            return new WidgetLayout.Item(type, source.x + source.w, source.y, 1, source.h);
+        }
+        source.h--;
+        return new WidgetLayout.Item(type, source.x, source.y + source.h, source.w, 1);
     }
 
     private void clampWidgetItem(WidgetLayout layout, WidgetLayout.Item item) {

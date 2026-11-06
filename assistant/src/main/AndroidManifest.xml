@@ -10,6 +10,10 @@
     <queries>
         <package android:name="moe.shizuku.privileged.api" />
         <package android:name="rikka.shizuku" />
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
     </queries>
 
     <application
@@ -68,6 +72,16 @@
             <meta-data
                 android:name="android.accessibilityservice"
                 android:resource="@xml/accessibility_service" />
+        </service>
+
+        <service
+            android:name=".QuickMediaSessionListenerService"
+            android:exported="true"
+            android:label="@string/quick_media_listener_label"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
         </service>
 
         <service

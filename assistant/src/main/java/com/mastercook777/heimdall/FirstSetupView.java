@@ -143,9 +143,9 @@ final class FirstSetupView extends FrameLayout {
     }
 
     void refresh(boolean profileCreated, boolean basicTouchReady,
-                 boolean advancedControlsReady) {
+                 boolean shizukuReady, ThorDirectController.State directState) {
         if (checklist != null) {
-            checklist.refresh(profileCreated, basicTouchReady, advancedControlsReady);
+            checklist.refresh(profileCreated, basicTouchReady, shizukuReady, directState);
         }
     }
 

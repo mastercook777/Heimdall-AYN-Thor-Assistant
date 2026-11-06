@@ -7,6 +7,7 @@ import android.content.Context;
 import android.content.pm.ActivityInfo;
 import android.graphics.Bitmap;
 import android.graphics.Color;
+import android.graphics.Matrix;
 import android.graphics.Point;
 import android.graphics.Rect;
 import android.net.Uri;
@@ -36,10 +37,18 @@ import java.util.zip.ZipOutputStream;
 
 public final class ProfileBundleStoreInstrumentationTest extends Instrumentation {
     private Context target;
+    private boolean canvasResizeOnly;
+    private boolean slideshowModelOnly;
 
     @Override
     public void onCreate(Bundle arguments) {
         super.onCreate(arguments);
+        canvasResizeOnly = arguments != null
+                && "true".equalsIgnoreCase(
+                        arguments.getString("canvasResizeOnly", "false"));
+        slideshowModelOnly = arguments != null
+                && "true".equalsIgnoreCase(
+                        arguments.getString("slideshowModelOnly", "false"));
         start();
     }
 
@@ -49,10 +58,25 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
         try {
             target = getTargetContext();
             assertNotNull(target);
+            if (canvasResizeOnly) {
+                testCanvasCompositionSurvivesViewportResize();
+                result.putString("result", "Canvas viewport resize check passed");
+                finish(Activity.RESULT_OK, result);
+                return;
+            }
+            if (slideshowModelOnly) {
+                testCanvasSlideshowModelContract();
+                testCanvasSlideshowSharedTimingContract();
+                result.putString("result", "Canvas slideshow model check passed");
+                finish(Activity.RESULT_OK, result);
+                return;
+            }
             testHardwareMonitorModelContract();
             testControllerSequenceSafetyPolicy();
             testComposedControllerSequenceContract();
             testMacroCloneAndDispatchGateContract();
+            testMacroLoopSettingsSurviveCopyAndLegacyImport();
+            testPublicSponsorDocumentValidation();
             testInterruptedComposedReplayReleasesHeldState();
             testVirtualKeyboardTransportContract();
             testKeyboardPadModelContract();
@@ -65,13 +89,19 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
             testTranslationProviderCredentialIsolationContract();
             testCanvasRuntimeDecodePolicy();
             testCanvasExtremeAspectFillPolicy();
+            testCanvasCompositionSurvivesViewportResize();
             testCanvasAnimationContract();
+            testCanvasSlideshowModelContract();
+            testCanvasSlideshowSharedTimingContract();
             testGuideTextImportUsesCompleteLongReaderPath();
+            testGalleryScreenshotOwnershipIndex();
+            testGalleryCanvasSourceBecomesManagedAsset();
             testLastLocalMapDeletionClearsLegacyFallback();
             testProfileIconDecodePolicy();
             testUserMacroIconDeletionContract();
             testGameContextIdentityAndResolverContract();
             testGameContextAppOnlyFallbackAndManualSelectionGuardContract();
+            testDesktopProfileFallbackContract();
             testForegroundObservationClearAndUnicodeExportFilenameContract();
             testGameContextUserServiceLifetimeContract();
             testEdenGameContextIdentityAndResolverContract();
@@ -142,6 +172,60 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
         assertEquals(GuideTextLoader.Failure.NONE, loaded[0].failure);
         assertNotNull(loaded[0].document);
         assertEquals(expected, loaded[0].document.text);
+    }
+
+    public void testGalleryScreenshotOwnershipIndex() throws Exception {
+        String databaseName = "gallery_ownership_test_" + System.nanoTime() + ".db";
+        GameProfile first = new GameProfile("Same name", "General", "",
+                new ArrayList<Macro>());
+        GameProfile second = new GameProfile("Same name", "General", "",
+                new ArrayList<Macro>());
+        Uri firstUri = Uri.parse("content://media/external/images/media/1001");
+        Uri secondUri = Uri.parse("content://media/external/images/media/1002");
+        try (GalleryScreenshotStore store = new GalleryScreenshotStore(target, databaseName)) {
+            assertFalse(store.add("", firstUri, 100L));
+            assertFalse(store.add(first.safeProfileId(), Uri.parse("file:///not-media"), 100L));
+            assertTrue(store.add(first.safeProfileId(), firstUri, 100L));
+            assertTrue(store.add(second.safeProfileId(), secondUri, 200L));
+            first.name = "Renamed";
+            assertEquals(1, store.list(first.safeProfileId()).size());
+            assertEquals(firstUri, store.list(first.safeProfileId()).get(0).uri);
+            assertEquals(secondUri, store.list(second.safeProfileId()).get(0).uri);
+            store.remove(first.safeProfileId(), firstUri);
+            assertEquals(0, store.list(first.safeProfileId()).size());
+            assertEquals(1, store.list(second.safeProfileId()).size());
+        } finally {
+            target.deleteDatabase(databaseName);
+        }
+    }
+
+    public void testGalleryCanvasSourceBecomesManagedAsset() throws Exception {
+        Uri source = fixture("gallery-canvas-" + System.nanoTime(),
+                "capture.png", pngFixture());
+        CountDownLatch latch = new CountDownLatch(1);
+        CanvasAssetStore.ImportedAsset[] imported = new CanvasAssetStore.ImportedAsset[1];
+        CanvasAssetStore.ImportError[] error = new CanvasAssetStore.ImportError[1];
+        CanvasAssetStore.importAsync(target, source, new CanvasAssetStore.ImportCallback() {
+            @Override public void onImported(CanvasAssetStore.ImportedAsset asset) {
+                imported[0] = asset;
+                latch.countDown();
+            }
+            @Override public void onError(CanvasAssetStore.ImportError failure) {
+                error[0] = failure;
+                latch.countDown();
+            }
+        });
+        assertTrue("Gallery Canvas import timed out", latch.await(30, TimeUnit.SECONDS));
+        if (error[0] != null) {
+            throw new AssertionError("Gallery Canvas import failed: " + error[0]);
+        }
+        assertNotNull(imported[0]);
+        assertFalse(imported[0].video);
+        File managed = CanvasAssetStore.resolve(target, imported[0].assetId);
+        assertNotNull(managed);
+        assertEquals(1, target.getContentResolver().delete(source, null, null));
+        assertNotNull(CanvasAssetStore.resolve(target, imported[0].assetId));
+        assertTrue(managed.length() > 0L);
     }
 
     public void testLastLocalMapDeletionClearsLegacyFallback() throws Exception {
@@ -832,6 +916,24 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
         assertEquals(HeimdallActionCatalog.ACTION_SCREENSHOT,
                 restored.safeQuickActions().actionAt(1));
         assertFalse(restored.safeQuickActions().mediaVolume);
+        assertFalse(restored.safeQuickActions().mediaControls);
+
+        QuickActionsConfig composed = restored.safeQuickActions().copy();
+        composed.setActionAt(2, HeimdallActionCatalog.ACTION_SCREEN_RECORDING);
+        composed.setActionAt(3, HeimdallActionCatalog.ACTION_SCREENSHOT);
+        composed.mediaControls = true;
+        composed.mediaMode = QuickActionsConfig.MEDIA_FULL;
+        composed.linkedBrightness = true;
+        composed.removeActionAt(1);
+        restored.quickActions = composed;
+        WidgetLayout.Item composedRestored = WidgetLayout.Item.fromJson(restored.toJson());
+        assertEquals(3, composedRestored.safeQuickActions().actions.size());
+        assertEquals(HeimdallActionCatalog.ACTION_SCREEN_RECORDING,
+                composedRestored.safeQuickActions().actionAt(1));
+        assertTrue(composedRestored.safeQuickActions().mediaControls);
+        assertEquals(QuickActionsConfig.MEDIA_FULL,
+                composedRestored.safeQuickActions().mediaMode);
+        assertTrue(composedRestored.safeQuickActions().linkedBrightness);
         assertEquals(HeimdallActionCatalog.ACTION_NONE,
                 HeimdallActionCatalog.normalizeQuickAction("arbitrary_intent"));
     }
@@ -1291,6 +1393,36 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
         assertFalse(MacroIconRepository.deleteUserIcon(target, key));
     }
 
+    public void testCanvasCompositionSurvivesViewportResize() {
+        final CanvasImageView[] view = new CanvasImageView[1];
+        final Bitmap[] bitmap = new Bitmap[1];
+        final float[] before = new float[9];
+        final float[] after = new float[9];
+        runOnMainSync(() -> {
+            bitmap[0] = Bitmap.createBitmap(1000, 1000, Bitmap.Config.ARGB_8888);
+            view[0] = new CanvasImageView(target);
+            view[0].setImageBitmap(bitmap[0]);
+            CanvasConfig config = new CanvasConfig();
+            config.focusX = 0.3f;
+            config.focusY = 0.7f;
+            config.zoom = 3f;
+            view[0].setComposition(config, false);
+            view[0].layout(0, 0, 1000, 600);
+            view[0].getImageMatrix().getValues(before);
+            view[0].layout(0, 0, 600, 1000);
+            view[0].layout(0, 0, 1000, 600);
+            view[0].getImageMatrix().getValues(after);
+            view[0].setImageDrawable(null);
+            bitmap[0].recycle();
+        });
+        assertTrue("Canvas scale changed after viewport round trip",
+                Math.abs(before[Matrix.MSCALE_X] - after[Matrix.MSCALE_X]) < 0.001f);
+        assertTrue("Canvas horizontal focus shifted after viewport round trip",
+                Math.abs(before[Matrix.MTRANS_X] - after[Matrix.MTRANS_X]) < 0.5f);
+        assertTrue("Canvas vertical focus shifted after viewport round trip",
+                Math.abs(before[Matrix.MTRANS_Y] - after[Matrix.MTRANS_Y]) < 0.5f);
+    }
+
     public void testCanvasRuntimeDecodePolicy() {
         assertEquals(256, CanvasImageLoader.runtimeDecodeMaxSide(0, 0, 1f));
         assertEquals(1200, CanvasImageLoader.runtimeDecodeMaxSide(600, 400, 1f));
@@ -1389,6 +1521,61 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
         assertEquals(1, info.width);
         assertEquals(1, info.height);
         assertTrue(gif.delete());
+    }
+
+    public void testCanvasSlideshowModelContract() throws Exception {
+        CanvasConfig legacy = new CanvasConfig();
+        legacy.assetId = "first.png";
+        legacy.focusX = 0.4f;
+        assertFalse(CanvasConfig.fromJson(legacy.toJson()).isSlideshow());
+        assertEquals(CanvasConfig.TRANSITION_NONE,
+                CanvasConfig.fromJson(legacy.toJson()).slideTransition);
+
+        CanvasConfig draft = legacy.copy();
+        draft.ensureSlides();
+        draft.slides.add(new CanvasConfig.Slide("second.png", 0.7f, 0.3f, 2f));
+        draft.slides.add(new CanvasConfig.Slide("first.png", 0.8f, 0.6f, 3f));
+        draft.slideSeconds = 20;
+        draft.autoRotate = false;
+        draft.slideTransition = CanvasConfig.TRANSITION_FADE;
+        CanvasConfig restored = CanvasConfig.fromJson(draft.toJson());
+        assertTrue(restored.isSlideshow());
+        assertEquals("first.png", restored.assetId);
+        assertEquals("second.png", restored.slideConfig(1).assetId);
+        assertEquals(Float.valueOf(0.7f), Float.valueOf(restored.slideConfig(1).focusX));
+        assertEquals(20, restored.slideSeconds);
+        assertFalse(restored.autoRotate);
+        assertEquals(CanvasConfig.TRANSITION_FADE, restored.slideTransition);
+        assertEquals("first.png", restored.slideConfig(2).assetId);
+        assertEquals(Float.valueOf(0.8f),
+                Float.valueOf(restored.slideConfig(2).focusX));
+        CanvasConfig copy = restored.copy();
+        copy.slides.get(1).focusX = 0.2f;
+        assertEquals(Float.valueOf(0.7f), Float.valueOf(restored.slides.get(1).focusX));
+        copy.slideTransition = CanvasConfig.TRANSITION_FROM_LEFT;
+        assertEquals(CanvasConfig.TRANSITION_FADE, restored.slideTransition);
+        JSONObject invalidTransition = restored.toJson();
+        invalidTransition.put("slideTransition", "unsupported");
+        assertEquals(CanvasConfig.TRANSITION_NONE,
+                CanvasConfig.fromJson(invalidTransition).slideTransition);
+    }
+
+    public void testCanvasSlideshowSharedTimingContract() {
+        long epoch = 1000L;
+        long interval = 5000L;
+        // Different decode and transition completion times must not become
+        // different deadlines on the next rotation.
+        assertEquals(11000L, CanvasSlideshowClock.nextBoundary(
+                6200L, epoch, interval));
+        assertEquals(11000L, CanvasSlideshowClock.nextBoundary(
+                6900L, epoch, interval));
+        assertEquals(16000L, CanvasSlideshowClock.nextBoundary(
+                11400L, epoch, interval));
+        assertEquals(16000L, CanvasSlideshowClock.nextBoundary(
+                11900L, epoch, interval));
+        // A delayed decode skips missed ticks instead of firing a catch-up burst.
+        assertEquals(21000L, CanvasSlideshowClock.nextBoundary(
+                18200L, epoch, interval));
     }
 
     public void testGameContextIdentityAndResolverContract() throws Exception {
@@ -1558,6 +1745,62 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
         assertFalse(guard.shouldSuppress(otherApp, contextB));
     }
 
+    public void testDesktopProfileFallbackContract() {
+        GameProfile desktop = new GameProfile("Desktop", "generic", "",
+                Collections.emptyList());
+        GameProfile gameA = new GameProfile("Game A", "generic",
+                "com.example.emulator", Collections.emptyList());
+        gameA.gameContextBinding.kind = GameContextBinding.KIND_EMULATOR_TITLE_ID;
+        gameA.gameContextBinding.identityKey = "game-a";
+        List<GameProfile> profiles = Arrays.asList(desktop, gameA);
+        ForegroundAppTracker.Snapshot emulator = new ForegroundAppTracker.Snapshot(
+                "com.example.emulator", "Main", "", 0, 100L);
+        ForegroundAppTracker.Snapshot other = new ForegroundAppTracker.Snapshot(
+                "com.example.video", "Main", "", 0, 100L);
+        GameContextSnapshot activeA = new GameContextSnapshot(
+                GameContextSnapshot.State.ACTIVE, "com.example.emulator", 1,
+                GameContextBinding.KIND_EMULATOR_TITLE_ID, "game-a", "A", 100L, "test");
+        GameContextSnapshot activeB = new GameContextSnapshot(
+                GameContextSnapshot.State.ACTIVE, "com.example.emulator", 1,
+                GameContextBinding.KIND_EMULATOR_TITLE_ID, "game-b", "B", 200L, "test");
+
+        assertEquals(0, DesktopProfilePolicy.findDesktopIndex(
+                profiles, desktop.safeProfileId()));
+        assertEquals(-1, DesktopProfilePolicy.findDesktopIndex(profiles, "missing"));
+        assertTrue(DesktopProfilePolicy.isConfirmedUnbound(
+                profiles, other, GameContextSnapshot.UNKNOWN, false));
+        assertTrue(DesktopProfilePolicy.isConfirmedUnbound(
+                profiles, emulator, activeB, false));
+        assertFalse(DesktopProfilePolicy.isConfirmedUnbound(
+                profiles, emulator, activeA, false));
+        assertFalse(DesktopProfilePolicy.isConfirmedUnbound(
+                profiles, emulator, GameContextSnapshot.UNKNOWN, false));
+        assertTrue(DesktopProfilePolicy.isConfirmedUnbound(
+                profiles, emulator, GameContextSnapshot.none(
+                        "com.example.emulator", 1, "test"), false));
+        assertTrue(DesktopProfilePolicy.isConfirmedUnbound(
+                profiles, null, GameContextSnapshot.UNKNOWN, true));
+        assertFalse(DesktopProfilePolicy.isConfirmedUnbound(
+                profiles, null, GameContextSnapshot.UNKNOWN, false));
+
+        DesktopProfilePolicy policy = new DesktopProfilePolicy();
+        policy.recordManualSelection(other, GameContextSnapshot.UNKNOWN, false);
+        assertTrue(policy.suppressesAutomaticSwitch(
+                other, GameContextSnapshot.UNKNOWN, false));
+        assertFalse(policy.suppressesAutomaticSwitch(emulator, activeB, false));
+        policy.recordManualSelection(emulator, activeA, false);
+        assertTrue(policy.suppressesAutomaticSwitch(emulator, activeA, false));
+        assertFalse(policy.suppressesAutomaticSwitch(emulator, activeB, false));
+
+        String previousId = ProfileStore.loadDesktopProfileId(target);
+        try {
+            ProfileStore.saveDesktopProfileId(target, desktop.safeProfileId());
+            assertEquals(desktop.safeProfileId(), ProfileStore.loadDesktopProfileId(target));
+        } finally {
+            ProfileStore.saveDesktopProfileId(target, previousId);
+        }
+    }
+
     public void testForegroundObservationClearAndUnicodeExportFilenameContract() {
         ForegroundAppTracker.Snapshot previous = ForegroundAppTracker.latest();
         ForegroundAppTracker.Snapshot game = new ForegroundAppTracker.Snapshot(
@@ -1566,6 +1809,11 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
         assertEquals("com.example.game", ForegroundAppTracker.latest().packageName);
         ForegroundAppTracker.clear();
         assertNull(ForegroundAppTracker.latest());
+        assertFalse(ForegroundAppTracker.isUpperLauncherVisible());
+        ForegroundAppTracker.publish(game);
+        ForegroundAppTracker.clearForUpperLauncher();
+        assertNull(ForegroundAppTracker.latest());
+        assertTrue(ForegroundAppTracker.isUpperLauncherVisible());
         assertEquals(ProfileAutoSwitchResolver.NO_MATCH,
                 ProfileAutoSwitchResolver.resolve(Collections.emptyList(), 0,
                         ForegroundAppTracker.latest()));
@@ -1573,6 +1821,8 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
         assertFalse(ThorAccessibilityService.isLauncherPackage("com.example.game"));
         if (previous != null) {
             ForegroundAppTracker.publish(previous);
+        } else {
+            ForegroundAppTracker.clear();
         }
 
         assertEquals("\u585e\u5c14\u8fbe\u4f20\u8bf4",
@@ -2355,6 +2605,37 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
                 gate.onTap(new Object(), false, "next").decision);
     }
 
+    public void testMacroLoopSettingsSurviveCopyAndLegacyImport() throws Exception {
+        Macro original = new Macro("Repeat A",
+                Collections.singletonList(new MacroStep(MacroStep.TYPE_WAIT, "80ms")));
+        original.loopMaxSeconds = 180;
+        Macro restored = Macro.fromJson(original.toJson());
+        assertEquals(180, restored.loopMaxSeconds);
+
+        Macro copied = new Macro("Other",
+                Collections.singletonList(new MacroStep(MacroStep.TYPE_WAIT, "80ms")));
+        copied.overwriteFrom(restored);
+        assertEquals(180, copied.loopMaxSeconds);
+
+        JSONObject legacy = original.toJson();
+        legacy.remove("loopMaxSeconds");
+        assertEquals(0, Macro.fromJson(legacy).loopMaxSeconds);
+        legacy.put("loopMaxSeconds", 3600);
+        assertEquals(Macro.MAX_LOOP_SECONDS, Macro.fromJson(legacy).loopMaxSeconds);
+    }
+
+    public void testPublicSponsorDocumentValidation() throws Exception {
+        assertEquals(Arrays.asList("Alice", "Bob"), SponsorListRepository.parse(
+                "{\"version\":1,\"supporters\":[\" Alice \",\"Bob\",\"Alice\"]}"));
+        boolean rejected = false;
+        try {
+            SponsorListRepository.parse("{\"version\":2,\"supporters\":[\"Alice\"]}");
+        } catch (IllegalArgumentException expected) {
+            rejected = true;
+        }
+        assertTrue(rejected);
+    }
+
     public void testInterruptedComposedReplayReleasesHeldState() throws Exception {
         List<GamepadSequenceComposer.Frame> heldFrames = Collections.singletonList(
                 new GamepadSequenceComposer.Frame(-1, 0,
@@ -2418,6 +2699,15 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
         String digest = ProfileAssetStore.sha256(macroSource);
         String canvasId = CanvasAssetStore.installBundledAsset(
                 target, macroSource, digest, "png");
+        Bitmap secondBitmap = Bitmap.createBitmap(256, 256, Bitmap.Config.ARGB_8888);
+        secondBitmap.eraseColor(Color.rgb(23, 87, 131));
+        ByteArrayOutputStream secondBytes = new ByteArrayOutputStream();
+        assertTrue(secondBitmap.compress(Bitmap.CompressFormat.PNG, 100, secondBytes));
+        secondBitmap.recycle();
+        File secondSource = new File(macroDirectory, "roundtrip_slide2.png");
+        writeFile(secondSource, secondBytes.toByteArray());
+        String secondCanvasId = CanvasAssetStore.installBundledAsset(target, secondSource,
+                ProfileAssetStore.sha256(secondSource), "png");
 
         Macro macro = new Macro("中文宏",
                 Collections.singletonList(new MacroStep(MacroStep.TYPE_WAIT, "80ms")));
@@ -2430,6 +2720,8 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
         profile.touchpadSettings.virtualMouseSensitivity = 1.35f;
         profile.touchpadSettings.virtualMouseInvertY = true;
         profile.touchpadSettings.virtualMouseScrollDistance = 48f;
+        profile.touchpadSettings.virtualMouseGesturesEnabled = false;
+        profile.touchpadSettings.virtualMouseMiddleClickGestureEnabled = true;
         profile.touchpadSettings.virtualMouseFullGestureArea = true;
         profile.iconUri = iconSource.toString();
         profile.maps.add(new MapEntry("同名攻略", mapSource.toString()));
@@ -2447,13 +2739,19 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
         WidgetLayout layout = new WidgetLayout();
         WidgetLayout.Item canvas = new WidgetLayout.Item(WidgetLayout.TYPE_CANVAS, 0, 0, 4, 4);
         canvas.canvasConfig.assetId = canvasId;
+        canvas.canvasConfig.slides.add(new CanvasConfig.Slide(canvasId, 0.5f, 0.5f, 1f));
+        canvas.canvasConfig.slides.add(new CanvasConfig.Slide(secondCanvasId, 0.7f, 0.3f, 2f));
+        canvas.canvasConfig.slides.add(new CanvasConfig.Slide(canvasId, 0.8f, 0.6f, 3f));
+        canvas.canvasConfig.slideSeconds = 20;
+        canvas.canvasConfig.autoRotate = false;
+        canvas.canvasConfig.slideTransition = CanvasConfig.TRANSITION_FROM_RIGHT;
         layout.items.add(canvas);
         profile.widgetLayout = layout;
 
         Uri bundle = ProfileBundleTestProvider.uri("roundtrip-bundle", "迁移包.heimdall-profile");
         ExportResult exported = export(Collections.singletonList(profile), bundle);
         assertNull(exported.failure);
-        assertEquals(5, exported.assetCount);
+        assertEquals(6, exported.assetCount);
         assertTrue(exported.assetBytes > png.length);
 
         target.getContentResolver().delete(iconSource, null, null);
@@ -2462,15 +2760,19 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
         target.getContentResolver().delete(guideSource2, null, null);
         target.getContentResolver().delete(pdfSource, null, null);
         assertTrue(macroSource.delete());
+        assertTrue(secondSource.delete());
         File oldCanvas = CanvasAssetStore.resolve(target, canvasId);
         assertNotNull(oldCanvas);
         assertTrue(oldCanvas.delete());
+        File oldSecondCanvas = CanvasAssetStore.resolve(target, secondCanvasId);
+        assertNotNull(oldSecondCanvas);
+        assertTrue(oldSecondCanvas.delete());
 
         PrepareResult preparedResult = prepare(bundle);
         assertNull(preparedResult.failure);
         assertNotNull(preparedResult.prepared);
         assertFalse(preparedResult.prepared.legacyJson);
-        assertEquals(5, preparedResult.prepared.assetCount);
+        assertEquals(6, preparedResult.prepared.assetCount);
         InstallResult installed = install(preparedResult.prepared);
         assertNull(installed.failure);
         assertEquals(1, installed.profiles.size());
@@ -2486,6 +2788,8 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
         assertTrue(restored.touchpadSettings.virtualMouseInvertY);
         assertEquals(Float.valueOf(48f),
                 Float.valueOf(restored.touchpadSettings.virtualMouseScrollDistance));
+        assertFalse(restored.touchpadSettings.virtualMouseGesturesEnabled);
+        assertTrue(restored.touchpadSettings.virtualMouseMiddleClickGestureEnabled);
         assertTrue(restored.touchpadSettings.virtualMouseFullGestureArea);
         assertTrue(restored.iconUri.startsWith("content://"
                 + target.getPackageName() + ".profile-assets/"));
@@ -2506,6 +2810,21 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
         assertNotNull(MacroIconRepository.findByKey(target, restored.macros.get(0).iconKey));
         String restoredCanvasId = restored.widgetLayout.items.get(0).canvasConfig.assetId;
         assertNotNull(CanvasAssetStore.resolve(target, restoredCanvasId));
+        CanvasConfig restoredSlideshow = restored.widgetLayout.items.get(0).canvasConfig;
+        assertTrue(restoredSlideshow.isSlideshow());
+        assertEquals(3, restoredSlideshow.slides.size());
+        assertEquals(20, restoredSlideshow.slideSeconds);
+        assertFalse(restoredSlideshow.autoRotate);
+        assertEquals(CanvasConfig.TRANSITION_FROM_RIGHT,
+                restoredSlideshow.slideTransition);
+        assertEquals(restoredSlideshow.slides.get(0).assetId,
+                restoredSlideshow.slides.get(2).assetId);
+        assertEquals(Float.valueOf(0.8f),
+                Float.valueOf(restoredSlideshow.slides.get(2).focusX));
+        assertNotNull(CanvasAssetStore.resolve(target,
+                restoredSlideshow.slides.get(1).assetId));
+        assertEquals(Float.valueOf(0.7f),
+                Float.valueOf(restoredSlideshow.slides.get(1).focusX));
     }
 
     public void testCorruptMissingUnsafeAndOversizedBundlesFailClosed() throws Exception {
@@ -2546,6 +2865,8 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
         legacyTouchpad.remove("virtual_mouse_sensitivity");
         legacyTouchpad.remove("virtual_mouse_invert_y");
         legacyTouchpad.remove("virtual_mouse_scroll_distance");
+        legacyTouchpad.remove("virtual_mouse_gestures_enabled");
+        legacyTouchpad.remove("virtual_mouse_middle_click_gesture_enabled");
         legacyTouchpad.remove("virtual_mouse_full_gesture_area");
         JSONArray legacy = new JSONArray().put(legacyProfile);
         Uri source = fixture("legacy-json", "旧版.json",
@@ -2562,6 +2883,8 @@ public final class ProfileBundleStoreInstrumentationTest extends Instrumentation
         assertEquals(Float.valueOf(1f), Float.valueOf(restoredTouchpad.virtualMouseSensitivity));
         assertFalse(restoredTouchpad.virtualMouseInvertY);
         assertEquals(Float.valueOf(36f), Float.valueOf(restoredTouchpad.virtualMouseScrollDistance));
+        assertTrue(restoredTouchpad.virtualMouseGesturesEnabled);
+        assertFalse(restoredTouchpad.virtualMouseMiddleClickGestureEnabled);
         assertFalse(restoredTouchpad.virtualMouseFullGestureArea);
         result.prepared.close();
     }
