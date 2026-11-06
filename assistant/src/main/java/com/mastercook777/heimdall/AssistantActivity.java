@@ -2939,6 +2939,8 @@ public class AssistantActivity extends Activity {
             QuickActionsConfig config) {
         LinearLayout section = new LinearLayout(this);
         section.setOrientation(LinearLayout.VERTICAL);
+        section.setOnClickListener(view -> showQuickMediaPermissionDialog(
+                MEDIA_PERMISSION_RETURN_NONE));
         boolean full = QuickActionsConfig.MEDIA_FULL.equals(config.mediaMode);
         root.addView(section, full
                 ? new LinearLayout.LayoutParams(-1, 0, 1)
@@ -3051,7 +3053,7 @@ public class AssistantActivity extends Activity {
         previous.setDelayedEditAction(() -> showQuickActionsEditor(item));
         playPause.setDelayedEditAction(() -> showQuickActionsEditor(item));
         next.setDelayedEditAction(() -> showQuickActionsEditor(item));
-        QuickMediaSurface surface = new QuickMediaSurface(source, title, subtitle,
+        QuickMediaSurface surface = new QuickMediaSurface(section, source, title, subtitle,
                 artwork, info, progress,
                 previous, playPause, next, switchPlayer);
         quickMediaSurfaces.add(surface);
@@ -3072,6 +3074,11 @@ public class AssistantActivity extends Activity {
         QuickMediaController.Snapshot snapshot = quickMediaController.snapshot();
         MediaController selected = snapshot.selected;
         for (QuickMediaSurface surface : quickMediaSurfaces) {
+            surface.section.setClickable(!snapshot.accessGranted);
+            surface.section.setContentDescription(snapshot.accessGranted
+                    ? null : getString(R.string.quick_media_permission));
+            surface.source.setTextColor(snapshot.accessGranted
+                    ? HeimdallUi.resolveColor(this, MUTED) : HeimdallUi.accent(this));
             if (!snapshot.accessGranted) {
                 surface.source.setText(R.string.quick_media_permission);
             } else if (snapshot.sessions.isEmpty()) {
@@ -3097,6 +3104,9 @@ public class AssistantActivity extends Activity {
                 }
                 surface.title.setText(mediaTitle);
                 surface.title.setVisibility(mediaTitle.isEmpty() ? View.GONE : View.VISIBLE);
+                surface.title.setTextColor(!snapshot.accessGranted
+                        && surface.source.getVisibility() == View.GONE
+                        ? HeimdallUi.accent(this) : HeimdallUi.resolveColor(this, TEXT));
                 boolean expanded = surface.info.getHeight() >= dp(76);
                 surface.title.setSingleLine(!expanded);
                 surface.title.setMaxLines(expanded ? 2 : 1);
@@ -3299,23 +3309,24 @@ public class AssistantActivity extends Activity {
     }
 
     private void showQuickMediaPermissionDialog(int returnStep) {
-        AlertDialog.Builder dialog = new AlertDialog.Builder(this)
-                .setTitle(R.string.quick_media_permission)
-                .setNegativeButton(R.string.common_cancel, null);
         if (returnStep == MEDIA_PERMISSION_RETURN_ACCESS) {
-            dialog.setMessage(R.string.quick_media_restricted_step)
-                    .setNeutralButton(R.string.quick_media_retry_access,
-                            (ignored, which) -> openQuickMediaAccessSettings())
-                    .setPositiveButton(R.string.quick_media_open_app_info,
-                            (ignored, which) -> openQuickMediaAppInfo());
+            showSettingsDecisionPanel(getString(R.string.quick_media_restricted_title),
+                    getString(R.string.quick_media_restricted_step),
+                    getString(R.string.quick_media_retry_access),
+                    this::openQuickMediaAccessSettings,
+                    getString(R.string.quick_media_open_app_info),
+                    this::openQuickMediaAppInfo);
         } else {
-            dialog.setMessage(returnStep == MEDIA_PERMISSION_RETURN_APP_INFO
+            showSettingsDecisionPanel(getString(returnStep == MEDIA_PERMISSION_RETURN_APP_INFO
+                            ? R.string.quick_media_retry_title
+                            : R.string.quick_media_permission_title),
+                    getString(returnStep == MEDIA_PERMISSION_RETURN_APP_INFO
                             ? R.string.quick_media_retry_step
-                            : R.string.quick_media_permission_explain)
-                    .setPositiveButton(R.string.quick_media_open_settings,
-                            (ignored, which) -> openQuickMediaAccessSettings());
+                            : R.string.quick_media_permission_explain),
+                    null, null,
+                    getString(R.string.quick_media_open_settings),
+                    this::openQuickMediaAccessSettings);
         }
-        dialog.show();
     }
 
     private void openQuickMediaAccessSettings() {
@@ -3386,6 +3397,7 @@ public class AssistantActivity extends Activity {
     }
 
     private static final class QuickMediaSurface {
+        final LinearLayout section;
         final TextView source;
         final TextView title;
         final TextView subtitle;
@@ -3402,11 +3414,12 @@ public class AssistantActivity extends Activity {
         MediaSession.Token artworkToken;
         Bitmap artworkBitmap;
 
-        QuickMediaSurface(TextView source, TextView title, TextView subtitle,
+        QuickMediaSurface(LinearLayout section, TextView source, TextView title, TextView subtitle,
                 ImageView artwork, LinearLayout info, SeekBar progress,
                 QuickActionButtonView previous,
                 QuickActionButtonView playPause, QuickActionButtonView next,
                 QuickActionButtonView switchPlayer) {
+            this.section = section;
             this.source = source;
             this.title = title;
             this.subtitle = subtitle;

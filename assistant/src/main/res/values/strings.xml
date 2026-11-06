@@ -172,9 +172,12 @@
     <string name="quick_actions_resize_to">Resize Quick Actions to at least %1$d × %2$d Grid cells.</string>
     <string name="quick_media_listener_label">Heimdall media controls</string>
     <string name="quick_media_permission">Enable notification access for media controls</string>
-    <string name="quick_media_permission_explain">Media controls need notification access. Tap Open media access and try enabling Heimdall on the system page. If Android says Restricted settings, return here to continue. Allow restricted settings may appear only after this first attempt.</string>
-    <string name="quick_media_restricted_step">If Android showed Restricted settings, open App info, tap the top-right menu, then Allow restricted settings. Return here afterward. If the menu has no such option, retry the switch on the access page first.</string>
-    <string name="quick_media_retry_step">Open Heimdall media access again and enable the switch.</string>
+    <string name="quick_media_permission_title">Enable media controls</string>
+    <string name="quick_media_restricted_title">Allow restricted settings</string>
+    <string name="quick_media_retry_title">Finish media access</string>
+    <string name="quick_media_permission_explain">To find the current player, Heimdall needs Android notification access. It does not read notification content. Try enabling Heimdall on the system page; if Android blocks it, return here to continue.</string>
+    <string name="quick_media_restricted_step">If Android showed Restricted settings, open App info, then choose Allow restricted settings from the top-right menu. This option may appear only after you first try the access switch. Return here afterward.</string>
+    <string name="quick_media_retry_step">Open Heimdall media access again and enable notification access.</string>
     <string name="quick_media_retry_access">Retry access</string>
     <string name="quick_media_settings_unavailable">Cannot open system settings. Find Heimdall under Notification access in Android Settings.</string>
     <string name="quick_media_open_app_info">Open App info</string>
