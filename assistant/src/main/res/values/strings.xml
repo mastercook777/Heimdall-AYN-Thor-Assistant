@@ -176,11 +176,11 @@
     <string name="quick_media_restricted_title">Allow restricted settings</string>
     <string name="quick_media_retry_title">Finish media access</string>
     <string name="quick_media_permission_explain">To find the current player, Heimdall needs Android notification access. It does not read notification content. Try enabling Heimdall on the system page; if Android blocks it, return here to continue.</string>
-    <string name="quick_media_restricted_step">If Android showed Restricted settings, open App info, then choose Allow restricted settings from the top-right menu. This option may appear only after you first try the access switch. Return here afterward.</string>
+    <string name="quick_media_restricted_step">If Android showed Restricted settings, open App info on the upper screen and choose Allow restricted settings from its top-right menu. The option may appear only after the first blocked attempt. If the menu is still missing, long-press Heimdall on the upper-screen launcher and open App info there. Then return to the lower screen.</string>
     <string name="quick_media_retry_step">Open Heimdall media access again and enable notification access.</string>
     <string name="quick_media_retry_access">Retry access</string>
     <string name="quick_media_settings_unavailable">Cannot open system settings. Find Heimdall under Notification access in Android Settings.</string>
-    <string name="quick_media_open_app_info">Open App info</string>
+    <string name="quick_media_open_app_info">Open App info on upper screen</string>
     <string name="quick_media_open_settings">Open media access</string>
     <string name="quick_media_no_session">No active player</string>
     <string name="quick_media_choose_player">Choose player</string>

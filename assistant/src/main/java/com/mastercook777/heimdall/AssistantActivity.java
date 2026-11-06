@@ -2939,8 +2939,7 @@ public class AssistantActivity extends Activity {
             QuickActionsConfig config) {
         LinearLayout section = new LinearLayout(this);
         section.setOrientation(LinearLayout.VERTICAL);
-        section.setOnClickListener(view -> showQuickMediaPermissionDialog(
-                MEDIA_PERMISSION_RETURN_NONE));
+        section.setOnClickListener(view -> showQuickMediaPermissionEntry());
         boolean full = QuickActionsConfig.MEDIA_FULL.equals(config.mediaMode);
         root.addView(section, full
                 ? new LinearLayout.LayoutParams(-1, 0, 1)
@@ -3196,7 +3195,7 @@ public class AssistantActivity extends Activity {
         if (quickMediaController == null) return;
         QuickMediaController.Snapshot snapshot = quickMediaController.snapshot();
         if (!snapshot.accessGranted) {
-            showQuickMediaPermissionDialog(MEDIA_PERMISSION_RETURN_NONE);
+            showQuickMediaPermissionEntry();
             return;
         }
         if (snapshot.sessions.isEmpty()) {
@@ -3308,6 +3307,12 @@ public class AssistantActivity extends Activity {
         holder[0] = showPanelOverlay(shell, params, null);
     }
 
+    private void showQuickMediaPermissionEntry() {
+        int returnStep = pendingMediaPermissionReturn;
+        pendingMediaPermissionReturn = MEDIA_PERMISSION_RETURN_NONE;
+        showQuickMediaPermissionDialog(returnStep);
+    }
+
     private void showQuickMediaPermissionDialog(int returnStep) {
         if (returnStep == MEDIA_PERMISSION_RETURN_ACCESS) {
             showSettingsDecisionPanel(getString(R.string.quick_media_restricted_title),
@@ -3349,10 +3354,22 @@ public class AssistantActivity extends Activity {
 
     private void openQuickMediaAppInfo() {
         pendingMediaPermissionReturn = MEDIA_PERMISSION_RETURN_APP_INFO;
+        Intent appInfo = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.parse("package:" + getPackageName()));
+        DisplayManager displays = (DisplayManager) getSystemService(DISPLAY_SERVICE);
+        Display upper = displays == null ? null : displays.getDisplay(Display.DEFAULT_DISPLAY);
         try {
-            startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                    Uri.parse("package:" + getPackageName())));
-        } catch (ActivityNotFoundException | SecurityException ignored) {
+            if (upper != null && upper.isValid()) {
+                // Restricted settings is hidden in Thor's lower-screen embedded App info.
+                // Start a separate Settings task so an existing lower-screen task is not reused.
+                appInfo.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_MULTIPLE_TASK);
+                ActivityOptions options = ActivityOptions.makeBasic();
+                options.setLaunchDisplayId(upper.getDisplayId());
+                startActivity(appInfo, options.toBundle());
+            } else {
+                startActivity(appInfo);
+            }
+        } catch (RuntimeException ignored) {
             pendingMediaPermissionReturn = MEDIA_PERMISSION_RETURN_NONE;
             showErrorAction(getString(R.string.quick_media_settings_unavailable));
         }
