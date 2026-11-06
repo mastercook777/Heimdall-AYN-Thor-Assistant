@@ -223,7 +223,7 @@ Choose a registered Heimdall or Freya colorway under Appearance. A Profile can u
 
 ### Screenshot And Recording
 
-Quick Actions can capture the upper screen, control compatible active media sessions, adjust media volume, and, with Thor Direct, adjust both Thor displays' brightness. Configure only the capabilities wanted for each Profile. Android notification access is required to discover media sessions; if Android marks the setting restricted, use App info > top-right menu > Allow restricted settings before granting notification access. Recording uses Android MediaProjection and Android Audio Playback Capture rather than microphone input. The upper App may still forbid its game audio from being captured.
+Quick Actions can capture the upper screen, control compatible active media sessions, adjust media volume, and, with Thor Direct, adjust both Thor displays' brightness. Configure only the capabilities wanted for each Profile. Android notification access is required to discover media sessions. Heimdall opens its own access page directly: try enabling it there first. If Android blocks it as a restricted setting, return to Heimdall, open App info from the guide, choose top-right menu > Allow restricted settings, then return to the access page and enable Heimdall. On some devices the menu option appears only after the blocked first attempt. Recording uses Android MediaProjection and Android Audio Playback Capture rather than microphone input. The upper App may still forbid its game audio from being captured.
 
 ## 6. Back Up Before Uninstalling
 
