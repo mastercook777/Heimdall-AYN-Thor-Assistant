@@ -15,7 +15,7 @@
   · <a href="https://github.com/mastercook777/Heimdall-AYN-Thor-Assistant/issues">Report an issue</a>
 </p>
 
-English | [简体中文](README.zh-CN.md)
+English | [简体中文](README.zh-CN.md) | [台灣繁體中文](README.zh-TW.md)
 
 Heimdall keeps the game on Thor's upper screen while the lower screen becomes a persistent control and reference console: Profiles, macros, touch controls, translation, hardware status, maps, guides, local-media Canvases, Portals, recording, and Quick Actions stay within thumb reach.
 

@@ -15,7 +15,7 @@
   · <a href="https://github.com/mastercook777/Heimdall-AYN-Thor-Assistant/issues">反馈问题</a>
 </p>
 
-[English](README.md) | 简体中文
+[English](README.md) | 简体中文 | [台灣繁體中文](README.zh-TW.md)
 
 Heimdall 让游戏继续显示在 Thor 上屏，同时把下屏变成常驻控制与资料中心：Profile、宏、触摸控制、实时翻译、硬件状态、地图、攻略、本地媒体 Canvas、界门、录屏和快捷操作都在拇指可及的位置。
 

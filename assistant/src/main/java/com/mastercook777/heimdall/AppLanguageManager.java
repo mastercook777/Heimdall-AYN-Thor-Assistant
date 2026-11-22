@@ -18,6 +18,7 @@ final class AppLanguageManager {
     static final String LANGUAGE_SYSTEM = "";
     static final String LANGUAGE_ENGLISH = "en";
     static final String LANGUAGE_SIMPLIFIED_CHINESE = "zh-CN";
+    static final String LANGUAGE_TRADITIONAL_CHINESE = "zh-TW";
 
     private static final String PREFS = "heimdall_app_language";
     private static final String KEY_LANGUAGE_TAG = "language_tag";
@@ -78,6 +79,12 @@ final class AppLanguageManager {
         }
         Locale locale = Locale.forLanguageTag(languageTag);
         if ("zh".equalsIgnoreCase(locale.getLanguage())) {
+            if ("TW".equalsIgnoreCase(locale.getCountry())
+                    || "HK".equalsIgnoreCase(locale.getCountry())
+                    || "MO".equalsIgnoreCase(locale.getCountry())
+                    || "Hant".equalsIgnoreCase(locale.getScript())) {
+                return LANGUAGE_TRADITIONAL_CHINESE;
+            }
             return LANGUAGE_SIMPLIFIED_CHINESE;
         }
         if ("en".equalsIgnoreCase(locale.getLanguage())) {

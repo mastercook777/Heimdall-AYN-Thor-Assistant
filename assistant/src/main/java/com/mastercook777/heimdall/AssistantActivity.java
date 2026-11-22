@@ -7072,6 +7072,8 @@ public class AssistantActivity extends Activity {
                 AppLanguageManager.LANGUAGE_ENGLISH));
         languageRow.addView(languageChoiceButton(R.string.language_simplified_chinese,
                 AppLanguageManager.LANGUAGE_SIMPLIFIED_CHINESE));
+        languageRow.addView(languageChoiceButton(R.string.language_traditional_chinese,
+                AppLanguageManager.LANGUAGE_TRADITIONAL_CHINESE));
         addSettingsHelp(content, getString(R.string.settings_language_help));
 
         if (settingsPerformanceCompatibilityDraft == null) {
